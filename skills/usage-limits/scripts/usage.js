@@ -164,6 +164,22 @@ function tokensOf(usage) {
   );
 }
 
+// The four token classes, kept apart because they are priced differently
+// and because knowing the split is what makes the totals reasonable about.
+function tokenParts(usage) {
+  if (!usage) return { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
+  const creation = usage.cache_creation || {};
+  const written =
+    usage.cache_creation_input_tokens ||
+    (creation.ephemeral_5m_input_tokens || 0) + (creation.ephemeral_1h_input_tokens || 0);
+  return {
+    input: usage.input_tokens || 0,
+    cacheWrite: written,
+    cacheRead: usage.cache_read_input_tokens || 0,
+    output: usage.output_tokens || 0,
+  };
+}
+
 // One transcript line to an event, or null if it is not a billable turn.
 function eventFrom(line, seen) {
   if (line.indexOf('"assistant"') === -1 || line.indexOf('"usage"') === -1) return null;
@@ -191,6 +207,7 @@ function eventFrom(line, seen) {
     effort: entry.effort || null,
     cost: costOf(entry.message.usage, entry.message.model),
     tokens: tokensOf(entry.message.usage),
+    parts: tokenParts(entry.message.usage),
   };
 }
 
@@ -251,11 +268,49 @@ async function readEvents(since) {
 function totals(events) {
   let cost = 0;
   let tokens = 0;
+  const parts = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
   for (const event of events) {
     cost += event.cost;
     tokens += event.tokens;
+    if (event.parts) {
+      parts.input += event.parts.input;
+      parts.cacheWrite += event.parts.cacheWrite;
+      parts.cacheRead += event.parts.cacheRead;
+      parts.output += event.parts.output;
+    }
   }
-  return { cost, tokens, turns: events.length };
+  return { cost, tokens, turns: events.length, parts };
+}
+
+// What each model actually cost, dearest first.
+function byModel(events) {
+  const rows = new Map();
+  for (const event of events) {
+    const id = event.model || 'unknown';
+    if (!rows.has(id)) {
+      rows.set(id, {
+        model: id,
+        turns: 0,
+        tokens: 0,
+        cost: 0,
+        parts: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 },
+      });
+    }
+    const row = rows.get(id);
+    row.turns += 1;
+    row.tokens += event.tokens;
+    row.cost += event.cost;
+    if (event.parts) {
+      row.parts.input += event.parts.input;
+      row.parts.cacheWrite += event.parts.cacheWrite;
+      row.parts.cacheRead += event.parts.cacheRead;
+      row.parts.output += event.parts.output;
+    }
+  }
+  const list = [...rows.values()].sort((a, b) => b.cost - a.cost);
+  const total = list.reduce((sum, row) => sum + row.cost, 0);
+  for (const row of list) row.share = total > 0 ? row.cost / total : 0;
+  return list;
 }
 
 function dominantEffort(events) {
@@ -373,6 +428,14 @@ function formatUSD(value) {
   return '$' + value.toFixed(3);
 }
 
+function formatTokens(value) {
+  if (!Number.isFinite(value)) return '-';
+  if (value >= 1e9) return (value / 1e9).toFixed(1) + 'B';
+  if (value >= 1e6) return (value / 1e6).toFixed(1) + 'M';
+  if (value >= 1e3) return Math.round(value / 1e3) + 'k';
+  return String(Math.round(value));
+}
+
 function formatCount(value) {
   if (value === null || !Number.isFinite(value)) return '-';
   return Math.round(value).toLocaleString('en-US');
@@ -462,9 +525,17 @@ async function report(now) {
   const recentEvents = events.filter((event) => event.at >= now - HOUR);
   const recent = totals(recentEvents);
 
+  const binding = bindingWindow(windows);
+  const scopeStart = binding ? binding.windowStart : now - 7 * DAY;
+  const scoped = events.filter((event) => event.at >= scopeStart && event.at <= now);
+  const scopedTotals = totals(scoped);
+
   return Object.assign({}, base, {
     windows,
-    binding: bindingWindow(windows),
+    binding,
+    models: byModel(scoped),
+    tokens: scopedTotals.parts,
+    scopeLabel: binding ? binding.label : 'last 7 days',
     recent: {
       turns: recent.turns,
       usd: recent.cost,
@@ -555,6 +626,31 @@ function render(data) {
   }
   lines.push('');
 
+  if (data.models && data.models.length) {
+    lines.push('  Models in the ' + (data.scopeLabel || 'window') + ' window');
+    lines.push(
+      '  ' + pad('  Model', 24) + padLeft('Turns', 7) + padLeft('Tokens', 10) +
+        padLeft('Output', 9) + padLeft('Share', 8)
+    );
+    for (const row of data.models) {
+      lines.push(
+        '  ' + pad('  ' + row.model, 24) + padLeft(row.turns, 7) +
+          padLeft(formatTokens(row.tokens), 10) +
+          padLeft(formatTokens(row.parts.output), 9) +
+          padLeft(Math.round(row.share * 100) + '%', 8)
+      );
+    }
+    if (data.tokens) {
+      lines.push(
+        '    Tokens  input ' + formatTokens(data.tokens.input) +
+          ', cache write ' + formatTokens(data.tokens.cacheWrite) +
+          ', cache read ' + formatTokens(data.tokens.cacheRead) +
+          ', output ' + formatTokens(data.tokens.output)
+      );
+    }
+    lines.push('');
+  }
+
   if (data.recent.turns) {
     lines.push(
       '  Recent pace   ' + data.recent.turns + ' turns in the last hour, ' +
@@ -616,5 +712,8 @@ module.exports = {
   report,
   collect,
   detectPlan,
+  tokenParts,
+  byModel,
+  formatTokens,
   PLANS,
 };

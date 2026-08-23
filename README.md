@@ -35,6 +35,19 @@ what a turn has actually been costing over the last hour, on your account, at
 your effort level, so it moves when your working style does. Fifteen turns of
 headroom means something you can plan against; 75 percent does not.
 
+It also breaks the window down by model, with the token split behind it:
+
+```
+  Models in the 5-hour window
+    Model                   Turns    Tokens   Output   Share
+    claude-opus-5             159     27.0M     212k    100%
+    Tokens  input 318, cache write 631k, cache read 26.2M, output 212k
+```
+
+That split is usually the surprise. Almost all of it is cache reads, billed at
+a tenth of the input rate but paid again on every turn, which is why context
+length matters more than any single expensive message.
+
 The percentages and reset times come from Claude Code's own cache. The pace
 comes from your local session transcripts. Neither requires a network call.
 
@@ -182,7 +195,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-43 tests over the pricing, the window arithmetic, plan detection, and the
+46 tests over the pricing, the window arithmetic, plan detection, and the
 settings save/restore.
 
 ## Status

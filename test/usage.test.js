@@ -378,3 +378,44 @@ test('render prints the plan advice when there is one', () => {
   const silent = usage.render(Object.assign({}, data, { planAdvice: null }));
   assert.doesNotMatch(silent, /rarely binds/);
 });
+
+test('tokenParts splits the four classes', () => {
+  const parts = usage.tokenParts({
+    input_tokens: 10,
+    cache_read_input_tokens: 100,
+    cache_creation_input_tokens: 50,
+    output_tokens: 5,
+  });
+  assert.deepStrictEqual(parts, { input: 10, cacheWrite: 50, cacheRead: 100, output: 5 });
+  assert.deepStrictEqual(usage.tokenParts(null), {
+    input: 0,
+    cacheWrite: 0,
+    cacheRead: 0,
+    output: 0,
+  });
+});
+
+test('byModel groups by model, dearest first, with shares summing to one', () => {
+  const sample = [
+    { model: 'claude-haiku-4-5', cost: 1, tokens: 100, parts: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4 } },
+    { model: 'claude-opus-5', cost: 3, tokens: 300, parts: { input: 1, cacheWrite: 1, cacheRead: 1, output: 1 } },
+    { model: 'claude-opus-5', cost: 6, tokens: 600, parts: { input: 1, cacheWrite: 1, cacheRead: 1, output: 1 } },
+  ];
+  const rows = usage.byModel(sample);
+  assert.strictEqual(rows.length, 2);
+  assert.strictEqual(rows[0].model, 'claude-opus-5');
+  assert.strictEqual(rows[0].turns, 2);
+  assert.strictEqual(rows[0].tokens, 900);
+  assert.strictEqual(rows[0].parts.output, 2);
+  assert.strictEqual(Math.round(rows[0].share * 100), 90);
+  assert.strictEqual(Math.round(rows[1].share * 100), 10);
+  assert.deepStrictEqual(usage.byModel([]), []);
+});
+
+test('formatTokens stays short at every scale', () => {
+  assert.strictEqual(usage.formatTokens(318), '318');
+  assert.strictEqual(usage.formatTokens(631000), '631k');
+  assert.strictEqual(usage.formatTokens(26200000), '26.2M');
+  assert.strictEqual(usage.formatTokens(2e9), '2.0B');
+  assert.strictEqual(usage.formatTokens(NaN), '-');
+});
