@@ -33,6 +33,12 @@ Current effort and model come from `settings.json` in the config directory.
 
 `CLAUDE_CONFIG_DIR` is honoured if set.
 
+Every surface writes here: the terminal CLI, the VS Code and JetBrains
+extensions, and the desktop app all share one config directory, and their
+sessions are counted together. Entries carry an `entrypoint` field (`cli`,
+`claude-vscode`) if you want to tell them apart, but the report does not
+filter on it.
+
 ### The pace
 
 `~/.claude/projects/<project>/<session>.jsonl`. One JSON object per line.

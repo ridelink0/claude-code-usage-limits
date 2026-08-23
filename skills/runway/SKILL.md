@@ -82,6 +82,9 @@ node scripts/lowpower.js on --effort medium --model sonnet
 node scripts/lowpower.js off             # restores exactly what was there
 ```
 
+In a headless run (`claude -p`) there are no slash commands, so the script is
+the only lever there.
+
 `effortLevel` is what the `/effort` picker writes. Reasoning is billed as
 output tokens, the most expensive tokens in the request, so dropping `xhigh`
 to `low` is the largest per-turn saving available without changing model or

@@ -71,6 +71,27 @@ node skills/runway/scripts/usage.js
 node skills/runway/scripts/usage.js --json
 ```
 
+## Where it works
+
+Every surface of Claude Code on a machine shares one config directory, so
+this reads all of them and does not care which one you are in:
+
+| Surface | Works | Notes |
+| --- | --- | --- |
+| Terminal (`claude`) | yes | |
+| VS Code extension | yes | |
+| JetBrains extension | yes | |
+| Desktop app | yes | |
+| Headless (`claude -p`) | yes | Scripts run fine, but there are no slash commands, so `lowpower.js` is the only way to change effort. |
+| Cloud and web sessions | partly | Those run on a remote machine with their own config directory. Percentages are per-account and stay correct; the pace is measured from whatever transcripts are local to wherever you run the script. |
+
+Sessions from different surfaces land in the same `~/.claude/projects` tree
+and are counted together. On this machine the transcripts carry both `cli` and
+`claude-vscode` entrypoints, and the report totals both.
+
+Windows, macOS, and Linux all work. `CLAUDE_CONFIG_DIR` is honoured if you have
+moved the config directory.
+
 ## Working cheaply on purpose
 
 Half the problem is measurement. The other half is that a high effort setting
