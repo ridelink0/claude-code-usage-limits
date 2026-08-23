@@ -1,0 +1,18 @@
+{
+  "name": "runway",
+  "owner": {
+    "name": "Gerald",
+    "url": "https://github.com/ridelink0"
+  },
+  "description": "Usage limit aware planning for Claude Code.",
+  "plugins": [
+    {
+      "name": "runway",
+      "source": "./",
+      "description": "Reads how much of your Claude Code usage limit is left, converts it into turns of headroom, and plans the work to fit inside it.",
+      "category": "productivity",
+      "tags": ["usage", "limits", "cost", "planning"],
+      "license": "MIT"
+    }
+  ]
+}

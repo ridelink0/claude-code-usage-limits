@@ -1,0 +1,14 @@
+{
+  "name": "claude-code-runway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reads the remaining Claude Code usage limit and plans the work to fit inside it.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test",
+    "usage": "node skills/runway/scripts/usage.js"
+  }
+}

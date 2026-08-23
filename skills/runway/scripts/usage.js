@@ -1,0 +1,545 @@
+#!/usr/bin/env node
+'use strict';
+
+// Reports how much of the current Claude Code usage window is left, and
+// converts that into something you can plan with: turns remaining and
+// minutes remaining at the pace of the last hour.
+//
+// Two data sources, both local:
+//   ~/.claude.json          cachedUsageUtilization - the real percentages
+//                           and reset times, refreshed by the CLI itself
+//   ~/.claude/projects/**   session transcripts, one JSON object per line,
+//                           each assistant turn carrying a usage record
+//
+// The percentages alone tell you where you are but not how fast you are
+// moving. The transcripts alone tell you how fast you are moving but not
+// where the ceiling is. Combining them gives a dollars-per-percent factor
+// for this account and plan, which is what the projections are built on.
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const readline = require('readline');
+
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+// USD per million tokens, first-party API rates.
+const RATES = {
+  'claude-fable-5': { input: 10, output: 50 },
+  'claude-mythos-5': { input: 10, output: 50 },
+  'claude-opus-5': { input: 5, output: 25 },
+  'claude-opus-4-8': { input: 5, output: 25 },
+  'claude-opus-4-7': { input: 5, output: 25 },
+  'claude-opus-4-6': { input: 5, output: 25 },
+  'claude-sonnet-5': { input: 3, output: 15 },
+  'claude-sonnet-4-6': { input: 3, output: 15 },
+  'claude-haiku-4-5': { input: 1, output: 5 },
+};
+const FALLBACK_RATE = { input: 5, output: 25 };
+
+// Cache traffic is priced as a multiple of the input rate.
+const CACHE_WRITE_5M = 1.25;
+const CACHE_WRITE_1H = 2;
+const CACHE_READ = 0.1;
+
+const WINDOWS = [
+  { key: 'five_hour', label: '5-hour', span: 5 * HOUR },
+  { key: 'seven_day', label: 'weekly', span: 7 * DAY },
+  { key: 'seven_day_opus', label: 'weekly (Opus)', span: 7 * DAY },
+  { key: 'seven_day_sonnet', label: 'weekly (Sonnet)', span: 7 * DAY },
+];
+
+const PLAN_NAMES = {
+  claude_pro: 'Claude Pro',
+  claude_max: 'Claude Max',
+  claude_team: 'Claude Team',
+  claude_enterprise: 'Claude Enterprise',
+};
+
+function configDir() {
+  return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+}
+
+// The CLI keeps its account state in ~/.claude.json, or next to the config
+// directory when CLAUDE_CONFIG_DIR moves it.
+function accountFile() {
+  const scoped = path.join(configDir(), '.claude.json');
+  if (fs.existsSync(scoped)) return scoped;
+  return path.join(os.homedir(), '.claude.json');
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    return null;
+  }
+}
+
+function rateFor(model) {
+  const id = String(model || '').toLowerCase();
+  if (RATES[id]) return RATES[id];
+  if (id.includes('fable') || id.includes('mythos')) return RATES['claude-fable-5'];
+  if (id.includes('opus')) return RATES['claude-opus-5'];
+  if (id.includes('sonnet')) return RATES['claude-sonnet-5'];
+  if (id.includes('haiku')) return RATES['claude-haiku-4-5'];
+  return FALLBACK_RATE;
+}
+
+// Cost of one assistant turn, in USD, from its usage record.
+function costOf(usage, model) {
+  if (!usage) return 0;
+  const rate = rateFor(model);
+  const creation = usage.cache_creation || {};
+  const write5m = creation.ephemeral_5m_input_tokens || 0;
+  const write1h = creation.ephemeral_1h_input_tokens || 0;
+
+  let writeUnits = write5m * CACHE_WRITE_5M + write1h * CACHE_WRITE_1H;
+  if (writeUnits === 0) {
+    // Older records only carry the undifferentiated total.
+    writeUnits = (usage.cache_creation_input_tokens || 0) * CACHE_WRITE_5M;
+  }
+
+  const inputUnits =
+    (usage.input_tokens || 0) +
+    (usage.cache_read_input_tokens || 0) * CACHE_READ +
+    writeUnits;
+
+  return (inputUnits * rate.input + (usage.output_tokens || 0) * rate.output) / 1e6;
+}
+
+function tokensOf(usage) {
+  if (!usage) return 0;
+  const creation = usage.cache_creation || {};
+  const written =
+    usage.cache_creation_input_tokens ||
+    (creation.ephemeral_5m_input_tokens || 0) + (creation.ephemeral_1h_input_tokens || 0);
+  return (
+    (usage.input_tokens || 0) +
+    (usage.cache_read_input_tokens || 0) +
+    written +
+    (usage.output_tokens || 0)
+  );
+}
+
+// One transcript line to an event, or null if it is not a billable turn.
+function eventFrom(line, seen) {
+  if (line.indexOf('"assistant"') === -1 || line.indexOf('"usage"') === -1) return null;
+  let entry;
+  try {
+    entry = JSON.parse(line);
+  } catch (err) {
+    return null;
+  }
+  if (entry.type !== 'assistant' || !entry.message || !entry.message.usage) return null;
+
+  const at = Date.parse(entry.timestamp);
+  if (!Number.isFinite(at)) return null;
+
+  // A resumed or forked session repeats earlier turns in a new file.
+  const id = (entry.message.id || '') + '|' + (entry.requestId || '');
+  if (id !== '|' && seen) {
+    if (seen.has(id)) return null;
+    seen.add(id);
+  }
+
+  return {
+    at,
+    model: entry.message.model || '',
+    effort: entry.effort || null,
+    cost: costOf(entry.message.usage, entry.message.model),
+    tokens: tokensOf(entry.message.usage),
+  };
+}
+
+async function readEvents(since) {
+  const root = path.join(configDir(), 'projects');
+  let dirs = [];
+  try {
+    dirs = fs.readdirSync(root, { withFileTypes: true });
+  } catch (err) {
+    return [];
+  }
+
+  const files = [];
+  for (const dir of dirs) {
+    if (!dir.isDirectory()) continue;
+    const full = path.join(root, dir.name);
+    let names = [];
+    try {
+      names = fs.readdirSync(full);
+    } catch (err) {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue;
+      const file = path.join(full, name);
+      try {
+        // A file last touched before the window opened holds nothing useful.
+        if (fs.statSync(file).mtimeMs < since) continue;
+      } catch (err) {
+        continue;
+      }
+      files.push(file);
+    }
+  }
+
+  const seen = new Set();
+  const events = [];
+  for (const file of files) {
+    const stream = fs.createReadStream(file, { encoding: 'utf8' });
+    const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    try {
+      for await (const line of lines) {
+        const event = eventFrom(line, seen);
+        if (event && event.at >= since) events.push(event);
+      }
+    } catch (err) {
+      // A half-written line at the tail of a live session is expected.
+    } finally {
+      lines.close();
+      stream.destroy();
+    }
+  }
+
+  events.sort((a, b) => a.at - b.at);
+  return events;
+}
+
+function totals(events) {
+  let cost = 0;
+  let tokens = 0;
+  for (const event of events) {
+    cost += event.cost;
+    tokens += event.tokens;
+  }
+  return { cost, tokens, turns: events.length };
+}
+
+function dominantEffort(events) {
+  const counts = new Map();
+  for (const event of events) {
+    if (!event.effort) continue;
+    counts.set(event.effort, (counts.get(event.effort) || 0) + 1);
+  }
+  let best = null;
+  for (const entry of counts) {
+    if (!best || entry[1] > best[1]) best = entry;
+  }
+  return best ? best[0] : null;
+}
+
+// Everything the report needs about one limit window.
+function buildWindow(spec, snapshot, events, now) {
+  const percent =
+    snapshot && typeof snapshot.utilization === 'number' ? snapshot.utilization : null;
+  const resetsAt = snapshot && snapshot.resets_at ? Date.parse(snapshot.resets_at) : null;
+  const hasReset = Number.isFinite(resetsAt);
+  const start = hasReset ? resetsAt - spec.span : now - spec.span;
+
+  const inWindow = events.filter((event) => event.at >= start && event.at <= now);
+  const spent = totals(inWindow);
+
+  const recentStart = Math.max(start, now - HOUR);
+  const recentEvents = events.filter((event) => event.at >= recentStart && event.at <= now);
+  const recent = totals(recentEvents);
+  const recentHours = Math.max((now - recentStart) / HOUR, 1 / 60);
+
+  const window = {
+    key: spec.key,
+    label: spec.label,
+    percentUsed: percent,
+    percentLeft: percent === null ? null : Math.max(0, 100 - percent),
+    resetsAt: hasReset ? resetsAt : null,
+    msToReset: hasReset ? resetsAt - now : null,
+    windowStart: start,
+    spentUSD: spent.cost,
+    spentTokens: spent.tokens,
+    turns: spent.turns,
+    recentTurns: recent.turns,
+    recentUSDPerHour: recent.cost / recentHours,
+    recentUSDPerTurn: recent.turns ? recent.cost / recent.turns : null,
+    usdPerPercent: null,
+    remainingUSD: null,
+    percentPerHour: null,
+    percentPerTurn: null,
+    turnsLeft: null,
+    runwayMs: null,
+    coarse: false,
+    verdict: 'unknown',
+  };
+
+  // Calibrate against this account: how many dollars of measured traffic
+  // moved the meter one point.
+  if (percent !== null && percent > 0 && spent.cost > 0) {
+    window.usdPerPercent = spent.cost / percent;
+    window.remainingUSD = window.usdPerPercent * window.percentLeft;
+    // The API reports whole numbers, so a low reading is a wide bracket.
+    window.coarse = percent < 5;
+
+    const perTurn = recent.turns
+      ? recent.cost / recent.turns
+      : spent.cost / Math.max(spent.turns, 1);
+    window.percentPerTurn = perTurn / window.usdPerPercent;
+    window.percentPerHour = window.recentUSDPerHour / window.usdPerPercent;
+    if (window.percentPerTurn > 0) {
+      window.turnsLeft = Math.floor(window.percentLeft / window.percentPerTurn);
+    }
+    if (window.percentPerHour > 0) {
+      window.runwayMs = (window.percentLeft / window.percentPerHour) * HOUR;
+    }
+  }
+
+  if (percent === null) window.verdict = 'unknown';
+  else if (percent >= 100) window.verdict = 'exhausted';
+  else if (window.runwayMs === null) window.verdict = 'idle';
+  else if (window.msToReset === null) window.verdict = 'burning';
+  else if (window.runwayMs >= window.msToReset) window.verdict = 'resets-first';
+  else window.verdict = 'runs-out';
+
+  return window;
+}
+
+// The window that will stop the work first.
+function bindingWindow(windows) {
+  const live = windows.filter((w) => w.percentUsed !== null);
+  if (!live.length) return null;
+
+  const measured = live.filter((w) => w.runwayMs !== null);
+  if (measured.length) {
+    return measured.reduce((worst, w) => (w.runwayMs < worst.runwayMs ? w : worst));
+  }
+  return live.reduce((worst, w) => (w.percentUsed > worst.percentUsed ? w : worst));
+}
+
+function formatDuration(ms) {
+  if (ms === null || !Number.isFinite(ms)) return '-';
+  if (ms <= 0) return 'now';
+  const minutes = Math.round(ms / MINUTE);
+  if (minutes < 60) return minutes + 'm';
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours < 24) return rest ? hours + 'h ' + rest + 'm' : hours + 'h';
+  const days = Math.floor(hours / 24);
+  return days + 'd ' + (hours % 24) + 'h';
+}
+
+function formatUSD(value) {
+  if (value === null || !Number.isFinite(value)) return '-';
+  if (value >= 100) return '$' + Math.round(value);
+  if (value >= 1) return '$' + value.toFixed(2);
+  return '$' + value.toFixed(3);
+}
+
+function formatCount(value) {
+  if (value === null || !Number.isFinite(value)) return '-';
+  return Math.round(value).toLocaleString('en-US');
+}
+
+function pad(text, width) {
+  const value = String(text);
+  return value.length >= width ? value : value + ' '.repeat(width - value.length);
+}
+
+function padLeft(text, width) {
+  const value = String(text);
+  return value.length >= width ? value : ' '.repeat(width - value.length) + value;
+}
+
+function collect(now) {
+  const account = readJson(accountFile()) || {};
+  const settings = readJson(path.join(configDir(), 'settings.json')) || {};
+  const cache = account.cachedUsageUtilization || null;
+  const utilization = cache && cache.utilization ? cache.utilization : null;
+  const oauth = account.oauthAccount || {};
+
+  return {
+    now,
+    accountFile: accountFile(),
+    plan: PLAN_NAMES[oauth.organizationType] || oauth.organizationType || 'unknown',
+    snapshotAgeMs: cache && cache.fetchedAtMs ? now - cache.fetchedAtMs : null,
+    utilization,
+    settings: {
+      model: settings.model || 'default',
+      effortLevel: settings.effortLevel || 'default',
+    },
+    extraUsage: utilization && utilization.extra_usage ? utilization.extra_usage : null,
+  };
+}
+
+// No snapshot at all means no windows, which is what tells the report to
+// explain itself rather than print a table of dashes.
+function buildWindows(utilization, events, now) {
+  if (!utilization) return [];
+  return WINDOWS.map((spec) => {
+    const snapshot = utilization[spec.key];
+    // The per-model weekly windows only exist on some plans.
+    if (spec.key !== 'five_hour' && spec.key !== 'seven_day' && !snapshot) return null;
+    return buildWindow(spec, snapshot, events, now);
+  }).filter(Boolean);
+}
+
+async function report(now) {
+  const base = collect(now);
+  // A stale snapshot can put a window's start slightly further back than
+  // seven days, so give the scan a day of slack.
+  const earliest = now - 8 * DAY;
+  const events = await readEvents(earliest);
+
+  const windows = buildWindows(base.utilization, events, now);
+
+  const recentEvents = events.filter((event) => event.at >= now - HOUR);
+  const recent = totals(recentEvents);
+
+  return Object.assign({}, base, {
+    windows,
+    binding: bindingWindow(windows),
+    recent: {
+      turns: recent.turns,
+      usd: recent.cost,
+      usdPerTurn: recent.turns ? recent.cost / recent.turns : null,
+      tokens: recent.tokens,
+      effort: dominantEffort(recentEvents),
+    },
+    measuredTurns: events.length,
+  });
+}
+
+function verdictLine(window) {
+  if (!window) {
+    return 'No limit snapshot on disk yet. Run /usage once in Claude Code to populate it.';
+  }
+  const name = window.label + ' limit';
+  switch (window.verdict) {
+    case 'exhausted':
+      return 'The ' + name + ' is used up. It resets in ' + formatDuration(window.msToReset) + '.';
+    case 'resets-first':
+      return (
+        'The ' + name + ' is the binding one. At the current pace it lasts about ' +
+        formatDuration(window.runwayMs) + ', and it resets in ' +
+        formatDuration(window.msToReset) + ', so the window turns over before you run out.'
+      );
+    case 'runs-out':
+      return (
+        'The ' + name + ' is the binding one. At the current pace it runs out in about ' +
+        formatDuration(window.runwayMs) + ', which is ' +
+        formatDuration(window.msToReset - window.runwayMs) + ' short of the reset. ' +
+        'Size the work to fit, or slow the burn.'
+      );
+    case 'burning':
+      return (
+        'The ' + name + ' is at ' + window.percentUsed + '% and has about ' +
+        formatDuration(window.runwayMs) + ' left at the current pace. No reset time was reported.'
+      );
+    case 'idle':
+      return (
+        'The ' + name + ' is at ' + window.percentUsed +
+        '% with no recent traffic to measure. Percentages are current, pace is not.'
+      );
+    default:
+      return 'Not enough local data to project the ' + name + '.';
+  }
+}
+
+function render(data) {
+  const lines = [];
+  lines.push('Claude Code usage');
+  lines.push('');
+  lines.push('  Plan       ' + data.plan);
+  lines.push(
+    '  Snapshot   ' +
+      (data.snapshotAgeMs === null ? 'none on disk' : formatDuration(data.snapshotAgeMs) + ' old')
+  );
+  lines.push('  Settings   model=' + data.settings.model + '  effort=' + data.settings.effortLevel);
+  if (data.extraUsage) {
+    lines.push(
+      '  Overage    ' +
+        (data.extraUsage.is_enabled
+          ? 'on, spending continues past the limit'
+          : 'off, work stops at the limit')
+    );
+  }
+  lines.push('');
+
+  if (!data.windows.length) {
+    lines.push('  No usage snapshot in ' + (data.accountFile || '~/.claude.json') + '.');
+    lines.push('  Run /usage once inside Claude Code to populate it, then try again.');
+    return lines.join('\n');
+  }
+
+  lines.push(
+    '  ' + pad('Window', 15) + padLeft('Used', 6) + padLeft('Resets in', 12) +
+      padLeft('Left', 10) + padLeft('Turns left', 12)
+  );
+  for (const window of data.windows) {
+    const marker = data.binding && window.key === data.binding.key ? '   <- binding' : '';
+    lines.push(
+      '  ' + pad(window.label, 15) +
+        padLeft(window.percentUsed === null ? '-' : window.percentUsed + '%', 6) +
+        padLeft(formatDuration(window.msToReset), 12) +
+        padLeft(formatUSD(window.remainingUSD), 10) +
+        padLeft(window.turnsLeft === null ? '-' : '~' + formatCount(window.turnsLeft), 12) +
+        marker
+    );
+  }
+  lines.push('');
+
+  if (data.recent.turns) {
+    lines.push(
+      '  Recent pace   ' + data.recent.turns + ' turns in the last hour, ' +
+        formatUSD(data.recent.usdPerTurn) + ' per turn' +
+        (data.recent.effort ? ', effort ' + data.recent.effort : '')
+    );
+  } else {
+    lines.push('  Recent pace   no turns in the last hour');
+  }
+  lines.push('  Measured      ' + formatCount(data.measuredTurns) + ' turns of local transcript');
+
+  if (data.binding && data.binding.coarse) {
+    lines.push('  Note          the meter reads in whole percent, so a low reading is a wide bracket');
+  }
+
+  lines.push('');
+  lines.push(verdictLine(data.binding));
+  return lines.join('\n');
+}
+
+async function main(argv) {
+  const wantsJson = argv.indexOf('--json') !== -1;
+  const data = await report(Date.now());
+  if (wantsJson) {
+    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+  } else {
+    process.stdout.write(render(data) + '\n');
+  }
+  return 0;
+}
+
+if (require.main === module) {
+  main(process.argv.slice(2)).catch((err) => {
+    process.stderr.write('usage: ' + (err && err.message ? err.message : String(err)) + '\n');
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  RATES,
+  WINDOWS,
+  rateFor,
+  costOf,
+  tokensOf,
+  eventFrom,
+  buildWindow,
+  buildWindows,
+  bindingWindow,
+  dominantEffort,
+  formatDuration,
+  formatUSD,
+  formatCount,
+  verdictLine,
+  render,
+  report,
+  collect,
+};

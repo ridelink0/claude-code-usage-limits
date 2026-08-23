@@ -1,0 +1,137 @@
+---
+name: runway
+description: Check how much of the Claude Code usage limit is left and plan the work to fit inside it. Use before starting anything long, when the 5-hour or weekly limit is getting close, when asked how much usage is left or whether there is enough left to finish, and when asked to work cheaply, burn fewer credits, or stretch the rest of the limit.
+---
+
+# Runway
+
+Running out of limit halfway through a job is a scheduling failure, not bad
+luck. The numbers are on disk before the work starts. Read them, size the job
+against them, and either commit to finishing or cut the job down until it fits.
+
+## 1. Measure
+
+```
+node scripts/usage.js
+```
+
+Paths here are relative to this skill's own directory, not the project you are
+working in. Run them from there, or prefix them with the skill's path.
+
+It prints the real percentages and reset times from the CLI's own cache, plus
+a pace measured from the local session transcripts:
+
+```
+  Window           Used   Resets in      Left  Turns left
+  5-hour            62%      1h 40m     $46.0         ~88
+  weekly            75%       2d 4h     $124         ~240   <- binding
+
+  Recent pace   15 turns in the last hour, $0.164 per turn, effort xhigh
+```
+
+`Turns left` is the number that matters. It is the remaining headroom divided
+by what a turn has actually been costing over the last hour, on this account,
+at this effort level. Add `--json` when you want the raw fields.
+
+If it says no snapshot was found, run `/usage` once in Claude Code and try
+again. That populates the cache the script reads.
+
+## 2. Size the job before starting it
+
+Count the work in turns, not in tasks. A rough scale that holds up in practice:
+
+| Work | Turns |
+| --- | --- |
+| Read and answer a question about existing code | 1 to 2 |
+| One edit plus the check that it worked | 2 to 4 |
+| A feature touching three or four files | 10 to 20 |
+| Debugging something with an unknown cause | 15 or more, and unpredictable |
+
+Then compare against `Turns left` and hold back a reserve. Reserve about a
+fifth of the budget for landing the work: the test run, the commit, and the
+handoff note. Work that gets cut off just before the commit is worth nothing,
+so the reserve is not optional.
+
+## 3. Decide, out loud
+
+Tell the user which of these applies before doing anything expensive.
+
+**It fits.** Say so with the number, then work normally. Do not slow down out
+of caution when there is room. Cheapness is not a virtue when the budget is
+not tight.
+
+**It fits only if nothing goes wrong.** Say so, switch to low power for the
+run, and reorder the work so the valuable part lands first.
+
+**It does not fit.** Do not start and hope. Cut scope with the user, or split
+the job at a clean boundary and finish the first half properly. Half a
+feature, committed and working, beats a whole one abandoned mid-edit.
+
+**The window resets first.** If the reset lands before the budget runs out,
+the limit is not the constraint. Say that and stop optimising for it.
+
+## 4. Low power
+
+Two halves, and the second one is the half that actually binds.
+
+The setting:
+
+```
+node scripts/lowpower.js on              # effortLevel -> low, old value saved
+node scripts/lowpower.js on --effort medium --model sonnet
+node scripts/lowpower.js off             # restores exactly what was there
+```
+
+`effortLevel` is what the `/effort` picker writes. Reasoning is billed as
+output tokens, the most expensive tokens in the request, so dropping `xhigh`
+to `low` is the largest per-turn saving available without changing model or
+scope. The file change applies to new sessions; for the session already
+running, `/effort low` takes effect immediately.
+
+The behaviour, which applies **even at xhigh or max effort**, because the
+effort setting does not control any of it:
+
+- Think briefly on routine steps. Save the long reasoning for decisions that
+  are actually hard to reverse.
+- Send independent tool calls together in one message. Three calls in one turn
+  cost one context resend; three separate turns cost three.
+- Read line ranges, not whole files. Grep with a head limit. A 40k-token file
+  read is not paid once, it is paid again on every later turn in the session.
+- Never re-read a file to confirm an edit landed. The edit tool already failed
+  if it did not.
+- No subagents. A subagent starts cold and re-derives context that is already
+  in this session.
+- Nothing that was not asked for. No speculative refactor, no extra test, no
+  drive-by cleanup.
+- Fewer, denser turns. Narration between tool calls is output tokens spent on
+  nothing.
+
+`references/tactics.md` has the full list and the billing reasons behind each
+one.
+
+## 5. Checkpoint before the wall
+
+When the binding window is under roughly 15 percent, or under about ten turns
+of headroom, stop adding work and land what exists:
+
+1. Commit or otherwise save the working state.
+2. Write `HANDOFF.md`: what is done, what is next, which files are mid-change,
+   what the next session should read first.
+3. Say when the window resets and what to run on the way back in.
+
+A handoff written with ten turns left is worth more than the tenth turn.
+
+## When to skip this skill
+
+Do not run the report on every prompt. Once at the start of a long piece of
+work, and again if the job grows or something starts looping. The report costs
+a turn, which is the thing it is trying to save.
+
+## Files
+
+| Path | What it is |
+| --- | --- |
+| `scripts/usage.js` | The report. `--json` for raw fields. |
+| `scripts/lowpower.js` | `status`, `on`, `off`. Restores what it replaced. |
+| `references/tactics.md` | Every lever that lowers cost, and why it works. |
+| `references/how-it-works.md` | Where the numbers come from and where they are soft. |
