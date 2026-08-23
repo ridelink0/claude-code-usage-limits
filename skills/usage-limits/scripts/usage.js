@@ -53,6 +53,14 @@ const WINDOWS = [
 
 // organizationType gives the family; the rate limit tier is what separates
 // Max 5x from Max 20x. Both come out of oauthAccount.
+// Abbreviations for the status line, where there is no room to spell it out.
+const SHORT_LABELS = {
+  five_hour: '5h',
+  seven_day: 'wk',
+  seven_day_opus: 'wk opus',
+  seven_day_sonnet: 'wk sonnet',
+};
+
 const PLANS = {
   pro: {
     label: 'Claude Pro',
@@ -583,6 +591,39 @@ function verdictLine(window) {
   }
 }
 
+// One short line for the Claude Code status line. Deliberately reads only
+// the cached percentages, never the transcripts, so it stays fast enough to
+// run on every redraw.
+function statusLine(collected) {
+  const utilization = collected && collected.utilization;
+  if (!utilization) return '';
+
+  const now = collected.now || Date.now();
+  const parts = [];
+  for (const spec of WINDOWS) {
+    const snapshot = utilization[spec.key];
+    if (!snapshot || typeof snapshot.utilization !== 'number') continue;
+    const resetsAt = snapshot.resets_at ? Date.parse(snapshot.resets_at) : null;
+    parts.push({
+      label: SHORT_LABELS[spec.key] || spec.label,
+      percent: snapshot.utilization,
+      msToReset: Number.isFinite(resetsAt) ? resetsAt - now : null,
+    });
+  }
+  if (!parts.length) return '';
+
+  const worst = parts.reduce((a, b) => (b.percent > a.percent ? b : a));
+  const text = parts
+    .map(
+      (part) =>
+        part.label + ' ' + part.percent + '%' +
+        (part.msToReset === null ? '' : ' ' + formatDuration(part.msToReset))
+    )
+    .join('  ');
+
+  return (worst.percent >= 90 ? 'LOW  ' : '') + text;
+}
+
 function render(data) {
   const lines = [];
   lines.push('Claude Code usage');
@@ -676,6 +717,12 @@ function render(data) {
 }
 
 async function main(argv) {
+  // The status line runs on every redraw, so it must not scan transcripts.
+  if (argv.indexOf('--status') !== -1) {
+    process.stdout.write(statusLine(collect(Date.now())) + '\n');
+    return 0;
+  }
+
   const wantsJson = argv.indexOf('--json') !== -1;
   const data = await report(Date.now());
   if (wantsJson) {
@@ -712,6 +759,8 @@ module.exports = {
   report,
   collect,
   detectPlan,
+  statusLine,
+  SHORT_LABELS,
   tokenParts,
   byModel,
   formatTokens,

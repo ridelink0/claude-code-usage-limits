@@ -419,3 +419,36 @@ test('formatTokens stays short at every scale', () => {
   assert.strictEqual(usage.formatTokens(2e9), '2.0B');
   assert.strictEqual(usage.formatTokens(NaN), '-');
 });
+
+test('statusLine is short and names every window', () => {
+  const line = usage.statusLine({
+    now: NOW,
+    utilization: {
+      five_hour: { utilization: 62, resets_at: new Date(NOW + 100 * 60000).toISOString() },
+      seven_day: { utilization: 75, resets_at: new Date(NOW + 52 * HOUR).toISOString() },
+    },
+  });
+  assert.strictEqual(line, '5h 62% 1h 40m  wk 75% 2d 4h');
+});
+
+test('statusLine flags a window that is nearly gone', () => {
+  const line = usage.statusLine({
+    now: NOW,
+    utilization: { five_hour: { utilization: 94, resets_at: new Date(NOW + HOUR).toISOString() } },
+  });
+  assert.match(line, /^LOW {2}5h 94%/);
+});
+
+test('statusLine says nothing rather than something wrong', () => {
+  assert.strictEqual(usage.statusLine({ now: NOW, utilization: null }), '');
+  assert.strictEqual(usage.statusLine(null), '');
+  assert.strictEqual(usage.statusLine({ now: NOW, utilization: { five_hour: null } }), '');
+});
+
+test('statusLine copes with a window that reports no reset time', () => {
+  const line = usage.statusLine({
+    now: NOW,
+    utilization: { seven_day: { utilization: 40, resets_at: null } },
+  });
+  assert.strictEqual(line, 'wk 40%');
+});

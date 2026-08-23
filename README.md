@@ -86,6 +86,31 @@ node skills/usage-limits/scripts/usage.js
 node skills/usage-limits/scripts/usage.js --json
 ```
 
+## Status line
+
+For a permanent readout instead of asking, point Claude Code's status line at
+the same script. In `settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node ~/.claude/skills/usage-limits/scripts/usage.js --status"
+  }
+}
+```
+
+It prints one line and prefixes `LOW` once a window passes 90 percent:
+
+```
+5h 62% 1h 40m  wk 75% 2d 4h
+```
+
+`--status` reads only the cached percentages and never opens a transcript, so
+it runs in about a tenth of a second and is safe on every redraw. Use the full
+path rather than `~` if your shell does not expand it, and point it at the
+plugin copy instead if that is how you installed it.
+
 ## Plans
 
 It reads which plan you are on and adjusts what it tells you, because the
@@ -195,8 +220,8 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-46 tests over the pricing, the window arithmetic, plan detection, and the
-settings save/restore.
+50 tests over the pricing, the window arithmetic, plan detection, the status
+line, and the settings save/restore.
 
 ## Status
 
