@@ -51,11 +51,51 @@ const WINDOWS = [
   { key: 'seven_day_sonnet', label: 'weekly (Sonnet)', span: 7 * DAY },
 ];
 
-const PLAN_NAMES = {
-  claude_pro: 'Claude Pro',
-  claude_max: 'Claude Max',
-  claude_team: 'Claude Team',
-  claude_enterprise: 'Claude Enterprise',
+// organizationType gives the family; the rate limit tier is what separates
+// Max 5x from Max 20x. Both come out of oauthAccount.
+const PLANS = {
+  pro: {
+    label: 'Claude Pro',
+    advice:
+      'Pro has the smallest budget and the 5-hour window usually binds first. ' +
+      'Keep Opus for the hard calls and let Sonnet do the mechanical work.',
+  },
+  max_5x: {
+    label: 'Claude Max 5x',
+    advice:
+      'Max 5x has room for Opus on most work. On a heavy week the weekly ' +
+      'window is the one that bites, not the 5-hour one.',
+  },
+  max_20x: {
+    label: 'Claude Max 20x',
+    advice:
+      'Max 20x rarely binds. Do not slow down unless the weekly window is ' +
+      'already high.',
+  },
+  max: {
+    label: 'Claude Max',
+    advice:
+      'Max, but the tier was not reported. Treat it as roughly 5x Pro until ' +
+      'the measured numbers say otherwise.',
+  },
+  team: {
+    label: 'Claude Team',
+    advice:
+      'Team seats are pooled and overage is an org setting. Confirm headroom ' +
+      'with whoever administers the org.',
+  },
+  enterprise: {
+    label: 'Claude Enterprise',
+    advice:
+      'Enterprise seats are pooled and overage is an org setting. Confirm ' +
+      'headroom with whoever administers the org.',
+  },
+  unknown: { label: 'unknown', advice: null },
+};
+
+const RATE_LIMIT_TIERS = {
+  default_claude_max_5x: 'max_5x',
+  default_claude_max_20x: 'max_20x',
 };
 
 function configDir() {
@@ -266,7 +306,7 @@ function buildWindow(spec, snapshot, events, now) {
     percentPerHour: null,
     percentPerTurn: null,
     turnsLeft: null,
-    runwayMs: null,
+    headroomMs: null,
     coarse: false,
     verdict: 'unknown',
   };
@@ -288,15 +328,15 @@ function buildWindow(spec, snapshot, events, now) {
       window.turnsLeft = Math.floor(window.percentLeft / window.percentPerTurn);
     }
     if (window.percentPerHour > 0) {
-      window.runwayMs = (window.percentLeft / window.percentPerHour) * HOUR;
+      window.headroomMs = (window.percentLeft / window.percentPerHour) * HOUR;
     }
   }
 
   if (percent === null) window.verdict = 'unknown';
   else if (percent >= 100) window.verdict = 'exhausted';
-  else if (window.runwayMs === null) window.verdict = 'idle';
+  else if (window.headroomMs === null) window.verdict = 'idle';
   else if (window.msToReset === null) window.verdict = 'burning';
-  else if (window.runwayMs >= window.msToReset) window.verdict = 'resets-first';
+  else if (window.headroomMs >= window.msToReset) window.verdict = 'resets-first';
   else window.verdict = 'runs-out';
 
   return window;
@@ -307,9 +347,9 @@ function bindingWindow(windows) {
   const live = windows.filter((w) => w.percentUsed !== null);
   if (!live.length) return null;
 
-  const measured = live.filter((w) => w.runwayMs !== null);
+  const measured = live.filter((w) => w.headroomMs !== null);
   if (measured.length) {
-    return measured.reduce((worst, w) => (w.runwayMs < worst.runwayMs ? w : worst));
+    return measured.reduce((worst, w) => (w.headroomMs < worst.headroomMs ? w : worst));
   }
   return live.reduce((worst, w) => (w.percentUsed > worst.percentUsed ? w : worst));
 }
@@ -348,17 +388,46 @@ function padLeft(text, width) {
   return value.length >= width ? value : ' '.repeat(width - value.length) + value;
 }
 
+// Pro, Max 5x, Max 20x, Team and Enterprise all have different amounts of
+// room, which changes the advice even though it does not change the
+// arithmetic. The window maths calibrates itself either way.
+function detectPlan(oauth) {
+  const account = oauth || {};
+  const family = String(account.organizationType || '')
+    .replace(/^claude_/, '')
+    .toLowerCase();
+  const tier = String(account.userRateLimitTier || account.organizationRateLimitTier || '');
+
+  let id = family || 'unknown';
+  if (family === 'max') id = RATE_LIMIT_TIERS[tier] || 'max';
+  if (!PLANS[id]) id = 'unknown';
+
+  const plan = PLANS[id];
+  return {
+    id,
+    tier: tier || null,
+    // Show the raw value rather than "unknown" when it is a name we have
+    // simply not seen before.
+    label: id === 'unknown' && family ? family : plan.label,
+    advice: plan.advice,
+  };
+}
+
 function collect(now) {
   const account = readJson(accountFile()) || {};
   const settings = readJson(path.join(configDir(), 'settings.json')) || {};
   const cache = account.cachedUsageUtilization || null;
   const utilization = cache && cache.utilization ? cache.utilization : null;
   const oauth = account.oauthAccount || {};
+  const plan = detectPlan(oauth);
 
   return {
     now,
     accountFile: accountFile(),
-    plan: PLAN_NAMES[oauth.organizationType] || oauth.organizationType || 'unknown',
+    plan: plan.label,
+    planId: plan.id,
+    planTier: plan.tier,
+    planAdvice: plan.advice,
     snapshotAgeMs: cache && cache.fetchedAtMs ? now - cache.fetchedAtMs : null,
     utilization,
     settings: {
@@ -418,20 +487,20 @@ function verdictLine(window) {
     case 'resets-first':
       return (
         'The ' + name + ' is the binding one. At the current pace it lasts about ' +
-        formatDuration(window.runwayMs) + ', and it resets in ' +
+        formatDuration(window.headroomMs) + ', and it resets in ' +
         formatDuration(window.msToReset) + ', so the window turns over before you run out.'
       );
     case 'runs-out':
       return (
         'The ' + name + ' is the binding one. At the current pace it runs out in about ' +
-        formatDuration(window.runwayMs) + ', which is ' +
-        formatDuration(window.msToReset - window.runwayMs) + ' short of the reset. ' +
+        formatDuration(window.headroomMs) + ', which is ' +
+        formatDuration(window.msToReset - window.headroomMs) + ' short of the reset. ' +
         'Size the work to fit, or slow the burn.'
       );
     case 'burning':
       return (
         'The ' + name + ' is at ' + window.percentUsed + '% and has about ' +
-        formatDuration(window.runwayMs) + ' left at the current pace. No reset time was reported.'
+        formatDuration(window.headroomMs) + ' left at the current pace. No reset time was reported.'
       );
     case 'idle':
       return (
@@ -503,6 +572,10 @@ function render(data) {
 
   lines.push('');
   lines.push(verdictLine(data.binding));
+  if (data.planAdvice) {
+    lines.push('');
+    lines.push(data.planAdvice);
+  }
   return lines.join('\n');
 }
 
@@ -542,4 +615,6 @@ module.exports = {
   render,
   report,
   collect,
+  detectPlan,
+  PLANS,
 };

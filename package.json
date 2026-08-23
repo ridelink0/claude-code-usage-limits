@@ -1,5 +1,5 @@
 {
-  "name": "claude-code-runway",
+  "name": "claude-code-usage-limits",
   "version": "1.0.0",
   "private": true,
   "description": "Reads the remaining Claude Code usage limit and plans the work to fit inside it.",
@@ -9,6 +9,6 @@
   },
   "scripts": {
     "test": "node --test",
-    "usage": "node skills/runway/scripts/usage.js"
+    "usage": "node skills/usage-limits/scripts/usage.js"
   }
 }

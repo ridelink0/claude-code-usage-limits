@@ -14,7 +14,7 @@
 //   node scripts/lowpower.js on --effort medium --model sonnet
 //   node scripts/lowpower.js off
 //
-// The saved values live in runway-lowpower.json inside the config
+// The saved values live in usage-limits-lowpower.json inside the config
 // directory, so "off" puts back exactly what was there, including keys
 // that were not set in the first place.
 
@@ -35,7 +35,7 @@ function settingsFile() {
 }
 
 function stateFile() {
-  return path.join(configDir(), 'runway-lowpower.json');
+  return path.join(configDir(), 'usage-limits-lowpower.json');
 }
 
 function readJson(file) {
@@ -51,7 +51,7 @@ function readJson(file) {
 // settings.json half written.
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = file + '.runway-tmp';
+  const temp = file + '.usage-limits-tmp';
   fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', 'utf8');
   fs.renameSync(temp, file);
 }
@@ -176,7 +176,7 @@ function main(argv) {
       process.stdout.write('Would change:\n  ' + (plan.changes.join('\n  ') || '(nothing)') + '\n');
       return 0;
     }
-    if (!state && fs.existsSync(file)) fs.copyFileSync(file, file + '.runway-backup');
+    if (!state && fs.existsSync(file)) fs.copyFileSync(file, file + '.usage-limits-backup');
     writeJson(file, plan.settings);
     writeJson(stateFile(), plan.state);
     process.stdout.write(

@@ -2,5 +2,5 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
-*.runway-tmp
-*.runway-backup
+*.usage-limits-tmp
+*.usage-limits-backup

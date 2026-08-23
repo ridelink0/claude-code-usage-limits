@@ -1,4 +1,4 @@
-# runway
+# usage-limits
 
 A Claude Code plugin that reads how much of your usage limit is left and plans
 the work to fit inside it.
@@ -43,33 +43,52 @@ comes from your local session transcripts. Neither requires a network call.
 As a plugin:
 
 ```
-/plugin marketplace add ridelink0/claude-code-runway
-/plugin install runway@runway
+/plugin marketplace add ridelink0/claude-code-usage-limits
+/plugin install usage-limits@usage-limits
 ```
 
 As a plain skill, if you would rather not use the plugin system:
 
 ```
-git clone https://github.com/ridelink0/claude-code-runway
-cp -r claude-code-runway/skills/runway ~/.claude/skills/runway
+git clone https://github.com/ridelink0/claude-code-usage-limits
+cp -r claude-code-usage-limits/skills/usage-limits ~/.claude/skills/usage-limits
 ```
 
 On Windows, in PowerShell:
 
 ```
-git clone https://github.com/ridelink0/claude-code-runway
-Copy-Item -Recurse claude-code-runway\skills\runway "$env:USERPROFILE\.claude\skills\runway"
+git clone https://github.com/ridelink0/claude-code-usage-limits
+Copy-Item -Recurse claude-code-usage-limits\skills\usage-limits "$env:USERPROFILE\.claude\skills\usage-limits"
 ```
 
 Either way, ask something like "how much usage do I have left" or "can we
-finish this before the limit hits" and Claude will load it.
+finish this before the limit hits" and Claude will load it. Installed as a
+plugin it also gives you `/usage-limits:check`, which prints the report and
+sizes whatever you just asked for against it.
 
 The scripts also run on their own, with or without any of the above:
 
 ```
-node skills/runway/scripts/usage.js
-node skills/runway/scripts/usage.js --json
+node skills/usage-limits/scripts/usage.js
+node skills/usage-limits/scripts/usage.js --json
 ```
+
+## Plans
+
+It reads which plan you are on and adjusts what it tells you, because the
+advice differs even though the arithmetic does not:
+
+| Plan | Read from | What changes |
+| --- | --- | --- |
+| Pro | `claude_pro` | Smallest budget. The 5-hour window usually binds first. |
+| Max 5x | `claude_max` plus `default_claude_max_5x` | Room for Opus on most work. The weekly window is the one that bites. |
+| Max 20x | `claude_max` plus `default_claude_max_20x` | Rarely binds. No reason to slow down unless the weekly is already high. |
+| Team, Enterprise | `claude_team`, `claude_enterprise` | Seats are pooled and overage is an org setting. |
+
+The window maths never needs to know the plan. It calibrates against what your
+own account reports, so it is right on any tier, including ones that did not
+exist when this was written. The plan only decides which line of advice you
+get at the bottom of the report.
 
 ## Where it works
 
@@ -98,14 +117,14 @@ Half the problem is measurement. The other half is that a high effort setting
 keeps spending at the same rate whether or not there is room left.
 
 ```
-node skills/runway/scripts/lowpower.js status
-node skills/runway/scripts/lowpower.js on                 # effortLevel -> low
-node skills/runway/scripts/lowpower.js on --effort medium --model sonnet
-node skills/runway/scripts/lowpower.js off                # puts back what was there
+node skills/usage-limits/scripts/lowpower.js status
+node skills/usage-limits/scripts/lowpower.js on                 # effortLevel -> low
+node skills/usage-limits/scripts/lowpower.js on --effort medium --model sonnet
+node skills/usage-limits/scripts/lowpower.js off                # puts back what was there
 ```
 
 It edits `effortLevel` in `settings.json` through a temporary file, saves the
-previous values alongside, and keeps a `.runway-backup` copy of the original.
+previous values alongside, and keeps a `.usage-limits-backup` copy of the original.
 Keys it does not manage are left untouched. Running `on` twice does not
 overwrite the saved originals.
 
@@ -117,7 +136,7 @@ spells it out: batch tool calls, read line ranges instead of whole files, skip
 subagents when the context already exists, stop retrying a fix that is not
 working. Effort level does not control any of that, which is why those rules
 apply even at `xhigh` or `max`. The reasoning behind each one is in
-[tactics.md](skills/runway/references/tactics.md).
+[tactics.md](skills/usage-limits/references/tactics.md).
 
 ## Requirements
 
@@ -143,7 +162,7 @@ Good enough to plan with, not a bill. The honest caveats:
 - Turns left assumes the next turns look like the last hour's. A debugging
   spiral breaks that assumption immediately.
 
-[how-it-works.md](skills/runway/references/how-it-works.md) has the field
+[how-it-works.md](skills/usage-limits/references/how-it-works.md) has the field
 names, the formulas, and the rest of it.
 
 ## Layout
@@ -151,9 +170,9 @@ names, the formulas, and the rest of it.
 ```
 .claude-plugin/plugin.json        plugin manifest
 .claude-plugin/marketplace.json   lets the repo serve itself
-skills/runway/SKILL.md            what Claude reads
-skills/runway/scripts/            the two scripts
-skills/runway/references/         the longer notes
+skills/usage-limits/SKILL.md            what Claude reads
+skills/usage-limits/scripts/            the two scripts
+skills/usage-limits/references/         the longer notes
 test/                             node --test, no dependencies
 ```
 
@@ -163,8 +182,8 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-36 tests over the pricing, the window arithmetic, and the settings
-save/restore.
+43 tests over the pricing, the window arithmetic, plan detection, and the
+settings save/restore.
 
 ## Status
 

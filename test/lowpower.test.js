@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const lowpower = require('../skills/runway/scripts/lowpower.js');
+const lowpower = require('../skills/usage-limits/scripts/lowpower.js');
 
 test('parseArgs defaults to status', () => {
   assert.strictEqual(lowpower.parseArgs([]).command, 'status');

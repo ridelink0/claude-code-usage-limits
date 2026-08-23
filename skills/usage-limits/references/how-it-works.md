@@ -82,7 +82,7 @@ spent       = sum of turns inside the window
 per_percent = spent / utilization
 left        = per_percent * (100 - utilization)
 turns_left  = (100 - utilization) / (recent_cost_per_turn / per_percent)
-runway      = (100 - utilization) / (recent_dollars_per_hour / per_percent)
+headroom    = (100 - utilization) / (recent_dollars_per_hour / per_percent)
 ```
 
 The window opens at `resets_at` minus its span: five hours, or seven days.

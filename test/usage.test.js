@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const usage = require('../skills/runway/scripts/usage.js');
+const usage = require('../skills/usage-limits/scripts/usage.js');
 
 const HOUR = 60 * 60 * 1000;
 const NOW = Date.parse('2026-08-23T22:00:00.000Z');
@@ -143,7 +143,7 @@ test('buildWindow calibrates dollars per percent from measured spend', () => {
   near(window.remainingUSD, 45);
   near(window.percentPerTurn, 2);
   assert.strictEqual(window.turnsLeft, 45);
-  near(window.runwayMs, 22.5 * HOUR, 1);
+  near(window.headroomMs, 22.5 * HOUR, 1);
   assert.strictEqual(window.verdict, 'resets-first');
 });
 
@@ -159,7 +159,7 @@ test('buildWindow reports runs-out when the pace beats the reset', () => {
   const window = usage.buildWindow(spec, snapshot, sample, NOW);
 
   assert.strictEqual(window.verdict, 'runs-out');
-  assert.ok(window.runwayMs < window.msToReset);
+  assert.ok(window.headroomMs < window.msToReset);
 });
 
 test('buildWindow stays idle when nothing recent can set a pace', () => {
@@ -170,7 +170,7 @@ test('buildWindow stays idle when nothing recent can set a pace', () => {
   ]);
   const window = usage.buildWindow(spec, snapshot, sample, NOW);
 
-  assert.strictEqual(window.runwayMs, null);
+  assert.strictEqual(window.headroomMs, null);
   assert.strictEqual(window.verdict, 'idle');
   assert.strictEqual(window.turnsLeft, 18, 'the window average still gives a per-turn cost');
 });
@@ -212,14 +212,14 @@ test('buildWindow excludes spend from before the window opened', () => {
 });
 
 test('bindingWindow picks the limit that stops the work first', () => {
-  const soon = { key: 'a', percentUsed: 50, runwayMs: 10 * HOUR };
-  const sooner = { key: 'b', percentUsed: 20, runwayMs: 2 * HOUR };
+  const soon = { key: 'a', percentUsed: 50, headroomMs: 10 * HOUR };
+  const sooner = { key: 'b', percentUsed: 20, headroomMs: 2 * HOUR };
   assert.strictEqual(usage.bindingWindow([soon, sooner]).key, 'b');
 });
 
 test('bindingWindow falls back to the fullest window with no pace', () => {
-  const low = { key: 'a', percentUsed: 12, runwayMs: null };
-  const high = { key: 'b', percentUsed: 88, runwayMs: null };
+  const low = { key: 'a', percentUsed: 12, headroomMs: null };
+  const high = { key: 'b', percentUsed: 88, headroomMs: null };
   assert.strictEqual(usage.bindingWindow([low, high]).key, 'b');
 });
 
@@ -259,7 +259,7 @@ test('verdictLine says something useful in every state', () => {
   const base = { label: 'weekly', percentUsed: 50, msToReset: HOUR, resetsAt: NOW + HOUR };
   for (const verdict of ['exhausted', 'resets-first', 'runs-out', 'idle', 'unknown']) {
     const line = usage.verdictLine(
-      Object.assign({}, base, { verdict, runwayMs: 2 * HOUR })
+      Object.assign({}, base, { verdict, headroomMs: 2 * HOUR })
     );
     assert.ok(line.length > 20, verdict + ' should produce a sentence');
   }
@@ -278,4 +278,103 @@ test('render explains itself when there is no snapshot', () => {
     measuredTurns: 0,
   });
   assert.match(text, /No usage snapshot/);
+});
+
+test('detectPlan identifies Pro', () => {
+  const plan = usage.detectPlan({
+    organizationType: 'claude_pro',
+    organizationRateLimitTier: 'default_claude_ai',
+  });
+  assert.strictEqual(plan.id, 'pro');
+  assert.strictEqual(plan.label, 'Claude Pro');
+  assert.ok(plan.advice.length > 20);
+});
+
+test('detectPlan separates Max 5x from Max 20x', () => {
+  const five = usage.detectPlan({
+    organizationType: 'claude_max',
+    organizationRateLimitTier: 'default_claude_max_5x',
+  });
+  const twenty = usage.detectPlan({
+    organizationType: 'claude_max',
+    organizationRateLimitTier: 'default_claude_max_20x',
+  });
+  assert.strictEqual(five.id, 'max_5x');
+  assert.strictEqual(five.label, 'Claude Max 5x');
+  assert.strictEqual(twenty.id, 'max_20x');
+  assert.strictEqual(twenty.label, 'Claude Max 20x');
+  assert.notStrictEqual(five.advice, twenty.advice);
+});
+
+test('detectPlan prefers the user tier over the org tier', () => {
+  const plan = usage.detectPlan({
+    organizationType: 'claude_max',
+    organizationRateLimitTier: 'default_claude_max_5x',
+    userRateLimitTier: 'default_claude_max_20x',
+  });
+  assert.strictEqual(plan.id, 'max_20x');
+  assert.strictEqual(plan.tier, 'default_claude_max_20x');
+});
+
+test('detectPlan falls back to plain Max when no tier is reported', () => {
+  const plan = usage.detectPlan({ organizationType: 'claude_max' });
+  assert.strictEqual(plan.id, 'max');
+  assert.strictEqual(plan.tier, null);
+  assert.ok(plan.advice.includes('5x Pro'));
+});
+
+test('detectPlan handles Team and Enterprise', () => {
+  assert.strictEqual(usage.detectPlan({ organizationType: 'claude_team' }).id, 'team');
+  assert.strictEqual(
+    usage.detectPlan({ organizationType: 'claude_enterprise' }).id,
+    'enterprise'
+  );
+});
+
+test('detectPlan degrades instead of throwing', () => {
+  assert.strictEqual(usage.detectPlan(null).id, 'unknown');
+  assert.strictEqual(usage.detectPlan({}).id, 'unknown');
+  assert.strictEqual(usage.detectPlan({}).advice, null);
+
+  const future = usage.detectPlan({ organizationType: 'claude_something_new' });
+  assert.strictEqual(future.id, 'unknown');
+  assert.strictEqual(
+    future.label,
+    'something_new',
+    'an unseen plan should still show what the account reported'
+  );
+});
+
+test('render prints the plan advice when there is one', () => {
+  // An empty window list returns early, so give it a window to render.
+  const window = {
+    key: 'five_hour',
+    label: '5-hour',
+    percentUsed: 40,
+    percentLeft: 60,
+    msToReset: 2 * HOUR,
+    resetsAt: NOW + 2 * HOUR,
+    remainingUSD: 12,
+    turnsLeft: 80,
+    headroomMs: 3 * HOUR,
+    coarse: false,
+    verdict: 'resets-first',
+  };
+  const data = {
+    plan: 'Claude Max 20x',
+    planAdvice: 'Max 20x rarely binds.',
+    snapshotAgeMs: 60000,
+    settings: { model: 'opus', effortLevel: 'xhigh' },
+    extraUsage: null,
+    windows: [window],
+    binding: window,
+    recent: { turns: 3, usd: 0.5, usdPerTurn: 0.16, tokens: 0, effort: 'xhigh' },
+    measuredTurns: 100,
+  };
+  const text = usage.render(data);
+  assert.match(text, /Claude Max 20x/);
+  assert.match(text, /Max 20x rarely binds\./);
+
+  const silent = usage.render(Object.assign({}, data, { planAdvice: null }));
+  assert.doesNotMatch(silent, /rarely binds/);
 });

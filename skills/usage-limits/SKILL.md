@@ -1,9 +1,9 @@
 ---
-name: runway
+name: usage-limits
 description: Check how much of the Claude Code usage limit is left and plan the work to fit inside it. Use before starting anything long, when the 5-hour or weekly limit is getting close, when asked how much usage is left or whether there is enough left to finish, and when asked to work cheaply, burn fewer credits, or stretch the rest of the limit.
 ---
 
-# Runway
+# usage-limits
 
 Running out of limit halfway through a job is a scheduling failure, not bad
 luck. The numbers are on disk before the work starts. Read them, size the job
@@ -35,6 +35,11 @@ at this effort level. Add `--json` when you want the raw fields.
 
 If it says no snapshot was found, run `/usage` once in Claude Code and try
 again. That populates the cache the script reads.
+
+The last line names the plan (Pro, Max 5x, Max 20x, Team, Enterprise) and what
+it means for spending. Pro has the least room and the 5-hour window usually
+binds first; Max 20x rarely binds at all. Take that line into account before
+deciding how careful to be.
 
 ## 2. Size the job before starting it
 
