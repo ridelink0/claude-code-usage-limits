@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Reads how much of your Claude Code usage limit is left, converts it into turns of headroom, and plans the work to fit inside it. Includes a low power switch that keeps spending down even at high effort.",
   "author": {
-    "name": "Gerald",
+    "name": "Ridelink",
     "url": "https://github.com/ridelink0"
   },
   "homepage": "https://github.com/ridelink0/claude-code-usage-limits",
