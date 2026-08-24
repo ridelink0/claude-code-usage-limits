@@ -1,6 +1,6 @@
 {
   "name": "claude-usage-limits",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "See how much of your Claude Code usage limit is left as turns of work rather than a percentage, and plan the job to fit inside it.",
   "keywords": [
     "claude",
