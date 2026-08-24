@@ -577,3 +577,121 @@ test('statusLine says rolling instead of a percentage it knows is wrong', () => 
   assert.strictEqual(line, '5h rolling  wk 12% 3h');
   assert.doesNotMatch(line, /LOW/, 'a stale window must not raise the alarm');
 });
+
+test('creditsFrom reads the disabled shape without inventing numbers', () => {
+  const credits = usage.creditsFrom({
+    extra_usage: {
+      is_enabled: false,
+      monthly_limit: null,
+      used_credits: null,
+      utilization: null,
+      user_disabled: true,
+      spend_limit_reached: false,
+      credits_ever_enabled: true,
+      disabled_reason: null,
+    },
+    spend: {
+      used: { amount_minor: 0, currency: 'USD', exponent: 2 },
+      limit: null,
+      percent: 0,
+      enabled: false,
+    },
+  });
+  assert.strictEqual(credits.enabled, false);
+  assert.strictEqual(credits.everEnabled, true);
+  assert.strictEqual(credits.used, 0);
+  assert.strictEqual(credits.limit, null);
+  assert.strictEqual(credits.currency, 'USD');
+});
+
+test('creditsFrom converts minor units at the stated exponent', () => {
+  const credits = usage.creditsFrom({
+    extra_usage: { is_enabled: true, utilization: 8, spend_limit_reached: false },
+    spend: {
+      used: { amount_minor: 420, currency: 'USD', exponent: 2 },
+      limit: { amount_minor: 5000, currency: 'USD', exponent: 2 },
+      enabled: true,
+    },
+  });
+  assert.strictEqual(credits.enabled, true);
+  assert.strictEqual(credits.used, 4.2);
+  assert.strictEqual(credits.limit, 50);
+  assert.strictEqual(credits.percent, 8);
+});
+
+test('creditsFrom returns nothing when neither block is present', () => {
+  assert.strictEqual(usage.creditsFrom({}), null);
+  assert.strictEqual(usage.creditsFrom(null), null);
+});
+
+test('formatClock gives a wall clock time', () => {
+  assert.match(usage.formatClock(NOW), /\d{1,2}:\d{2}/);
+  assert.strictEqual(usage.formatClock(null), '-');
+});
+
+const outOfRoom = {
+  key: 'five_hour',
+  label: '5-hour',
+  percentUsed: 92,
+  percentLeft: 8,
+  msToReset: 4 * HOUR,
+  resetsAt: NOW + 4 * HOUR,
+  remainingUSD: 2,
+  turnsLeft: 6,
+  headroomMs: 20 * 60000,
+  coarse: false,
+  stale: false,
+  verdict: 'runs-out',
+};
+
+function reportData(extra) {
+  return Object.assign(
+    {
+      plan: 'Claude Pro',
+      planAdvice: null,
+      snapshotAgeMs: 60000,
+      settings: { model: 'opus', effortLevel: 'xhigh' },
+      windows: [outOfRoom],
+      binding: outOfRoom,
+      resumeAt: outOfRoom.resetsAt,
+      scopeLabel: '5-hour',
+      models: [],
+      projects: [],
+      tokens: null,
+      credits: null,
+      recent: { turns: 3, usd: 0.5, usdPerTurn: 0.16, tokens: 0, effort: 'xhigh' },
+      measuredTurns: 100,
+    },
+    extra
+  );
+}
+
+test('render warns before paid credits start being spent', () => {
+  const text = usage.render(
+    reportData({ credits: { enabled: true, limitReached: false, used: 4.2, limit: 50, percent: 8, currency: 'USD' } })
+  );
+  assert.match(text, /Credits {4}on, \$4\.20 used of \$50\.00 \(8%\)/);
+  assert.match(text, /spending moves to paid credits/);
+  assert.match(text, /Say so before carrying on/);
+});
+
+test('render says work simply stops when credits are off', () => {
+  const text = usage.render(
+    reportData({ credits: { enabled: false, limitReached: false, used: 0, limit: null, percent: 0, currency: 'USD' } })
+  );
+  assert.match(text, /Credits {4}off, work stops/);
+  assert.match(text, /Nothing carries on into paid credits/);
+  assert.doesNotMatch(text, /spending moves to paid credits/);
+});
+
+test('render names a time to come back to the work', () => {
+  const text = usage.render(reportData({}));
+  assert.match(text, /resume after \d{1,2}:\d{2}/);
+});
+
+test('render leaves the plan block out when there is room', () => {
+  const roomy = Object.assign({}, outOfRoom, { verdict: 'resets-first' });
+  const text = usage.render(reportData({ windows: [roomy], binding: roomy }));
+  assert.doesNotMatch(text, /resume after/);
+  assert.doesNotMatch(text, /Nothing carries on/);
+});

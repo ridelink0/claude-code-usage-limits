@@ -96,6 +96,33 @@ node skills/usage-limits/scripts/usage.js
 node skills/usage-limits/scripts/usage.js --json
 ```
 
+## Credits, and what happens at the wall
+
+The report says which of two things happens when the plan allowance runs out,
+because they need opposite handling.
+
+If paid credits are off, work stops dead and there is no buying through it.
+If they are on, work does not stop, it starts costing money, and the skill
+tells Claude to say so and let you decide rather than quietly spending them.
+
+When the binding window will run out before it resets, the report stops
+describing and starts instructing:
+
+```
+The 5-hour limit is the binding one. At the current pace it runs out in about
+20m, which is 3h 40m short of the reset. Size the work to fit, or slow the burn.
+  Once it does, spending moves to paid credits rather than stopping. Say so
+  before carrying on.
+  Land what exists, write the handoff, and resume after 03:00.
+```
+
+The clock time matters more than the countdown. "Resume after 03:00" is a
+plan; "4h 12m" is a number you still have to do arithmetic on.
+
+The skill also requires Claude to say up front when a job will not fit in what
+is left, name what it is doing now, what it is leaving, and when the rest can
+happen, rather than starting and stopping halfway through an edit.
+
 ## Status line
 
 For a permanent readout instead of asking, point Claude Code's status line at
@@ -234,8 +261,8 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-58 tests over the pricing, the window arithmetic, plan detection, the status
-line, per-project attribution, and the settings save/restore.
+66 tests over the pricing, the window arithmetic, plan and credit detection,
+the status line, per-project attribution, and the settings save/restore.
 
 ## Status
 

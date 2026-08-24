@@ -68,12 +68,29 @@ not tight.
 **It fits only if nothing goes wrong.** Say so, switch to low power for the
 run, and reorder the work so the valuable part lands first.
 
-**It does not fit.** Do not start and hope. Cut scope with the user, or split
-the job at a clean boundary and finish the first half properly. Half a
-feature, committed and working, beats a whole one abandoned mid-edit.
+**It does not fit.** Say so before starting, in plain words. State that not
+all of it can be done in what is left, list what you are doing now and what
+you are leaving, and name the wall-clock time the window resets so the user
+knows when the rest can happen. Then do the part that fits, properly. Do not
+start and hope: half a feature, committed and working, beats a whole one
+abandoned mid-edit.
 
 **The window resets first.** If the reset lands before the budget runs out,
 the limit is not the constraint. Say that and stop optimising for it.
+
+## Credits
+
+The `Credits` line in the report says what actually happens at the limit, and
+the two cases need opposite handling.
+
+**Off.** Work stops dead at the limit. Nothing spills over. This is the case
+to plan hardest around, because there is no way to buy your way through it.
+
+**On.** Work does not stop, it starts costing money. Before continuing past
+the plan allowance, say plainly that the next turns are billed as credits and
+let the user decide. Never quietly spend credits on work they assumed was
+covered by the plan. The moment the report says the window runs out before it
+resets is the moment credits start.
 
 ## 4. Low power
 
@@ -125,7 +142,8 @@ of headroom, stop adding work and land what exists:
 1. Commit or otherwise save the working state.
 2. Write `HANDOFF.md`: what is done, what is next, which files are mid-change,
    what the next session should read first.
-3. Say when the window resets and what to run on the way back in.
+3. Say when the window resets, as a clock time and not just a duration, plus
+   what to run on the way back in.
 
 A handoff written with ten turns left is worth more than the tenth turn.
 

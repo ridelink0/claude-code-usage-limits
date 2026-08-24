@@ -361,6 +361,41 @@ function shortenProject(name, width) {
   return '...' + value.slice(value.length - (width - 3));
 }
 
+// Paid credits sit behind the plan allowance. Two blocks describe them and
+// either can be absent, so read both and prefer whichever actually carries a
+// number.
+function creditsFrom(utilization) {
+  const extra = (utilization && utilization.extra_usage) || null;
+  const spend = (utilization && utilization.spend) || null;
+  if (!extra && !spend) return null;
+
+  const money = (amount) => {
+    if (!amount || typeof amount.amount_minor !== 'number') return null;
+    const exponent = typeof amount.exponent === 'number' ? amount.exponent : 2;
+    return amount.amount_minor / Math.pow(10, exponent);
+  };
+
+  const used = money(spend && spend.used);
+  const limit = money(spend && spend.limit);
+  const percent =
+    extra && typeof extra.utilization === 'number'
+      ? extra.utilization
+      : spend && typeof spend.percent === 'number'
+        ? spend.percent
+        : null;
+
+  return {
+    enabled: Boolean((extra && extra.is_enabled) || (spend && spend.enabled)),
+    everEnabled: Boolean(extra && extra.credits_ever_enabled),
+    limitReached: Boolean(extra && extra.spend_limit_reached),
+    used,
+    limit: limit === null && extra ? extra.monthly_limit : limit,
+    percent,
+    currency: (spend && spend.used && spend.used.currency) || (extra && extra.currency) || 'USD',
+    disabledReason: (extra && extra.disabled_reason) || (spend && spend.disabled_reason) || null,
+  };
+}
+
 // Everything the report needs about one limit window.
 function buildWindow(spec, snapshot, events, now) {
   const percent =
@@ -471,6 +506,11 @@ function formatDuration(ms) {
   if (hours < 24) return rest ? hours + 'h ' + rest + 'm' : hours + 'h';
   const days = Math.floor(hours / 24);
   return days + 'd ' + (hours % 24) + 'h';
+}
+
+function formatClock(ms) {
+  if (!Number.isFinite(ms)) return '-';
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function formatUSD(value) {
@@ -585,6 +625,8 @@ async function report(now) {
   return Object.assign({}, base, {
     windows,
     binding,
+    credits: creditsFrom(base.utilization),
+    resumeAt: binding ? binding.resetsAt : null,
     models: byModel(scoped),
     projects: byProject(scoped),
     tokens: scopedTotals.parts,
@@ -691,13 +733,22 @@ function render(data) {
       (data.snapshotAgeMs === null ? 'none on disk' : formatDuration(data.snapshotAgeMs) + ' old')
   );
   lines.push('  Settings   model=' + data.settings.model + '  effort=' + data.settings.effortLevel);
-  if (data.extraUsage) {
-    lines.push(
-      '  Overage    ' +
-        (data.extraUsage.is_enabled
-          ? 'on, spending continues past the limit'
-          : 'off, work stops at the limit')
-    );
+  const credits = data.credits;
+  if (credits) {
+    if (!credits.enabled) {
+      lines.push('  Credits    off, work stops when the plan allowance runs out');
+    } else {
+      const amounts =
+        credits.used === null
+          ? 'on'
+          : 'on, ' + formatUSD(credits.used) + ' used' +
+            (credits.limit ? ' of ' + formatUSD(credits.limit) : '') +
+            (credits.percent === null ? '' : ' (' + credits.percent + '%)');
+      lines.push(
+        '  Credits    ' + amounts +
+          (credits.limitReached ? ', spend limit reached' : '')
+      );
+    }
   }
   lines.push('');
 
@@ -785,6 +836,26 @@ function render(data) {
 
   lines.push('');
   lines.push(verdictLine(data.binding));
+  const binding = data.binding;
+  const outOfRoom = binding && (binding.verdict === 'runs-out' || binding.verdict === 'exhausted');
+  if (outOfRoom) {
+    const credits = data.credits;
+    if (credits && credits.enabled && !credits.limitReached) {
+      lines.push(
+        '  Once it does, spending moves to paid credits rather than stopping. ' +
+          'Say so before carrying on.'
+      );
+    } else {
+      lines.push('  Work stops when it does. Nothing carries on into paid credits.');
+    }
+    if (Number.isFinite(data.resumeAt)) {
+      lines.push(
+        '  Land what exists, write the handoff, and resume after ' +
+          formatClock(data.resumeAt) + '.'
+      );
+    }
+  }
+
   if (data.planAdvice) {
     lines.push('');
     lines.push(data.planAdvice);
@@ -835,6 +906,8 @@ module.exports = {
   report,
   collect,
   detectPlan,
+  creditsFrom,
+  formatClock,
   statusLine,
   SHORT_LABELS,
   tokenParts,
