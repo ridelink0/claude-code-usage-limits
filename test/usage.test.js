@@ -787,3 +787,58 @@ test('renderForecast admits when it has nothing to price against', () => {
   const text = usage.renderForecast({ windows: [priced], rates: null }, 10);
   assert.ok(text.includes('Nothing recent to price this against'));
 });
+
+test('familyOf recognises the family from the model id', () => {
+  assert.strictEqual(usage.familyOf('claude-opus-5-2'), 'opus');
+  assert.strictEqual(usage.familyOf('claude-sonnet-6'), 'sonnet');
+  assert.strictEqual(usage.familyOf('CLAUDE-HAIKU-9'), 'haiku');
+  assert.strictEqual(usage.familyOf('claude-fable-7'), 'fable');
+  assert.strictEqual(usage.familyOf('claude-mythos-9'), 'fable', 'mythos is priced with fable');
+  assert.strictEqual(usage.familyOf('gpt-4'), null);
+  assert.strictEqual(usage.familyOf(null), null);
+});
+
+test('familyAverage averages every known member of the family', () => {
+  const table = {
+    'claude-opus-a': { input: 2, output: 10 },
+    'claude-opus-b': { input: 8, output: 40 },
+    'claude-haiku-a': { input: 1, output: 5 },
+  };
+  assert.deepStrictEqual(usage.familyAverage('opus', table), { input: 5, output: 25 });
+  assert.deepStrictEqual(usage.familyAverage('haiku', table), { input: 1, output: 5 });
+  assert.strictEqual(usage.familyAverage('sonnet', table), null);
+  assert.strictEqual(usage.familyAverage(null, table), null);
+});
+
+test('an unreleased model is priced at its family average, not refused', () => {
+  assert.deepStrictEqual(usage.rateFor('claude-opus-5-2'), usage.familyAverage('opus'));
+  assert.deepStrictEqual(usage.rateFor('claude-sonnet-7'), usage.familyAverage('sonnet'));
+  assert.deepStrictEqual(usage.rateFor('claude-haiku-9-9'), usage.familyAverage('haiku'));
+});
+
+test('an unrecognised family errs expensive rather than cheap', () => {
+  const rate = usage.rateFor('claude-quartz-1');
+  assert.deepStrictEqual(rate, { input: 5, output: 25 });
+  assert.ok(
+    rate.input >= usage.familyAverage('sonnet').input,
+    'guessing low would overstate headroom, which is the dangerous direction'
+  );
+});
+
+test('isKnownModel separates a real rate from an assumed one', () => {
+  assert.strictEqual(usage.isKnownModel('claude-opus-5'), true);
+  assert.strictEqual(usage.isKnownModel('CLAUDE-OPUS-5'), true);
+  assert.strictEqual(usage.isKnownModel('claude-opus-5-2'), false);
+  assert.strictEqual(usage.isKnownModel(null), false);
+});
+
+test('byModel flags rows that were priced by assumption', () => {
+  const rows = usage.byModel([
+    { model: 'claude-opus-5', cost: 1, tokens: 10, parts: { input: 0, cacheWrite: 0, cacheRead: 0, output: 1 } },
+    { model: 'claude-opus-5-2', cost: 1, tokens: 10, parts: { input: 0, cacheWrite: 0, cacheRead: 0, output: 1 } },
+  ]);
+  const known = rows.find((r) => r.model === 'claude-opus-5');
+  const guessed = rows.find((r) => r.model === 'claude-opus-5-2');
+  assert.strictEqual(known.estimated, false);
+  assert.strictEqual(guessed.estimated, true);
+});

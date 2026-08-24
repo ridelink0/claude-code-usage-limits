@@ -349,6 +349,9 @@ Good enough to plan with, not a bill. The honest caveats:
   a percentage of the limit. On a subscription plan you are not billed them.
 - Turns left assumes the next turns look like the last hour's. A debugging
   spiral breaks that assumption immediately.
+- A model released after this table was written is priced at its family's
+  average rate, and the report marks those rows with an asterisk rather than
+  passing the guess off as a published price.
 - The cache only refreshes when Claude Code talks to the API, so after an idle
   spell a window can sit past its own reset time. When that happens the report
   says `stale` and the status line says `rolling` rather than reporting a
@@ -362,9 +365,13 @@ names, the formulas, and the rest of it.
 ```
 .claude-plugin/plugin.json        plugin manifest
 .claude-plugin/marketplace.json   lets the repo serve itself
-skills/usage-limits/SKILL.md            what Claude reads
-skills/usage-limits/scripts/            the two scripts
-skills/usage-limits/references/         the longer notes
+skills/usage-limits/SKILL.md      what Claude reads
+skills/usage-limits/scripts/      usage.js, lowpower.js, brief.js
+skills/usage-limits/references/   the longer notes
+hooks/hooks.json                  runs brief.js before each prompt
+commands/check.md                 the /usage-limits:check command
+bin/cli.js                        the npx entry point
+tools/sync-version.js             keeps the manifest version in step
 test/                             node --test, no dependencies
 ```
 
@@ -374,7 +381,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-105 tests over the pricing, the window arithmetic, plan and credit detection,
+119 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, job forecasting, per-project
 attribution, the CLI, packaging, and the settings save/restore.
 

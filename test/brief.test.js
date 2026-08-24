@@ -186,3 +186,57 @@ test('the off switch wins over everything', async () => {
     else process.env.USAGE_LIMITS_BRIEF = previous;
   }
 });
+
+test('pickCached returns a slot that is still warm', () => {
+  const all = { alpha: { at: NOW - 10 * 1000, turnsLeft: 40 } };
+  const hit = brief.pickCached(all, 'alpha', NOW, 60 * 1000);
+  assert.strictEqual(hit.turnsLeft, 40);
+});
+
+test('pickCached ignores a slot that has gone cold', () => {
+  const all = { alpha: { at: NOW - 90 * 1000, turnsLeft: 40 } };
+  assert.strictEqual(brief.pickCached(all, 'alpha', NOW, 60 * 1000), null);
+});
+
+test('one session never reads another session slot', () => {
+  const all = { alpha: { at: NOW, turnsLeft: 40 } };
+  assert.strictEqual(brief.pickCached(all, 'beta', NOW, 60 * 1000), null);
+});
+
+test('pickCached survives a missing or malformed cache', () => {
+  assert.strictEqual(brief.pickCached(null, 'a', NOW, 1000), null);
+  assert.strictEqual(brief.pickCached({}, 'a', NOW, 1000), null);
+  assert.strictEqual(brief.pickCached({ a: {} }, 'a', NOW, 1000), null);
+  assert.strictEqual(brief.pickCached({ a: { at: 'soon' } }, 'a', NOW, 1000), null);
+});
+
+test('a session with no id still gets a slot of its own', () => {
+  const merged = brief.mergeCache({}, null, { at: NOW, turnsLeft: 5 }, 5);
+  assert.deepStrictEqual(Object.keys(merged), ['_']);
+  assert.strictEqual(brief.pickCached(merged, null, NOW, 60 * 1000).turnsLeft, 5);
+});
+
+test('mergeCache keeps other sessions rather than replacing them', () => {
+  const existing = { alpha: { at: NOW - 5000, turnsLeft: 40 } };
+  const merged = brief.mergeCache(existing, 'beta', { at: NOW, turnsLeft: 12 }, 5);
+  assert.deepStrictEqual(Object.keys(merged).sort(), ['alpha', 'beta']);
+  assert.strictEqual(merged.alpha.turnsLeft, 40, 'the other session must survive');
+});
+
+test('mergeCache prunes the oldest so the file cannot grow forever', () => {
+  let all = {};
+  for (let i = 0; i < 8; i += 1) {
+    all = brief.mergeCache(all, 'session' + i, { at: NOW + i, turnsLeft: i }, 3);
+  }
+  const keys = Object.keys(all);
+  assert.strictEqual(keys.length, 3);
+  assert.deepStrictEqual(keys.sort(), ['session5', 'session6', 'session7'], 'newest survive');
+});
+
+test('mergeCache defaults to the shipped slot count', () => {
+  let all = {};
+  for (let i = 0; i < 9; i += 1) {
+    all = brief.mergeCache(all, 's' + i, { at: NOW + i, turnsLeft: i });
+  }
+  assert.strictEqual(Object.keys(all).length, brief.KEEP_SESSIONS);
+});

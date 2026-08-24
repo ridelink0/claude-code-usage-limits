@@ -131,6 +131,18 @@ immediately. Re-run the report if the shape of the work changes.
 ## Keeping it accurate
 
 The rate table in `scripts/usage.js` is a plain object at the top of the file.
-When new models ship, add a row. An unknown id falls back to the family it
-names (`opus`, `sonnet`, `haiku`, `fable`) and then to Opus rates, so a missing
-row degrades to an estimate rather than a crash.
+When new models ship, add a row.
+
+Until someone does, a model this table has not seen is priced at the average of
+the family its name contains: an unreleased `claude-opus-5-2` is charged at the
+mean of every Opus rate on record. Averaging assumes nothing about which
+direction prices moved, which is why it beats pinning to whichever release
+happened to be newest when the table was written.
+
+A name with no recognisable family falls back to Opus rates. That is a
+deliberate choice rather than a neutral one: over-estimating cost understates
+your headroom, and being told you have less room than you do is the safe way to
+be wrong about a budget.
+
+Rows priced this way are marked with an asterisk in the report, so an assumed
+rate never quietly passes for a published one.

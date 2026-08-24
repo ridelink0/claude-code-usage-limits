@@ -37,7 +37,42 @@ const RATES = {
   'claude-sonnet-4-6': { input: 3, output: 15 },
   'claude-haiku-4-5': { input: 1, output: 5 },
 };
+// A model can ship before this table knows about it. Rather than refusing to
+// price it, fall back to the average of the family it names. Averaging assumes
+// nothing about which direction prices moved, unlike pinning to one release.
+// An unrecognised family falls back to Opus rates on purpose: over-estimating
+// cost understates headroom, and that is the safe direction for a budget.
+const FAMILIES = ['fable', 'mythos', 'opus', 'sonnet', 'haiku'];
 const FALLBACK_RATE = { input: 5, output: 25 };
+
+function familyOf(model) {
+  const id = String(model || '').toLowerCase();
+  for (const family of FAMILIES) {
+    // Mythos is priced with Fable, so it counts as the same family.
+    if (id.indexOf(family) !== -1) return family === 'mythos' ? 'fable' : family;
+  }
+  return null;
+}
+
+function familyAverage(family, table) {
+  if (!family) return null;
+  const rates = table || RATES;
+  const members = Object.keys(rates).filter((id) => familyOf(id) === family);
+  if (!members.length) return null;
+
+  let input = 0;
+  let output = 0;
+  for (const id of members) {
+    input += rates[id].input;
+    output += rates[id].output;
+  }
+  return { input: input / members.length, output: output / members.length };
+}
+
+// Whether the price came from the table or from an assumption.
+function isKnownModel(model) {
+  return Object.prototype.hasOwnProperty.call(RATES, String(model || '').toLowerCase());
+}
 
 // Cache traffic is priced as a multiple of the input rate.
 const CACHE_WRITE_5M = 1.25;
@@ -129,11 +164,7 @@ function readJson(file) {
 function rateFor(model) {
   const id = String(model || '').toLowerCase();
   if (RATES[id]) return RATES[id];
-  if (id.includes('fable') || id.includes('mythos')) return RATES['claude-fable-5'];
-  if (id.includes('opus')) return RATES['claude-opus-5'];
-  if (id.includes('sonnet')) return RATES['claude-sonnet-5'];
-  if (id.includes('haiku')) return RATES['claude-haiku-4-5'];
-  return FALLBACK_RATE;
+  return familyAverage(familyOf(id)) || FALLBACK_RATE;
 }
 
 // Cost of one assistant turn, in USD, from its usage record.
@@ -300,6 +331,7 @@ function byModel(events) {
     if (!rows.has(id)) {
       rows.set(id, {
         model: id,
+        estimated: !isKnownModel(id),
         turns: 0,
         tokens: 0,
         cost: 0,
@@ -829,11 +861,15 @@ function render(data) {
     );
     for (const row of data.models) {
       lines.push(
-        '  ' + pad('  ' + row.model, 24) + padLeft(row.turns, 7) +
+        '  ' + pad('  ' + row.model + (row.estimated ? ' *' : ''), 24) +
+          padLeft(row.turns, 7) +
           padLeft(formatTokens(row.tokens), 10) +
           padLeft(formatTokens(row.parts.output), 9) +
           padLeft(Math.round(row.share * 100) + '%', 8)
       );
+    }
+    if (data.models.some((row) => row.estimated)) {
+      lines.push('    * no published rate for this one yet, priced at the family average');
     }
     if (data.tokens) {
       lines.push(
@@ -1020,6 +1056,9 @@ module.exports = {
   RATES,
   WINDOWS,
   rateFor,
+  familyOf,
+  familyAverage,
+  isKnownModel,
   costOf,
   tokensOf,
   eventFrom,

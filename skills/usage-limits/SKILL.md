@@ -198,7 +198,8 @@ a turn, which is the thing it is trying to save.
 
 | Path | What it is |
 | --- | --- |
-| `scripts/usage.js` | The report. `--json` for raw fields, `--status` for a one-line status line readout that skips the transcript scan. |
+| `scripts/usage.js` | The report. `--json` for raw fields, `--status` for a one-line readout that skips the transcript scan, `--forecast N` for what an N turn job would cost. |
+| `scripts/brief.js` | What the hook runs before each prompt. Not meant to be called by hand. |
 | `scripts/lowpower.js` | `status`, `on`, `off`. Restores what it replaced. |
 | `references/tactics.md` | Every lever that lowers cost, and why it works. |
 | `references/how-it-works.md` | Where the numbers come from and where they are soft. |

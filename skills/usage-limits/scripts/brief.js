@@ -38,18 +38,41 @@ function cacheFile() {
   return path.join(configDir(), 'usage-limits-brief.json');
 }
 
+// One slot per session. A single shared slot meant that alternating between
+// two Claude Code windows invalidated the cache on every prompt, so neither
+// ever got a hit and both paid for a full scan each time.
+const KEEP_SESSIONS = 5;
+
 function readCache() {
   try {
-    return JSON.parse(fs.readFileSync(cacheFile(), 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(cacheFile(), 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
   } catch (err) {
-    return null;
+    return {};
   }
 }
 
-function writeCache(value) {
+function pickCached(all, sessionId, now, ttlMs) {
+  const entry = all ? all[sessionId || '_'] : null;
+  if (!entry || !Number.isFinite(entry.at)) return null;
+  return now - entry.at < ttlMs ? entry : null;
+}
+
+// Keep the newest few so a machine with many sessions does not grow the file
+// without bound.
+function mergeCache(all, sessionId, entry, keep) {
+  const next = Object.assign({}, all || {});
+  next[sessionId || '_'] = entry;
+  const ordered = Object.keys(next).sort((a, b) => (next[b].at || 0) - (next[a].at || 0));
+  const trimmed = {};
+  for (const key of ordered.slice(0, keep || KEEP_SESSIONS)) trimmed[key] = next[key];
+  return trimmed;
+}
+
+function writeCache(all) {
   try {
     fs.mkdirSync(path.dirname(cacheFile()), { recursive: true });
-    fs.writeFileSync(cacheFile(), JSON.stringify(value), 'utf8');
+    fs.writeFileSync(cacheFile(), JSON.stringify(all), 'utf8');
   } catch (err) {
     // A cache miss costs a scan. A crash costs the prompt. Prefer the scan.
   }
@@ -186,24 +209,20 @@ async function run(now, hookInput) {
   const cheap = usage.buildWindows(base.utilization, [], now);
   if (!cheap.length) return '';
 
-  const cached = readCache();
-  const fresh =
-    cached &&
-    Number.isFinite(cached.at) &&
-    now - cached.at < config.cacheSeconds * SECOND &&
-    cached.sessionId === sessionId;
+  const all = readCache();
+  const cached = pickCached(all, sessionId, now, config.cacheSeconds * SECOND);
 
-  let turnsLeft = fresh ? cached.turnsLeft : null;
-  let session = fresh ? cached.session : null;
+  let turnsLeft = cached ? cached.turnsLeft : null;
+  let session = cached ? cached.session : null;
   let windows = cheap;
 
-  if (!fresh) {
+  if (!cached) {
     const events = await usage.readEvents(now - 8 * DAY);
     windows = usage.buildWindows(base.utilization, events, now);
     const binding = usage.bindingWindow(windows);
     turnsLeft = binding && Number.isFinite(binding.turnsLeft) ? binding.turnsLeft : null;
     session = sessionSpend(events, sessionId);
-    writeCache({ at: now, turnsLeft, session, sessionId });
+    writeCache(mergeCache(all, sessionId, { at: now, turnsLeft, session }, KEEP_SESSIONS));
   }
 
   const binding = usage.bindingWindow(windows) || windows[0];
@@ -243,6 +262,9 @@ module.exports = {
   summarise,
   briefText,
   settings,
+  pickCached,
+  mergeCache,
+  KEEP_SESSIONS,
   run,
   cacheFile,
 };
