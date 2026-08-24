@@ -1,14 +1,43 @@
 {
-  "name": "claude-code-usage-limits",
+  "name": "claude-usage-limits",
   "version": "1.0.0",
-  "private": true,
-  "description": "Reads the remaining Claude Code usage limit and plans the work to fit inside it.",
+  "description": "See how much of your Claude Code usage limit is left as turns of work rather than a percentage, and plan the job to fit inside it.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "usage",
+    "limits",
+    "rate-limit",
+    "tokens",
+    "cost",
+    "budget",
+    "statusline",
+    "cli"
+  ],
+  "homepage": "https://github.com/ridelink0/claude-code-usage-limits",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ridelink0/claude-code-usage-limits.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ridelink0/claude-code-usage-limits/issues"
+  },
   "license": "MIT",
+  "author": "Ridelink (https://github.com/ridelink0)",
+  "bin": {
+    "claude-usage-limits": "bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "skills/",
+    "commands/",
+    ".claude-plugin/"
+  ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
     "test": "node --test",
-    "usage": "node skills/usage-limits/scripts/usage.js"
+    "usage": "node bin/cli.js"
   }
 }

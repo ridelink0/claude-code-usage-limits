@@ -63,6 +63,18 @@ comes from your local session transcripts. Neither requires a network call.
 
 ## Install
 
+Nothing to install, if you just want the numbers:
+
+```
+npx claude-usage-limits
+npx claude-usage-limits --status
+npx claude-usage-limits lowpower on
+```
+
+That runs the same code as the plugin. Node 18 or newer.
+
+To have Claude read the numbers and plan against them, install it properly.
+
 As a plugin:
 
 ```
@@ -262,14 +274,17 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-66 tests over the pricing, the window arithmetic, plan and credit detection,
-the status line, per-project attribution, and the settings save/restore.
+72 tests over the pricing, the window arithmetic, plan and credit detection,
+the status line, per-project attribution, the CLI, and the settings
+save/restore.
 
 ## Status
 
-Finished. It does what I built it for, and I am not planning further updates:
-no new features, and issues or pull requests will most likely sit unanswered.
-It is MIT licensed, so fork it and take it wherever you want.
+It works and I use it daily.
+
+What I am not doing is fielding feature requests or support questions. If you
+want it to behave differently, fork it and change it, which is what the MIT
+licence is there for. Do not wait on me to add something for you.
 
 ## License
 

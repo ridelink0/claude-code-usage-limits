@@ -886,6 +886,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  main,
   RATES,
   WINDOWS,
   rateFor,

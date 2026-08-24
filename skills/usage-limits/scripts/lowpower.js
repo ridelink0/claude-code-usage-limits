@@ -219,6 +219,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  main,
   EFFORT_LEVELS,
   MANAGED_KEYS,
   parseArgs,
