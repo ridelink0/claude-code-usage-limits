@@ -44,6 +44,16 @@ It also breaks the window down by model, with the token split behind it:
     Tokens  input 318, cache write 631k, cache read 26.2M, output 212k
 ```
 
+When more than one project has run inside the window it breaks that down too,
+so you can see which working directory actually spent the week:
+
+```
+  Projects in the weekly window
+    Project                 Turns    Tokens   Share
+    ...ideLink-Stuff-app      930     45.2M     78%
+    C--Users-OWNER            240     12.1M     22%
+```
+
 That split is usually the surprise. Almost all of it is cache reads, billed at
 a tenth of the input rate but paid again on every turn, which is why context
 length matters more than any single expensive message.
@@ -199,6 +209,10 @@ Good enough to plan with, not a bill. The honest caveats:
   a percentage of the limit. On a subscription plan you are not billed them.
 - Turns left assumes the next turns look like the last hour's. A debugging
   spiral breaks that assumption immediately.
+- The cache only refreshes when Claude Code talks to the API, so after an idle
+  spell a window can sit past its own reset time. When that happens the report
+  says `stale` and the status line says `rolling` rather than reporting a
+  percentage for a window that has already turned over.
 
 [how-it-works.md](skills/usage-limits/references/how-it-works.md) has the field
 names, the formulas, and the rest of it.
@@ -220,8 +234,8 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-50 tests over the pricing, the window arithmetic, plan detection, the status
-line, and the settings save/restore.
+58 tests over the pricing, the window arithmetic, plan detection, the status
+line, per-project attribution, and the settings save/restore.
 
 ## Status
 

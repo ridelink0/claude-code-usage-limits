@@ -452,3 +452,128 @@ test('statusLine copes with a window that reports no reset time', () => {
   });
   assert.strictEqual(line, 'wk 40%');
 });
+
+test('byProject groups spend by working directory, dearest first', () => {
+  const rows = usage.byProject([
+    { project: 'C--Users-OWNER', cost: 1, tokens: 10 },
+    { project: 'd--work-app', cost: 6, tokens: 60 },
+    { project: 'd--work-app', cost: 3, tokens: 30 },
+    { project: null, cost: 0, tokens: 0 },
+  ]);
+  assert.strictEqual(rows[0].project, 'd--work-app');
+  assert.strictEqual(rows[0].turns, 2);
+  assert.strictEqual(rows[0].tokens, 90);
+  assert.strictEqual(Math.round(rows[0].share * 100), 90);
+  assert.strictEqual(rows[2].project, 'unknown');
+  assert.deepStrictEqual(usage.byProject([]), []);
+});
+
+test('shortenProject keeps the identifying tail', () => {
+  assert.strictEqual(usage.shortenProject('short', 22), 'short');
+  assert.strictEqual(usage.shortenProject('a'.repeat(30), 10), '...' + 'a'.repeat(7));
+  assert.strictEqual(usage.shortenProject(null, 10), '');
+});
+
+test('render shows the project split only when more than one ran', () => {
+  const window = {
+    key: 'seven_day',
+    label: 'weekly',
+    percentUsed: 40,
+    percentLeft: 60,
+    msToReset: 2 * HOUR,
+    resetsAt: NOW + 2 * HOUR,
+    remainingUSD: 12,
+    turnsLeft: 80,
+    headroomMs: 3 * HOUR,
+    coarse: false,
+    verdict: 'resets-first',
+  };
+  const base = {
+    plan: 'Claude Pro',
+    planAdvice: null,
+    snapshotAgeMs: 60000,
+    settings: { model: 'opus', effortLevel: 'xhigh' },
+    extraUsage: null,
+    windows: [window],
+    binding: window,
+    scopeLabel: 'weekly',
+    models: [],
+    tokens: null,
+    recent: { turns: 3, usd: 0.5, usdPerTurn: 0.16, tokens: 0, effort: 'xhigh' },
+    measuredTurns: 100,
+  };
+
+  const two = usage.render(
+    Object.assign({}, base, {
+      projects: [
+        { project: 'd--work-app', turns: 930, tokens: 45200000, share: 0.78 },
+        { project: 'C--Users-OWNER', turns: 240, tokens: 12100000, share: 0.22 },
+      ],
+    })
+  );
+  assert.match(two, /Projects in the weekly window/);
+  assert.match(two, /d--work-app/);
+  assert.match(two, /78%/);
+
+  const one = usage.render(
+    Object.assign({}, base, {
+      projects: [{ project: 'd--work-app', turns: 930, tokens: 45200000, share: 1 }],
+    })
+  );
+  assert.doesNotMatch(one, /Projects in the/);
+});
+
+test('buildWindow treats a passed reset time as stale, not as exhausted', () => {
+  const snapshot = {
+    utilization: 100,
+    resets_at: new Date(NOW - 5 * 60000).toISOString(),
+  };
+  const sample = events([{ offset: -2 * HOUR, cost: 1 }, { offset: -0.5 * HOUR, cost: 1 }]);
+  const window = usage.buildWindow(spec, snapshot, sample, NOW);
+
+  assert.strictEqual(window.stale, true);
+  assert.strictEqual(window.verdict, 'rolled-over');
+  assert.strictEqual(window.turnsLeft, null, 'a stale window cannot project turns');
+  assert.strictEqual(window.remainingUSD, null);
+  assert.strictEqual(window.headroomMs, null);
+});
+
+test('buildWindow leaves a live window unstale', () => {
+  const snapshot = { utilization: 50, resets_at: new Date(NOW + HOUR).toISOString() };
+  assert.strictEqual(usage.buildWindow(spec, snapshot, [], NOW).stale, false);
+});
+
+test('bindingWindow ignores a stale window when a live one exists', () => {
+  const stale = { key: 'a', percentUsed: 100, stale: true, headroomMs: 0 };
+  const live = { key: 'b', percentUsed: 10, stale: false, headroomMs: 5 * HOUR };
+  assert.strictEqual(usage.bindingWindow([stale, live]).key, 'b');
+  assert.strictEqual(
+    usage.bindingWindow([stale]).key,
+    'a',
+    'it still reports something when every window is stale'
+  );
+});
+
+test('verdictLine explains a rolled over window', () => {
+  const line = usage.verdictLine({
+    label: '5-hour',
+    verdict: 'rolled-over',
+    percentUsed: 100,
+    msToReset: -5000,
+    headroomMs: null,
+  });
+  assert.match(line, /out of date/);
+  assert.match(line, /turned over/);
+});
+
+test('statusLine says rolling instead of a percentage it knows is wrong', () => {
+  const line = usage.statusLine({
+    now: NOW,
+    utilization: {
+      five_hour: { utilization: 95, resets_at: new Date(NOW - 60000).toISOString() },
+      seven_day: { utilization: 12, resets_at: new Date(NOW + 3 * HOUR).toISOString() },
+    },
+  });
+  assert.strictEqual(line, '5h rolling  wk 12% 3h');
+  assert.doesNotMatch(line, /LOW/, 'a stale window must not raise the alarm');
+});

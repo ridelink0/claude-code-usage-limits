@@ -117,6 +117,13 @@ subscription plan actually meters usage is not published, and the weighting
 almost certainly is not exactly this. It is close enough for ratios, which is
 all it is used for.
 
+**A reset time can be in the past.** The cache refreshes when Claude Code
+talks to the API, so an idle spell leaves it behind. A window whose `resets_at`
+has passed has already turned over, and its cached percentage describes a
+window that no longer exists. Those are marked stale, excluded from the
+binding choice, and never used for projections, because treating one as
+current would report an empty budget at the exact moment the budget came back.
+
 **Pace is not a promise.** Turns left assumes the next turns look like the last
 hour's. A debugging spiral or a large file read breaks that assumption
 immediately. Re-run the report if the shape of the work changes.

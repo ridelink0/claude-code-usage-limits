@@ -189,7 +189,7 @@ function tokenParts(usage) {
 }
 
 // One transcript line to an event, or null if it is not a billable turn.
-function eventFrom(line, seen) {
+function eventFrom(line, seen, project) {
   if (line.indexOf('"assistant"') === -1 || line.indexOf('"usage"') === -1) return null;
   let entry;
   try {
@@ -216,6 +216,7 @@ function eventFrom(line, seen) {
     cost: costOf(entry.message.usage, entry.message.model),
     tokens: tokensOf(entry.message.usage),
     parts: tokenParts(entry.message.usage),
+    project: project || null,
   };
 }
 
@@ -247,18 +248,18 @@ async function readEvents(since) {
       } catch (err) {
         continue;
       }
-      files.push(file);
+      files.push({ file, project: dir.name });
     }
   }
 
   const seen = new Set();
   const events = [];
-  for (const file of files) {
-    const stream = fs.createReadStream(file, { encoding: 'utf8' });
+  for (const entry of files) {
+    const stream = fs.createReadStream(entry.file, { encoding: 'utf8' });
     const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
     try {
       for await (const line of lines) {
-        const event = eventFrom(line, seen);
+        const event = eventFrom(line, seen, entry.project);
         if (event && event.at >= since) events.push(event);
       }
     } catch (err) {
@@ -334,6 +335,32 @@ function dominantEffort(events) {
   return best ? best[0] : null;
 }
 
+// Which project directory the spend went to. Claude Code names these after
+// the working directory, so they are recognisable even though the mangling
+// is not reversible.
+function byProject(events) {
+  const rows = new Map();
+  for (const event of events) {
+    const id = event.project || 'unknown';
+    if (!rows.has(id)) rows.set(id, { project: id, turns: 0, tokens: 0, cost: 0 });
+    const row = rows.get(id);
+    row.turns += 1;
+    row.tokens += event.tokens;
+    row.cost += event.cost;
+  }
+  const list = [...rows.values()].sort((a, b) => b.cost - a.cost);
+  const total = list.reduce((sum, row) => sum + row.cost, 0);
+  for (const row of list) row.share = total > 0 ? row.cost / total : 0;
+  return list;
+}
+
+// Keep the tail, which is the part that identifies the project.
+function shortenProject(name, width) {
+  const value = String(name || '');
+  if (value.length <= width) return value;
+  return '...' + value.slice(value.length - (width - 3));
+}
+
 // Everything the report needs about one limit window.
 function buildWindow(spec, snapshot, events, now) {
   const percent =
@@ -371,6 +398,7 @@ function buildWindow(spec, snapshot, events, now) {
     turnsLeft: null,
     headroomMs: null,
     coarse: false,
+    stale: false,
     verdict: 'unknown',
   };
 
@@ -395,7 +423,20 @@ function buildWindow(spec, snapshot, events, now) {
     }
   }
 
+  // A reset time in the past means the window already turned over and the
+  // cached percentage describes a window that no longer exists. Reporting it
+  // as current would claim the budget is gone when it has just come back.
+  window.stale = hasReset && resetsAt <= now;
+  if (window.stale) {
+    window.remainingUSD = null;
+    window.turnsLeft = null;
+    window.headroomMs = null;
+    window.percentPerHour = null;
+    window.percentPerTurn = null;
+  }
+
   if (percent === null) window.verdict = 'unknown';
+  else if (window.stale) window.verdict = 'rolled-over';
   else if (percent >= 100) window.verdict = 'exhausted';
   else if (window.headroomMs === null) window.verdict = 'idle';
   else if (window.msToReset === null) window.verdict = 'burning';
@@ -407,7 +448,10 @@ function buildWindow(spec, snapshot, events, now) {
 
 // The window that will stop the work first.
 function bindingWindow(windows) {
-  const live = windows.filter((w) => w.percentUsed !== null);
+  const known = windows.filter((w) => w.percentUsed !== null);
+  // Prefer windows we can still trust; fall back only if every one is stale.
+  const fresh = known.filter((w) => !w.stale);
+  const live = fresh.length ? fresh : known;
   if (!live.length) return null;
 
   const measured = live.filter((w) => w.headroomMs !== null);
@@ -542,6 +586,7 @@ async function report(now) {
     windows,
     binding,
     models: byModel(scoped),
+    projects: byProject(scoped),
     tokens: scopedTotals.parts,
     scopeLabel: binding ? binding.label : 'last 7 days',
     recent: {
@@ -561,6 +606,12 @@ function verdictLine(window) {
   }
   const name = window.label + ' limit';
   switch (window.verdict) {
+    case 'rolled-over':
+      return (
+        'The ' + name + ' passed its reset time, so the cached reading is out ' +
+        'of date and the window has already turned over. Claude Code refreshes ' +
+        'it on the next request.'
+      );
     case 'exhausted':
       return 'The ' + name + ' is used up. It resets in ' + formatDuration(window.msToReset) + '.';
     case 'resets-first':
@@ -604,24 +655,30 @@ function statusLine(collected) {
     const snapshot = utilization[spec.key];
     if (!snapshot || typeof snapshot.utilization !== 'number') continue;
     const resetsAt = snapshot.resets_at ? Date.parse(snapshot.resets_at) : null;
+    const msToReset = Number.isFinite(resetsAt) ? resetsAt - now : null;
     parts.push({
       label: SHORT_LABELS[spec.key] || spec.label,
       percent: snapshot.utilization,
-      msToReset: Number.isFinite(resetsAt) ? resetsAt - now : null,
+      msToReset,
+      stale: msToReset !== null && msToReset <= 0,
     });
   }
   if (!parts.length) return '';
 
-  const worst = parts.reduce((a, b) => (b.percent > a.percent ? b : a));
+  const trusted = parts.filter((part) => !part.stale);
+  const worst = trusted.length
+    ? trusted.reduce((a, b) => (b.percent > a.percent ? b : a))
+    : null;
   const text = parts
-    .map(
-      (part) =>
-        part.label + ' ' + part.percent + '%' +
-        (part.msToReset === null ? '' : ' ' + formatDuration(part.msToReset))
+    .map((part) =>
+      part.stale
+        ? part.label + ' rolling'
+        : part.label + ' ' + part.percent + '%' +
+          (part.msToReset === null ? '' : ' ' + formatDuration(part.msToReset))
     )
     .join('  ');
 
-  return (worst.percent >= 90 ? 'LOW  ' : '') + text;
+  return (worst && worst.percent >= 90 ? 'LOW  ' : '') + text;
 }
 
 function render(data) {
@@ -658,7 +715,10 @@ function render(data) {
     const marker = data.binding && window.key === data.binding.key ? '   <- binding' : '';
     lines.push(
       '  ' + pad(window.label, 15) +
-        padLeft(window.percentUsed === null ? '-' : window.percentUsed + '%', 6) +
+        padLeft(
+          window.stale ? 'stale' : window.percentUsed === null ? '-' : window.percentUsed + '%',
+          6
+        ) +
         padLeft(formatDuration(window.msToReset), 12) +
         padLeft(formatUSD(window.remainingUSD), 10) +
         padLeft(window.turnsLeft === null ? '-' : '~' + formatCount(window.turnsLeft), 12) +
@@ -687,6 +747,22 @@ function render(data) {
           ', cache write ' + formatTokens(data.tokens.cacheWrite) +
           ', cache read ' + formatTokens(data.tokens.cacheRead) +
           ', output ' + formatTokens(data.tokens.output)
+      );
+    }
+    lines.push('');
+  }
+
+  if (data.projects && data.projects.length > 1) {
+    lines.push('  Projects in the ' + (data.scopeLabel || 'window') + ' window');
+    lines.push(
+      '  ' + pad('  Project', 24) + padLeft('Turns', 7) + padLeft('Tokens', 10) +
+        padLeft('Share', 8)
+    );
+    for (const row of data.projects.slice(0, 5)) {
+      lines.push(
+        '  ' + pad('  ' + shortenProject(row.project, 22), 24) +
+          padLeft(row.turns, 7) + padLeft(formatTokens(row.tokens), 10) +
+          padLeft(Math.round(row.share * 100) + '%', 8)
       );
     }
     lines.push('');
@@ -763,6 +839,8 @@ module.exports = {
   SHORT_LABELS,
   tokenParts,
   byModel,
+  byProject,
+  shortenProject,
   formatTokens,
   PLANS,
 };
