@@ -8,16 +8,40 @@ const { execSync } = require('node:child_process');
 
 const root = path.join(__dirname, '..');
 
-// What npm would actually put in the tarball, straight from npm rather than
-// from our own reading of the files list.
-function packedFiles() {
-  const out = execSync('npm pack --dry-run --json', {
+// Lets the suite be pointed at another npm to check the output shape still
+// parses, for example USAGE_LIMITS_NPM="npx -y npm@latest".
+const NPM = process.env.USAGE_LIMITS_NPM || 'npm';
+
+let cached = null;
+
+// What npm would really put in the tarball, asked of npm rather than worked
+// out from our own reading of the files list.
+function packInfo() {
+  if (cached) return cached;
+
+  const out = execSync(NPM + ' pack --dry-run --json', {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   const parsed = JSON.parse(out);
-  return parsed[0].files.map((entry) => entry.path.split(path.sep).join('/'));
+
+  // npm 10 answers with [info]. npm 11 answers with { "<package>": info }.
+  const info = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
+
+  assert.ok(
+    info && Array.isArray(info.files),
+    'npm pack --dry-run --json returned a shape this test does not recognise. ' +
+      'npm already changed it once between 10 and 11, so update packInfo() ' +
+      'rather than deleting the check: it is the only thing standing between a ' +
+      'broken files list and a published package that cannot start.'
+  );
+
+  cached = {
+    files: info.files.map((entry) => entry.path.split(path.sep).join('/')),
+    unpackedSize: info.unpackedSize,
+  };
+  return cached;
 }
 
 // Every local module reachable from an entry point, followed through the
@@ -51,23 +75,29 @@ function reachableFrom(entry) {
   return [...seen];
 }
 
+test('the npm pack output shape is one we understand', () => {
+  const info = packInfo();
+  assert.ok(info.files.length > 5, 'expected a real file list');
+  assert.ok(Number.isFinite(info.unpackedSize), 'expected a size');
+});
+
 test('everything the published CLI requires is inside the tarball', () => {
-  const packed = packedFiles();
+  const { files } = packInfo();
   const needed = reachableFrom('bin/cli.js');
 
-  assert.ok(needed.length >= 3, 'expected the CLI to pull in the two scripts');
+  assert.ok(needed.length >= 3, 'expected the CLI to pull in the scripts');
   for (const file of needed) {
     assert.ok(
-      packed.includes(file),
-      file + ' is required at runtime but would not be published. Add it to the ' +
-        'files list in package.json, or npx installs will break while every ' +
+      files.includes(file),
+      file + ' is required at runtime but would not be published. Add it to ' +
+        'the files list in package.json, or npx installs break while every ' +
         'other test still passes.'
     );
   }
 });
 
 test('the skill itself ships, not just the scripts', () => {
-  const packed = packedFiles();
+  const { files } = packInfo();
   for (const file of [
     'skills/usage-limits/SKILL.md',
     'skills/usage-limits/references/tactics.md',
@@ -75,20 +105,15 @@ test('the skill itself ships, not just the scripts', () => {
     'commands/check.md',
     '.claude-plugin/plugin.json',
   ]) {
-    assert.ok(packed.includes(file), file + ' should be in the package');
+    assert.ok(files.includes(file), file + ' should be in the package');
   }
 });
 
 test('the tarball stays small enough to be uncontroversial', () => {
-  const out = execSync('npm pack --dry-run --json', {
-    cwd: root,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-  });
-  const info = JSON.parse(out)[0];
+  const { unpackedSize } = packInfo();
   assert.ok(
-    info.unpackedSize < 2 * 1024 * 1024,
-    'unpacked size grew to ' + info.unpackedSize + ' bytes; something large got in'
+    unpackedSize < 2 * 1024 * 1024,
+    'unpacked size grew to ' + unpackedSize + ' bytes; something large got in'
   );
 });
 
