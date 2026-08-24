@@ -81,10 +81,19 @@ test('the bin entry named in package.json exists and is executable by node', () 
 
   const file = path.join(__dirname, '..', target);
   assert.ok(fs.existsSync(file), 'the published bin target must exist');
-  assert.match(
-    fs.readFileSync(file, 'utf8').split('\n')[0],
-    /^#!\/usr\/bin\/env node$/,
-    'npx needs the shebang'
+
+  const source = fs.readFileSync(file, 'utf8');
+  assert.strictEqual(
+    source.split('\n')[0],
+    '#!/usr/bin/env node',
+    'npx needs the shebang, and it has to end in LF'
+  );
+  assert.ok(
+    source.indexOf('\r') === -1,
+    'this file must stay LF. A CR in the shebang ships a binary that will not '
+      + 'exec on Linux or macOS while still working on the Windows machine that '
+      + 'published it. .gitattributes pins this, so a failure here means the pin '
+      + 'stopped working.'
   );
 });
 
