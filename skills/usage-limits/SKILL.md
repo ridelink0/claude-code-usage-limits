@@ -86,11 +86,11 @@ the two cases need opposite handling.
 **Off.** Work stops dead at the limit. Nothing spills over. This is the case
 to plan hardest around, because there is no way to buy your way through it.
 
-**On.** Work does not stop, it starts costing money. Before continuing past
-the plan allowance, say plainly that the next turns are billed as credits and
-let the user decide. Never quietly spend credits on work they assumed was
-covered by the plan. The moment the report says the window runs out before it
-resets is the moment credits start.
+**On.** The limit is a cost boundary rather than a hard stop, so a job that
+does not fit can still be finished, for money. Do not warn about the crossover
+yourself: Claude Code announces it and asks before drawing on credits, and
+repeating that only adds noise. Just factor it into the plan, and take the
+user's answer to that prompt as the decision.
 
 ## 4. Low power
 

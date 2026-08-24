@@ -101,9 +101,11 @@ node skills/usage-limits/scripts/usage.js --json
 The report says which of two things happens when the plan allowance runs out,
 because they need opposite handling.
 
-If paid credits are off, work stops dead and there is no buying through it.
-If they are on, work does not stop, it starts costing money, and the skill
-tells Claude to say so and let you decide rather than quietly spending them.
+If paid credits are off, work stops dead and there is no buying through it,
+so the report says so and plans around it. If they are on, the limit is a cost
+boundary instead of a wall. It deliberately does not warn you about that
+crossover, because Claude Code already announces it and asks before drawing on
+credits, and a second warning saying the same thing is just noise.
 
 When the binding window will run out before it resets, the report stops
 describing and starts instructing:
@@ -111,8 +113,7 @@ describing and starts instructing:
 ```
 The 5-hour limit is the binding one. At the current pace it runs out in about
 20m, which is 3h 40m short of the reset. Size the work to fit, or slow the burn.
-  Once it does, spending moves to paid credits rather than stopping. Say so
-  before carrying on.
+  Work stops when it does. Nothing carries on into paid credits.
   Land what exists, write the handoff, and resume after 03:00.
 ```
 

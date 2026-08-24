@@ -666,13 +666,14 @@ function reportData(extra) {
   );
 }
 
-test('render warns before paid credits start being spent', () => {
+test('render reports credits without repeating the warning Claude Code gives', () => {
   const text = usage.render(
     reportData({ credits: { enabled: true, limitReached: false, used: 4.2, limit: 50, percent: 8, currency: 'USD' } })
   );
   assert.match(text, /Credits {4}on, \$4\.20 used of \$50\.00 \(8%\)/);
-  assert.match(text, /spending moves to paid credits/);
-  assert.match(text, /Say so before carrying on/);
+  // Claude Code announces the switch to credits and asks before making it.
+  assert.doesNotMatch(text, /moves to paid credits/);
+  assert.doesNotMatch(text, /Nothing carries on/, 'that line is for the credits-off case');
 });
 
 test('render says work simply stops when credits are off', () => {

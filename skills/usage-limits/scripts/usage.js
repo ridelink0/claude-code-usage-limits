@@ -839,13 +839,11 @@ function render(data) {
   const binding = data.binding;
   const outOfRoom = binding && (binding.verdict === 'runs-out' || binding.verdict === 'exhausted');
   if (outOfRoom) {
+    // With credits on, Claude Code announces the switch itself and asks
+    // before drawing on them, so repeating it here would only add noise.
+    // With credits off there is no such prompt, and the wall is a hard stop.
     const credits = data.credits;
-    if (credits && credits.enabled && !credits.limitReached) {
-      lines.push(
-        '  Once it does, spending moves to paid credits rather than stopping. ' +
-          'Say so before carrying on.'
-      );
-    } else {
+    if (!credits || !credits.enabled || credits.limitReached) {
       lines.push('  Work stops when it does. Nothing carries on into paid credits.');
     }
     if (Number.isFinite(data.resumeAt)) {
