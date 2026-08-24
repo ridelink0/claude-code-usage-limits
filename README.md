@@ -140,6 +140,18 @@ The skill also requires Claude to say up front when a job will not fit in what
 is left, name what it is doing now, what it is leaving, and when the rest can
 happen, rather than starting and stopping halfway through an edit.
 
+## Releasing
+
+```
+npm version patch
+git push --follow-tags
+```
+
+Pushing the tag runs the tests and publishes to npm. That goes through npm's
+trusted publishing over OIDC, so there is no publish token stored in the repo
+or in CI. `npm version` also syncs the version in the plugin manifest, so the
+marketplace and the npm package never disagree about which release is current.
+
 ## Status line
 
 For a permanent readout instead of asking, point Claude Code's status line at

@@ -1,0 +1,46 @@
+name: publish
+
+# Cutting a release is: npm version <patch|minor|major>, then push the tag.
+# This takes it from there.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      # Lets npm verify this workflow through OIDC, so no publish token has to
+      # be stored anywhere. Configure the trusted publisher once at
+      # npmjs.com -> claude-usage-limits -> Settings -> Trusted publisher,
+      # pointing it at this repository and this workflow file.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs a newer npm than the one bundled with Node.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Run tests
+        run: node --test
+
+      - name: Fail if the tag does not match package.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag $TAG does not match package.json $PKG"
+            exit 1
+          fi
+
+      - name: Publish
+        run: npm publish --access public
