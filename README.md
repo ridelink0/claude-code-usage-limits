@@ -100,6 +100,29 @@ git clone https://github.com/ridelink0/claude-code-usage-limits
 Copy-Item -Recurse claude-code-usage-limits\skills\usage-limits "$env:USERPROFILE\.claude\skills\usage-limits"
 ```
 
+One difference between the two: the hook that puts the budget line in front of
+every prompt is declared in the plugin manifest, so it only runs on a plugin
+install. If you took the plain skill and want that behaviour, add it yourself
+in `~/.claude/settings.json`, pointing at wherever you put the skill:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$HOME/.claude/skills/usage-limits/scripts/brief.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
 Either way, ask something like "how much usage do I have left" or "can we
 finish this before the limit hits" and Claude will load it. Installed as a
 plugin it also gives you `/usage-limits:check`, which prints the report and
