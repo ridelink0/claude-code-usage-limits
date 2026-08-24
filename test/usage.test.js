@@ -696,3 +696,94 @@ test('render leaves the plan block out when there is room', () => {
   assert.doesNotMatch(text, /resume after/);
   assert.doesNotMatch(text, /Nothing carries on/);
 });
+
+test('costPercentiles describes the spread, not just the middle', () => {
+  const events = [1, 2, 3, 4, 10].map((cost) => ({ cost }));
+  const rates = usage.costPercentiles(events);
+  assert.strictEqual(rates.sample, 5);
+  assert.strictEqual(rates.median, 3);
+  assert.strictEqual(rates.high, 10, 'the expensive tail is the point of this');
+  assert.ok(rates.high > rates.median);
+});
+
+test('costPercentiles ignores turns that cost nothing', () => {
+  const rates = usage.costPercentiles([{ cost: 0 }, { cost: 2 }, { cost: -1 }]);
+  assert.strictEqual(rates.sample, 1);
+  assert.strictEqual(rates.median, 2);
+});
+
+test('costPercentiles gives up on an empty history', () => {
+  assert.strictEqual(usage.costPercentiles([]), null);
+  assert.strictEqual(usage.costPercentiles(null), null);
+});
+
+const priced = {
+  key: 'seven_day',
+  label: 'weekly',
+  percentLeft: 40,
+  usdPerPercent: 2,
+  stale: false,
+};
+
+test('forecastWindow prices a job in points of the window', () => {
+  const shot = usage.forecastWindow(priced, 10, { median: 1, high: 2, sample: 20 });
+  assert.strictEqual(shot.usdLow, 10);
+  assert.strictEqual(shot.usdHigh, 20);
+  assert.strictEqual(shot.percentLow, 5);
+  assert.strictEqual(shot.percentHigh, 10);
+  assert.strictEqual(shot.leaves, 30, 'what is left is measured against the dear case');
+  assert.strictEqual(shot.fits, true);
+  assert.strictEqual(shot.tight, false);
+});
+
+test('forecastWindow calls it tight before it calls it impossible', () => {
+  const shot = usage.forecastWindow(priced, 35, { median: 1, high: 2, sample: 20 });
+  assert.strictEqual(shot.fits, true);
+  assert.strictEqual(shot.tight, true, '70 of 40 points left is not comfortable');
+});
+
+test('forecastWindow refuses a job that does not fit', () => {
+  const shot = usage.forecastWindow(priced, 50, { median: 1, high: 2, sample: 20 });
+  assert.strictEqual(shot.fits, false);
+  assert.ok(shot.leaves < 0);
+});
+
+test('forecastWindow will not price what it cannot measure', () => {
+  assert.strictEqual(usage.forecastWindow(priced, 10, null), null);
+  assert.strictEqual(usage.forecastWindow(null, 10, { median: 1, high: 2 }), null);
+  assert.strictEqual(
+    usage.forecastWindow({ percentLeft: 40, usdPerPercent: null }, 10, { median: 1, high: 2 }),
+    null
+  );
+  assert.strictEqual(
+    usage.forecastWindow(Object.assign({}, priced, { stale: true }), 10, { median: 1, high: 2 }),
+    null,
+    'a stale window cannot price anything'
+  );
+  assert.strictEqual(usage.forecastWindow(priced, 0, { median: 1, high: 2 }), null);
+  assert.strictEqual(usage.forecastWindow(priced, NaN, { median: 1, high: 2 }), null);
+});
+
+test('renderForecast says whether the job fits and why', () => {
+  const data = { windows: [priced], rates: { median: 1, high: 2, sample: 20 } };
+
+  const roomy = usage.renderForecast(data, 5);
+  assert.ok(roomy.includes('Forecast for 5 turns'));
+  assert.ok(roomy.includes('fits'));
+  assert.ok(roomy.includes('There is room for this'));
+  assert.ok(roomy.includes('Priced from 20 recent turns'));
+
+  const blocked = usage.renderForecast(data, 50);
+  assert.ok(blocked.includes('does not fit'));
+  assert.ok(blocked.includes('Cut it down or split it'));
+});
+
+test('renderForecast asks for a number rather than guessing', () => {
+  const data = { windows: [priced], rates: { median: 1, high: 2, sample: 20 } };
+  assert.ok(usage.renderForecast(data, NaN).includes('Give a number of turns'));
+});
+
+test('renderForecast admits when it has nothing to price against', () => {
+  const text = usage.renderForecast({ windows: [priced], rates: null }, 10);
+  assert.ok(text.includes('Nothing recent to price this against'));
+});

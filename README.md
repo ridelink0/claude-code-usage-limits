@@ -177,6 +177,67 @@ it runs in about a tenth of a second and is safe on every redraw. Use the full
 path rather than `~` if your shell does not expand it, and point it at the
 plugin copy instead if that is how you installed it.
 
+## It tells you where you stand, every time
+
+Installed as a plugin, a hook measures the budget before each prompt and puts
+one line into Claude's context:
+
+```
+[usage-limits] 5-hour 47%, weekly 16%, about 75 turns of headroom, resets in
+3h 52m, this session 229 turns, $64.16.
+```
+
+Claude opens with it. When there is room that is a single line and it moves on:
+
+> Weekly is at 16%, 5-hour at 47%, about 75 turns of headroom. This fits easily.
+
+When there is not, the line becomes a plan rather than a status:
+
+> The weekly window has about 22 turns left. That covers the parser change and
+> its tests, but not the migration or the docs pass, so I will do the first two
+> and leave the rest for after the reset at 09:00.
+
+The wording changes with the pressure, not only the numbers. The trigger worth
+explaining is pace: two days into a week you should be near 29 percent spent, so
+60 percent means you will not last the week, and that is worth hearing at 60
+rather than at 85.
+
+It has to be cheap, because it runs on every prompt. The percentages come from
+one small file. The transcript scan behind "turns of headroom" is cached for a
+minute, so it costs about 400ms cold and 120ms warm.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `USAGE_LIMITS_BRIEF` | on | Set to `off` to turn the line off entirely. |
+| `USAGE_LIMITS_NEAR` | 80 | Percent used that always counts as tight. |
+| `USAGE_LIMITS_FLOOR` | 40 | Below this, pace is ignored. |
+| `USAGE_LIMITS_AHEAD` | 15 | Points ahead of pace that count as burning fast. |
+| `USAGE_LIMITS_CACHE` | 60 | Seconds the measured half stays good for. |
+
+## What would this job cost
+
+```
+node skills/usage-limits/scripts/usage.js --forecast 15
+```
+
+```
+Forecast for 15 turns
+
+  Window                 Would cost    Leaves   Verdict
+  5-hour               7.4% to 8.4%       45%   fits
+  weekly               0.8% to 0.9%       83%   fits
+
+  Priced from 64 recent turns: $0.296 typical, $0.333 at the expensive end.
+
+  There is room for this. No need to work around the limit.
+```
+
+It prices turns at what turns have really cost on your account, and gives a
+range rather than one number, because a turn that reads three files costs many
+times one that answers from context. The upper end is the honest one for a long
+run, since turns get dearer as the context grows.
+
+
 ## Plans
 
 It reads which plan you are on and adjusts what it tells you, because the
@@ -290,9 +351,9 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-72 tests over the pricing, the window arithmetic, plan and credit detection,
-the status line, per-project attribution, the CLI, and the settings
-save/restore.
+105 tests over the pricing, the window arithmetic, plan and credit detection,
+the status line, the before-prompt line, job forecasting, per-project
+attribution, the CLI, packaging, and the settings save/restore.
 
 ## Status
 

@@ -217,6 +217,7 @@ function eventFrom(line, seen, project) {
     tokens: tokensOf(entry.message.usage),
     parts: tokenParts(entry.message.usage),
     project: project || null,
+    sessionId: entry.sessionId || null,
   };
 }
 
@@ -393,6 +394,46 @@ function creditsFrom(utilization) {
     percent,
     currency: (spend && spend.used && spend.used.currency) || (extra && extra.currency) || 'USD',
     disabledReason: (extra && extra.disabled_reason) || (spend && spend.disabled_reason) || null,
+  };
+}
+
+// Turn cost is not a single number, it is a spread: a turn that reads three
+// files costs many times one that answers from context. A median alone
+// under-promises on the expensive half, so carry a high end too.
+function costPercentiles(events) {
+  const costs = (events || [])
+    .map((event) => event.cost)
+    .filter((cost) => Number.isFinite(cost) && cost > 0)
+    .sort((a, b) => a - b);
+  if (!costs.length) return null;
+
+  const at = (fraction) => costs[Math.min(costs.length - 1, Math.floor(fraction * costs.length))];
+  return { median: at(0.5), high: at(0.8), sample: costs.length };
+}
+
+// What a job of this many turns would take out of one window.
+function forecastWindow(window, turns, rates) {
+  if (!window || !rates || !window.usdPerPercent || window.stale) return null;
+  if (!Number.isFinite(turns) || turns <= 0) return null;
+
+  const usdLow = turns * rates.median;
+  const usdHigh = turns * rates.high;
+  const percentLow = usdLow / window.usdPerPercent;
+  const percentHigh = usdHigh / window.usdPerPercent;
+
+  return {
+    key: window.key,
+    label: window.label,
+    turns,
+    usdLow,
+    usdHigh,
+    percentLow,
+    percentHigh,
+    // The pessimistic cost is what decides whether it fits, so the room left
+    // over is measured against that.
+    leaves: window.percentLeft - percentHigh,
+    fits: percentHigh <= window.percentLeft,
+    tight: percentHigh > window.percentLeft * 0.75 && percentHigh <= window.percentLeft,
   };
 }
 
@@ -627,6 +668,7 @@ async function report(now) {
     windows,
     binding,
     credits: creditsFrom(base.utilization),
+    rates: costPercentiles(recentEvents.length >= 5 ? recentEvents : scoped),
     resumeAt: binding ? binding.resetsAt : null,
     models: byModel(scoped),
     projects: byProject(scoped),
@@ -862,6 +904,79 @@ function render(data) {
   return lines.join('\n');
 }
 
+function formatPercent(value) {
+  if (!Number.isFinite(value)) return '-';
+  if (value >= 10) return Math.round(value) + '%';
+  return value.toFixed(1) + '%';
+}
+
+function renderForecast(data, turns) {
+  const lines = [];
+  lines.push('Forecast for ' + turns + ' turns');
+  lines.push('');
+
+  if (!Number.isFinite(turns) || turns <= 0) {
+    lines.push('  Give a number of turns, for example --forecast 15.');
+    return lines.join('\n');
+  }
+  if (!data.rates) {
+    lines.push('  Nothing recent to price this against yet. Do some work in this');
+    lines.push('  session first, then ask again.');
+    return lines.join('\n');
+  }
+
+  const rows = data.windows
+    .map((window) => forecastWindow(window, turns, data.rates))
+    .filter(Boolean);
+
+  if (!rows.length) {
+    lines.push('  No window has enough measured spend to price a forecast against.');
+    return lines.join('\n');
+  }
+
+  lines.push(
+    '  ' + pad('Window', 15) + padLeft('Would cost', 18) + padLeft('Leaves', 10) + '   Verdict'
+  );
+  for (const row of rows) {
+    const verdict = row.fits ? (row.tight ? 'fits, barely' : 'fits') : 'does not fit';
+    lines.push(
+      '  ' + pad(row.label, 15) +
+        padLeft(formatPercent(row.percentLow) + ' to ' + formatPercent(row.percentHigh), 18) +
+        padLeft(formatPercent(Math.max(0, row.leaves)), 10) +
+        '   ' + verdict
+    );
+  }
+  lines.push('');
+  lines.push(
+    '  Priced from ' + data.rates.sample + ' recent turns: ' +
+      formatUSD(data.rates.median) + ' typical, ' + formatUSD(data.rates.high) +
+      ' at the expensive end.'
+  );
+
+  const blocked = rows.filter((row) => !row.fits);
+  const tight = rows.filter((row) => row.fits && row.tight);
+  lines.push('');
+  if (blocked.length) {
+    lines.push(
+      '  The ' + blocked[0].label + ' window does not cover this. Cut it down or ' +
+        'split it at a clean boundary rather than starting and getting cut off.'
+    );
+  } else if (tight.length) {
+    lines.push(
+      '  It fits, but only if nothing goes wrong. Order the work so the valuable ' +
+        'part lands first.'
+    );
+  } else {
+    lines.push('  There is room for this. No need to work around the limit.');
+  }
+  lines.push(
+    '  Turns get dearer as context grows, so the higher number is the honest one ' +
+      'for a long run.'
+  );
+
+  return lines.join('\n');
+}
+
 async function main(argv) {
   // The status line runs on every redraw, so it must not scan transcripts.
   if (argv.indexOf('--status') !== -1) {
@@ -871,6 +986,20 @@ async function main(argv) {
 
   const wantsJson = argv.indexOf('--json') !== -1;
   const data = await report(Date.now());
+
+  const forecastAt = argv.indexOf('--forecast');
+  if (forecastAt !== -1) {
+    const turns = Number(argv[forecastAt + 1]);
+    if (wantsJson) {
+      const rows = data.windows
+        .map((window) => forecastWindow(window, turns, data.rates))
+        .filter(Boolean);
+      process.stdout.write(JSON.stringify({ turns, rates: data.rates, windows: rows }, null, 2) + '\n');
+    } else {
+      process.stdout.write(renderForecast(data, turns) + '\n');
+    }
+    return 0;
+  }
   if (wantsJson) {
     process.stdout.write(JSON.stringify(data, null, 2) + '\n');
   } else {
@@ -907,6 +1036,9 @@ module.exports = {
   report,
   collect,
   detectPlan,
+  costPercentiles,
+  forecastWindow,
+  renderForecast,
   creditsFrom,
   formatClock,
   statusLine,

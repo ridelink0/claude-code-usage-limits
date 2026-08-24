@@ -10,6 +10,7 @@ const HELP = `claude-usage-limits - how much Claude Code usage is left, and whet
   claude-usage-limits                     the report
   claude-usage-limits --json              the same numbers, machine readable
   claude-usage-limits --status            one short line, for a status line
+  claude-usage-limits --forecast 15       what a 15 turn job would cost
 
   claude-usage-limits lowpower status     show the current effort setting
   claude-usage-limits lowpower on         lower effortLevel, remembering the old value

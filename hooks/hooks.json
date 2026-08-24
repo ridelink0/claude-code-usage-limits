@@ -1,0 +1,16 @@
+{
+  "description": "Tells Claude how much usage budget is left, but only when it is tight enough to change what can be done.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/usage-limits/scripts/brief.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

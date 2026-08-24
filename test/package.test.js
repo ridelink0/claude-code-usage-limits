@@ -103,6 +103,7 @@ test('the skill itself ships, not just the scripts', () => {
     'skills/usage-limits/references/tactics.md',
     'skills/usage-limits/references/how-it-works.md',
     'commands/check.md',
+    'hooks/hooks.json',
     '.claude-plugin/plugin.json',
   ]) {
     assert.ok(files.includes(file), file + ' should be in the package');

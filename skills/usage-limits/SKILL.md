@@ -92,6 +92,47 @@ yourself: Claude Code announces it and asks before drawing on credits, and
 repeating that only adds noise. Just factor it into the plan, and take the
 user's answer to that prompt as the decision.
 
+## Opening with the budget
+
+Start every reply with one line saying where the budget stands and whether what
+was asked fits. The hook puts the numbers in front of you before the prompt, so
+there is nothing to go and look up.
+
+When there is room, one line, then get on with it:
+
+> Weekly is at 16%, 5-hour at 47%, about 75 turns of headroom. This fits easily.
+
+When it does not fit, that line becomes the plan:
+
+> The weekly window has about 22 turns left. That covers the parser change and
+> its tests, but not the migration or the docs pass, so I will do the first two
+> and leave the rest for after the reset at 09:00.
+
+What makes the second one useful is the split, not the percentage. "78% used"
+is not something anyone can act on. "This fits, that does not, here is the
+order" is.
+
+Keep it to one line unless the work genuinely does not fit. The budget note is
+a header, not a section, and it must never push the actual answer down the
+page.
+
+### Pricing the job before starting it
+
+Size the work in turns using the table above, then price it:
+
+```
+node scripts/usage.js --forecast 15
+```
+
+That converts turns into points of each window using what turns have really
+cost on this account, and reports a range rather than a single number, because
+a turn that reads three files costs many times one that answers from context.
+The upper end is the honest one for a long run, since turns get dearer as the
+context grows.
+
+Reach for it whenever the answer to "will this finish" is not obvious.
+
+
 ## 4. Low power
 
 Two halves, and the second one is the half that actually binds.
