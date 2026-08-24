@@ -1,5 +1,7 @@
 # usage-limits
 
+[![npm](https://img.shields.io/npm/v/claude-usage-limits)](https://www.npmjs.com/package/claude-usage-limits)
+
 A Claude Code plugin that reads how much of your usage limit is left and plans
 the work to fit inside it.
 
@@ -71,7 +73,9 @@ npx claude-usage-limits --status
 npx claude-usage-limits lowpower on
 ```
 
-That runs the same code as the plugin. Node 18 or newer.
+That runs the same code as the plugin, from
+[claude-usage-limits](https://www.npmjs.com/package/claude-usage-limits) on
+npm. Node 18 or newer.
 
 To have Claude read the numbers and plan against them, install it properly.
 
