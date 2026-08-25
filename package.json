@@ -1,7 +1,7 @@
 {
   "name": "claude-usage-limits",
   "version": "1.1.2",
-  "description": "See how much of your Claude Code usage limit is left as turns of work rather than a percentage, and plan the job to fit inside it.",
+  "description": "Puts your remaining Claude Code usage limit into Claude's context before every prompt, so it opens with what fits in the budget instead of starting work that gets cut off. Reports headroom as turns rather than percentages, prices a job before you start it, and detects your plan tier.",
   "keywords": [
     "claude",
     "claude-code",

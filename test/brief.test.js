@@ -95,39 +95,70 @@ test('sessionSpend says nothing rather than zero when it cannot tell', () => {
   assert.strictEqual(brief.sessionSpend([], 'a'), null);
 });
 
-test('summarise lists the windows and flags a rolling one', () => {
-  const text = brief.summarise([
-    weekly(16, 2 * DAY),
-    Object.assign(weekly(100, 6 * DAY), { label: '5-hour', stale: true }),
-  ]);
-  assert.strictEqual(text, 'weekly 16%, 5-hour rolling over');
+test('describeWindow reads a window, and flags one that is rolling', () => {
+  assert.strictEqual(brief.describeWindow(weekly(16, 2 * DAY)), 'weekly 16%');
+  assert.strictEqual(
+    brief.describeWindow(Object.assign(weekly(100, 6 * DAY), { stale: true })),
+    'weekly rolling over'
+  );
+  assert.strictEqual(brief.describeWindow(null), null);
 });
 
-test('summarise skips windows with no reading', () => {
-  const text = brief.summarise([weekly(16, 2 * DAY), { label: 'x', percentUsed: null }]);
+test('summariseOthers leaves out the binding window itself', () => {
+  const five = Object.assign(weekly(70, 1 * DAY), { key: 'five_hour', label: '5-hour' });
+  const week = weekly(18, 2 * DAY);
+  assert.strictEqual(brief.summariseOthers([five, week], 'five_hour'), 'weekly 18%');
+  assert.strictEqual(brief.summariseOthers([five, week], 'seven_day'), '5-hour 70%');
+});
+
+test('summariseOthers skips windows with no reading', () => {
+  const text = brief.summariseOthers(
+    [weekly(16, 2 * DAY), { key: 'x', label: 'x', percentUsed: null }],
+    'nothing'
+  );
   assert.strictEqual(text, 'weekly 16%');
 });
 
-test('the line carries the numbers, the session, and an instruction', () => {
+test('the line names the binding window and hangs its numbers off it', () => {
   const text = brief.briefText({
-    windowSummary: 'weekly 16%, 5-hour 47%',
+    binding: { key: 'seven_day', label: 'weekly', percentUsed: 16, stale: false },
+    othersSummary: '5-hour 47%',
     turnsLeft: 75,
     resetsIn: '3h 52m',
     session: { turns: 229, cost: 64.16 },
     pressure: 'roomy',
   });
-  assert.match(text, /^\[usage-limits\]/);
-  assert.match(text, /weekly 16%, 5-hour 47%/);
+  assert.match(text, /^\[usage-limits\] binding window is weekly 16% used/);
   assert.match(text, /about 75 turns of headroom/);
   assert.match(text, /resets in 3h 52m/);
-  assert.match(text, /this session 229 turns/);
+  assert.match(text, /Other windows: 5-hour 47%/);
+  assert.match(text, /This session: 229 turns/);
   assert.match(text, /Open your reply with one short line/);
-  assert.match(text, /single line/, 'the roomy case must ask for brevity');
+});
+
+test('the numbers cannot be read against the wrong window', () => {
+  // The case that actually bit: 5-hour binding at 70%, weekly roomy at 18%.
+  // Quoting "weekly 18%, about 52 turns" understates the real constraint.
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 70, stale: false },
+    othersSummary: 'weekly 18%',
+    turnsLeft: 52,
+    resetsIn: '1h 50m',
+    session: null,
+    pressure: 'tight',
+  });
+  const binding = text.slice(0, text.indexOf('Other windows'));
+  assert.match(binding, /5-hour 70% used/);
+  assert.match(binding, /52 turns/);
+  assert.match(binding, /1h 50m/);
+  assert.doesNotMatch(binding, /weekly/, 'the roomy window must not sit beside those figures');
+  assert.match(text, /Quote the binding window, not whichever one has the most left/);
 });
 
 test('a tight budget changes the instruction, not just the numbers', () => {
   const text = brief.briefText({
-    windowSummary: 'weekly 88%',
+    binding: { key: 'seven_day', label: 'weekly', percentUsed: 88, stale: false },
+    othersSummary: '',
     turnsLeft: 6,
     resetsIn: '40m',
     session: null,
@@ -140,7 +171,8 @@ test('a tight budget changes the instruction, not just the numbers', () => {
 
 test('the line still works when parts are missing', () => {
   const text = brief.briefText({
-    windowSummary: 'weekly 16%',
+    binding: { key: 'seven_day', label: 'weekly', percentUsed: 16, stale: false },
+    othersSummary: '',
     turnsLeft: null,
     resetsIn: null,
     session: null,
@@ -149,7 +181,8 @@ test('the line still works when parts are missing', () => {
   assert.match(text, /weekly 16%/);
   assert.doesNotMatch(text, /turns of headroom/);
   assert.doesNotMatch(text, /resets in/);
-  assert.doesNotMatch(text, /this session/);
+  assert.doesNotMatch(text, /This session/);
+  assert.doesNotMatch(text, /Other windows/);
 });
 
 test('thresholds are configurable through the environment', () => {

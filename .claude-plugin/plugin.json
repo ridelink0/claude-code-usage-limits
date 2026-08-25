@@ -2,7 +2,7 @@
   "name": "usage-limits",
   "displayName": "Usage Limits",
   "version": "1.1.2",
-  "description": "Reads how much of your Claude Code usage limit is left, converts it into turns of headroom, and plans the work to fit inside it. Includes a low power switch that keeps spending down even at high effort.",
+  "description": "Puts your remaining Claude Code usage limit into Claude's context before every prompt, so it opens with what fits in the budget instead of starting work that gets cut off. Reports headroom as turns rather than percentages, prices a job before you start it, and detects your plan tier.",
   "author": {
     "name": "Ridelink",
     "url": "https://github.com/ridelink0"

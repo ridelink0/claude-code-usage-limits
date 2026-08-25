@@ -158,32 +158,46 @@ function sessionSpend(events, sessionId) {
   return turns ? { turns, cost } : null;
 }
 
-function summarise(windows) {
+function describeWindow(window) {
+  if (!window) return null;
+  return window.stale
+    ? window.label + ' rolling over'
+    : window.label + ' ' + window.percentUsed + '%';
+}
+
+// Everything except the window that will actually stop the work.
+function summariseOthers(windows, bindingKey) {
   return windows
-    .filter((window) => window.percentUsed !== null)
-    .map((window) =>
-      window.stale
-        ? window.label + ' rolling over'
-        : window.label + ' ' + window.percentUsed + '%'
-    )
+    .filter((window) => window.percentUsed !== null && window.key !== bindingKey)
+    .map(describeWindow)
     .join(', ');
 }
 
 function briefText(parts) {
-  const facts = [];
-  if (parts.windowSummary) facts.push(parts.windowSummary);
+  // The turns and the reset time belong to one specific window. Listing every
+  // window and then the numbers invites reading them against the wrong one, so
+  // the binding window is named and its figures are attached to it.
+  const bound = [];
+  const described = describeWindow(parts.binding);
+  if (described) bound.push(described + (parts.binding.stale ? '' : ' used'));
   if (Number.isFinite(parts.turnsLeft)) {
-    facts.push('about ' + parts.turnsLeft + ' turns of headroom');
+    bound.push('about ' + parts.turnsLeft + ' turns of headroom');
   }
-  if (parts.resetsIn) facts.push('resets in ' + parts.resetsIn);
+  if (parts.resetsIn) bound.push('resets in ' + parts.resetsIn);
+
+  const sentences = [];
+  sentences.push(
+    bound.length
+      ? '[usage-limits] binding window is ' + bound.join(', ') + '.'
+      : '[usage-limits] no usable window reading.'
+  );
+  if (parts.othersSummary) sentences.push('Other windows: ' + parts.othersSummary + '.');
   if (parts.session) {
-    facts.push(
-      'this session ' + parts.session.turns + ' turns, ' +
-        usage.formatUSD(parts.session.cost)
+    sentences.push(
+      'This session: ' + parts.session.turns + ' turns, ' +
+        usage.formatUSD(parts.session.cost) + '.'
     );
   }
-
-  const head = '[usage-limits] ' + facts.join(', ') + '.';
 
   const instruction =
     parts.pressure === 'tight' || parts.pressure === 'gone'
@@ -193,7 +207,14 @@ function briefText(parts) {
       : 'Open your reply with one short line stating this and confirming the ' +
         'request fits, then get on with the work. Keep it to a single line.';
 
-  return head + '\n' + instruction;
+  // The mistake this guards against: quoting the roomiest window and pinning
+  // the binding window figures to it.
+  const care =
+    ' Quote the binding window, not whichever one has the most left. The turns ' +
+    'and reset time above belong to the binding window alone; do not read them ' +
+    'against another window percentage.';
+
+  return sentences.join(' ') + '\n' + instruction + care;
 }
 
 async function run(now, hookInput) {
@@ -228,7 +249,8 @@ async function run(now, hookInput) {
   const binding = usage.bindingWindow(windows) || windows[0];
 
   return briefText({
-    windowSummary: summarise(windows),
+    binding,
+    othersSummary: summariseOthers(windows, binding && binding.key),
     turnsLeft,
     resetsIn:
       binding && !binding.stale && binding.msToReset !== null
@@ -259,7 +281,8 @@ module.exports = {
   aheadOfPace,
   pressure,
   sessionSpend,
-  summarise,
+  describeWindow,
+  summariseOthers,
   briefText,
   settings,
   pickCached,

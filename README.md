@@ -2,14 +2,46 @@
 
 [![npm](https://img.shields.io/npm/v/claude-usage-limits)](https://www.npmjs.com/package/claude-usage-limits)
 
-A Claude Code plugin that reads how much of your usage limit is left and plans
-the work to fit inside it.
+Most usage tools for Claude Code show **you** the numbers. This one shows them
+to **Claude**, before every prompt, and changes what it does about them.
 
-Claude Code already knows how much of your 5-hour and weekly limit you have
-spent. It caches the numbers locally and shows them when you ask. What it does
-not do on its own is notice that the job in front of it is bigger than the
-budget behind it, and adjust. This adds that: a report you can act on, and a
-set of rules for what to do when the answer is "not enough".
+Claude Code already knows how much of your 5-hour and weekly limit is gone. It
+caches those numbers locally and will show them if you ask. What it does not do
+is notice that the job in front of it is larger than the budget behind it. So
+it starts anyway, and stops halfway through an edit.
+
+This puts the budget in front of Claude before your prompt lands, so the reply
+opens with the answer instead:
+
+> The weekly window has about 22 turns left. That covers the parser change and
+> its tests, but not the migration or the docs pass, so I will do the first two
+> and leave the rest for after the reset at 09:00.
+
+Nobody read a chart to get that. The numbers reached the model, not you.
+
+## How this differs from a usage dashboard
+
+There are a lot of good tools that read the same local files this does and draw
+you a picture: status lines, menu bar apps, terminal dashboards. They are worth
+having, and this is not trying to replace them. The difference is who the
+output is for.
+
+| A usage dashboard | This |
+| --- | --- |
+| Renders numbers for a person to read | Puts numbers in the model's context |
+| You notice, then you interrupt | Claude notices, and adjusts on its own |
+| Tells you 78 percent is gone | Tells you 22 turns are left, and whether what you asked for fits in them |
+| Runs beside Claude Code | Runs inside it, as a skill and a hook |
+| Shows what already happened | Says what to do now, and what to drop |
+
+A percentage is a fact about the past. The useful question is whether the thing
+you just asked for is going to finish, and answering that needs the request and
+the budget in the same place. That place is the model's context, which is where
+this puts them.
+
+So: if you want to watch your usage, install a status line. This ships one too.
+If you want the thing spending the budget to know it is spending the budget,
+that is what this is for.
 
 ## What it prints
 
@@ -206,13 +238,19 @@ Installed as a plugin, a hook measures the budget before each prompt and puts
 one line into Claude's context:
 
 ```
-[usage-limits] 5-hour 47%, weekly 16%, about 75 turns of headroom, resets in
-3h 52m, this session 229 turns, $64.16.
+[usage-limits] binding window is 5-hour 47% used, about 75 turns of headroom,
+resets in 3h 52m. Other windows: weekly 16%. This session: 229 turns, $64.16.
 ```
+
+It names the window that will stop the work first and hangs the figures off
+that one. Two windows run at once and they are rarely in the same place, so
+"weekly 16%" sitting next to "75 turns" would read as far more room than
+exists.
 
 Claude opens with it. When there is room that is a single line and it moves on:
 
-> Weekly is at 16%, 5-hour at 47%, about 75 turns of headroom. This fits easily.
+> The 5-hour window is the binding one: 47% used, about 75 turns of headroom.
+> This fits easily.
 
 When there is not, the line becomes a plan rather than a status:
 

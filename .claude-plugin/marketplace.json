@@ -9,9 +9,14 @@
     {
       "name": "usage-limits",
       "source": "./",
-      "description": "Reads how much of your Claude Code usage limit is left, converts it into turns of headroom, and plans the work to fit inside it.",
+      "description": "Puts your remaining Claude Code usage limit into Claude's context before every prompt, so it opens with what fits in the budget instead of starting work that gets cut off. Reports headroom as turns rather than percentages, prices a job before you start it, and detects your plan tier.",
       "category": "productivity",
-      "tags": ["usage", "limits", "cost", "planning"],
+      "tags": [
+        "usage",
+        "limits",
+        "cost",
+        "planning"
+      ],
       "license": "MIT"
     }
   ]

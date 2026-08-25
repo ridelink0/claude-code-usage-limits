@@ -100,7 +100,8 @@ there is nothing to go and look up.
 
 When there is room, one line, then get on with it:
 
-> Weekly is at 16%, 5-hour at 47%, about 75 turns of headroom. This fits easily.
+> The 5-hour window is the binding one: 47% used, about 75 turns of headroom.
+> This fits easily.
 
 When it does not fit, that line becomes the plan:
 
@@ -115,6 +116,13 @@ order" is.
 Keep it to one line unless the work genuinely does not fit. The budget note is
 a header, not a section, and it must never push the actual answer down the
 page.
+
+One thing to get right: **quote the binding window, not the roomiest one.**
+Two windows run at once and they are rarely in the same place. The turns of
+headroom and the reset time belong to whichever runs out first. Putting the
+other window's percentage next to those figures claims far more room than
+exists, and that is how a session ends mid-edit while the weekly number still
+looks comfortable.
 
 ### Pricing the job before starting it
 
