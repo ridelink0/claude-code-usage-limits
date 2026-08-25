@@ -195,7 +195,7 @@ function sessionSpend(events, sessionId) {
 function describeWindow(window) {
   if (!window) return null;
   if (window.stale) return window.label + ' rolling over';
-  const about = window.estimated ? ' about ' : ' ';
+  const about = window.estimated || window.adjusted ? ' about ' : ' ';
   return window.label + about + window.percentUsed + '%';
 }
 
@@ -236,6 +236,11 @@ function briefText(parts) {
     sentences.push(
       'That figure was rebuilt from local history because the ' +
         'snapshot is ' + parts.snapshotAge + ' old; run /usage to refresh it.'
+    );
+  } else if (parts.pointsSinceSnapshot) {
+    sentences.push(
+      'That includes about ' + parts.pointsSinceSnapshot + ' points spent since the ' +
+        'snapshot was taken ' + parts.snapshotAge + ' ago, which it does not know about yet.'
     );
   } else if (parts.staleWindows) {
     // Do not quietly carry on with a window we know is wrong and could not
@@ -306,6 +311,8 @@ async function run(now, hookInput) {
             percentUsed: binding.percentUsed,
             stale: binding.stale,
             estimated: binding.estimated,
+            adjusted: binding.adjusted,
+            pointsSinceSnapshot: binding.pointsSinceSnapshot,
             resetsAt: binding.resetsAt,
             verdict: binding.verdict,
             windowStart: binding.windowStart,
@@ -334,6 +341,7 @@ async function run(now, hookInput) {
     session: view.session,
     rebuilt: Boolean(binding && binding.estimated),
     staleWindows: view.staleWindows || 0,
+    pointsSinceSnapshot: (binding && binding.pointsSinceSnapshot) || 0,
     snapshotAge: usage.formatDuration(base.snapshotAgeMs),
     pressure: pressure(binding, now, config, view.turnsLeft),
   });

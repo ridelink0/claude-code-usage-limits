@@ -1123,3 +1123,58 @@ test('the saturation limit leaves room for rounding, not for nonsense', () => {
   assert.strictEqual(usage.reconstructWindow(spec, snapshot, over, NOW), null);
   assert.strictEqual(usage.SATURATION_LIMIT, 105);
 });
+
+test('spend since the snapshot is added to its reading', () => {
+  // The reported failure: a snapshot nine minutes old said 49%, three sessions
+  // had spent forty points in the gap, and the real figure was near 90.
+  const fetchedAt = NOW - 10 * 60 * 1000;
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 49, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+  const sample = events([
+    { offset: -60 * 60 * 1000, cost: 21.06 },
+    { offset: -5 * 60 * 1000, cost: 16.97 },
+  ]);
+
+  const window = usage.buildWindow(spec, snapshot, sample, NOW, { fetchedAt });
+  assert.strictEqual(window.adjusted, true);
+  assert.ok(window.percentUsed > 80, 'got ' + window.percentUsed + ', expected near 88');
+  assert.ok(window.percentUsed <= 100);
+  assert.ok(window.pointsSinceSnapshot > 30);
+});
+
+test('a fresh snapshot with nothing spent since is left alone', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 49, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+  const sample = events([{ offset: -60 * 60 * 1000, cost: 21 }]);
+  const window = usage.buildWindow(spec, snapshot, sample, NOW, { fetchedAt: NOW - 1000 });
+  assert.strictEqual(window.adjusted, false);
+  assert.strictEqual(window.percentUsed, 49);
+});
+
+test('the adjustment never runs on a window that has rolled over', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const rolled = { utilization: 100, resets_at: new Date(NOW - HOUR).toISOString() };
+  const sample = events([{ offset: -4 * HOUR, cost: 10 }, { offset: -1000, cost: 5 }]);
+  const window = usage.buildWindow(spec, rolled, sample, NOW, { fetchedAt: NOW - 10 * 60 * 1000 });
+  assert.strictEqual(window.adjusted, false, 'a stale reading is not a base to build on');
+});
+
+test('the adjustment cannot push a window past full', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 90, resets_at: new Date(NOW + HOUR).toISOString() };
+  const sample = events([
+    { offset: -60 * 60 * 1000, cost: 90 },
+    { offset: -60 * 1000, cost: 500 },
+  ]);
+  const window = usage.buildWindow(spec, snapshot, sample, NOW, { fetchedAt: NOW - 10 * 60 * 1000 });
+  assert.strictEqual(window.percentUsed, 100);
+});
+
+test('no snapshot timestamp means no adjustment rather than a guess', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 49, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+  const sample = events([{ offset: -60 * 1000, cost: 20 }]);
+  const window = usage.buildWindow(spec, snapshot, sample, NOW, {});
+  assert.strictEqual(window.adjusted, false);
+  assert.strictEqual(window.percentUsed, 49);
+});

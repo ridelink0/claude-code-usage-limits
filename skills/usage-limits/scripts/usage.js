@@ -535,7 +535,7 @@ function shareOf(sessions, sessionId) {
 // Everything the report needs about one limit window.
 function buildWindow(spec, snapshot, events, now, options) {
   const extra = options || {};
-  const percent =
+  const rawPercent =
     snapshot && typeof snapshot.utilization === 'number' ? snapshot.utilization : null;
   const resetsAt = snapshot && snapshot.resets_at ? Date.parse(snapshot.resets_at) : null;
   const hasReset = Number.isFinite(resetsAt);
@@ -556,8 +556,8 @@ function buildWindow(spec, snapshot, events, now, options) {
   const window = {
     key: spec.key,
     label: spec.label,
-    percentUsed: percent,
-    percentLeft: percent === null ? null : Math.max(0, 100 - percent),
+    percentUsed: rawPercent,
+    percentLeft: rawPercent === null ? null : Math.max(0, 100 - rawPercent),
     resetsAt: hasReset ? resetsAt : null,
     msToReset: hasReset ? resetsAt - now : null,
     windowStart: start,
@@ -579,13 +579,50 @@ function buildWindow(spec, snapshot, events, now, options) {
     // True when the percentage was rebuilt from local history because the
     // snapshot had gone stale, rather than read from the snapshot itself.
     estimated: Boolean(extra.estimated),
+    // True when spend since the snapshot was added to its reading.
+    adjusted: false,
+    pointsSinceSnapshot: 0,
     verdict: 'unknown',
   };
+
+  // Worked out before anything reads it: the adjustment below and the verdict
+  // chain both branch on whether this window has already rolled over.
+  window.stale = hasReset && resetsAt <= now;
 
   // Calibrate against this account: how many dollars of measured traffic
   // moved the meter one point. A rebuilt window hands its own figure in,
   // because rounding to 0% would otherwise leave it unpriced and drop it out
   // of the binding choice just after a reset.
+  // The snapshot is a reading from a moment in the past, not from now. Spend
+  // since then is real and uncounted, and with several sessions running it adds
+  // up fast: forty points went missing in nine minutes once, so a window that
+  // was truly at 88% was reported at 49%. Calibrate on spend up to the reading
+  // only, or the very spend being accounted for inflates the price per point
+  // and shrinks its own correction.
+  let percent = rawPercent;
+  let sinceSnapshot = 0;
+  if (
+    rawPercent !== null &&
+    rawPercent > 0 &&
+    !window.stale &&
+    Number.isFinite(extra.fetchedAt) &&
+    extra.fetchedAt > start
+  ) {
+    const upTo = totals(inWindow.filter((e) => e.at <= extra.fetchedAt));
+    const after = totals(inWindow.filter((e) => e.at > extra.fetchedAt));
+    if (upTo.cost > 0 && after.cost > 0) {
+      const pricePerPoint = upTo.cost / rawPercent;
+      sinceSnapshot = after.cost / pricePerPoint;
+      if (sinceSnapshot >= 1) {
+        percent = Math.min(100, Math.round(rawPercent + sinceSnapshot));
+        window.adjusted = true;
+        window.pointsSinceSnapshot = Math.round(sinceSnapshot);
+        window.percentUsed = percent;
+        window.percentLeft = Math.max(0, 100 - percent);
+      }
+    }
+  }
+
   const derived = percent !== null && percent > 0 && spent.cost > 0 ? spent.cost / percent : null;
   const priced =
     derived !== null
@@ -615,7 +652,6 @@ function buildWindow(spec, snapshot, events, now, options) {
   // A reset time in the past means the window already turned over and the
   // cached percentage describes a window that no longer exists. Reporting it
   // as current would claim the budget is gone when it has just come back.
-  window.stale = hasReset && resetsAt <= now;
   if (window.stale) {
     window.remainingUSD = null;
     window.turnsLeft = null;
@@ -754,6 +790,7 @@ function collect(now) {
     planTier: plan.tier,
     planAdvice: plan.advice,
     snapshotAgeMs: cache && cache.fetchedAtMs ? now - cache.fetchedAtMs : null,
+    snapshotFetchedAt: cache && cache.fetchedAtMs ? cache.fetchedAtMs : null,
     utilization,
     settings: {
       model: settings.model || 'default',
@@ -810,14 +847,14 @@ function reconstructWindow(spec, snapshot, events, now) {
 
 // No snapshot at all means no windows, which is what tells the report to
 // explain itself rather than print a table of dashes.
-function buildWindows(utilization, events, now) {
+function buildWindows(utilization, events, now, fetchedAt) {
   if (!utilization) return [];
   return WINDOWS.map((spec) => {
     const snapshot = utilization[spec.key];
     // The per-model weekly windows only exist on some plans.
     if (spec.key !== 'five_hour' && spec.key !== 'seven_day' && !snapshot) return null;
 
-    const window = buildWindow(spec, snapshot, events, now);
+    const window = buildWindow(spec, snapshot, events, now, { fetchedAt });
     if (!window.stale) return window;
 
     // Rolled over. Rebuild from local history rather than going blind on it.
@@ -844,7 +881,7 @@ async function report(now) {
   const earliest = now - 8 * DAY;
   const events = await readEvents(earliest);
 
-  const windows = buildWindows(base.utilization, events, now);
+  const windows = buildWindows(base.utilization, events, now, base.snapshotFetchedAt);
 
   const recentEvents = events.filter((event) => event.at >= now - HOUR);
   const recent = totals(recentEvents);
@@ -1005,7 +1042,7 @@ function render(data) {
             ? 'stale'
             : window.percentUsed === null
               ? '-'
-              : (window.estimated ? '~' : '') + window.percentUsed + '%',
+              : (window.estimated || window.adjusted ? '~' : '') + window.percentUsed + '%',
           6
         ) +
         padLeft(formatDuration(window.msToReset), 12) +
@@ -1082,6 +1119,15 @@ function render(data) {
     lines.push('  Recent pace   no turns in the last hour');
   }
   lines.push('  Measured      ' + formatCount(data.measuredTurns) + ' turns of local transcript');
+
+  if (data.windows.some((window) => window.adjusted)) {
+    lines.push(
+      '  Note          ~ includes spend since the snapshot was taken, which its own'
+    );
+    lines.push(
+      '                reading does not cover yet. Run /usage for a fresh one.'
+    );
+  }
 
   if (data.windows.some((window) => window.estimated)) {
     lines.push(
