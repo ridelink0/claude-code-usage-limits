@@ -571,11 +571,27 @@ function bindingWindow(windows) {
   const live = fresh.length ? fresh : known;
   if (!live.length) return null;
 
-  const measured = live.filter((w) => w.headroomMs !== null);
-  if (measured.length) {
-    return measured.reduce((worst, w) => (w.headroomMs < worst.headroomMs ? w : worst));
-  }
-  return live.reduce((worst, w) => (w.percentUsed > worst.percentUsed ? w : worst));
+  // How soon this window stops the work. A window with no pace estimate is
+  // ranked by how full it is instead, because a nearly full window must never
+  // be passed over merely because nothing has been spent in it lately.
+  const soonest = (w) => {
+    if (Number.isFinite(w.headroomMs)) return w.headroomMs;
+    return w.percentUsed >= 90 ? 0 : Infinity;
+  };
+
+  return live.reduce((best, w) => {
+    const mine = soonest(w);
+    const theirs = soonest(best);
+    if (mine !== theirs) return mine < theirs ? w : best;
+
+    // Equally urgent: the shorter window is the one hit first in practice, so
+    // the 5-hour limit wins a tie against the weekly one.
+    const myspan = Number.isFinite(w.spanMs) ? w.spanMs : Infinity;
+    const theirspan = Number.isFinite(best.spanMs) ? best.spanMs : Infinity;
+    if (myspan !== theirspan) return myspan < theirspan ? w : best;
+
+    return w.percentUsed > best.percentUsed ? w : best;
+  });
 }
 
 function formatDuration(ms) {

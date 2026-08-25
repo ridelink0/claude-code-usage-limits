@@ -355,3 +355,55 @@ test('the tight instruction asks for batching without discouraging corrections',
   assert.match(text, /sending them together/);
   assert.match(text, /never say it about a correction or a stop/);
 });
+
+const rolling = {
+  key: 'five_hour',
+  label: '5-hour',
+  percentUsed: 61,
+  stale: false,
+  estimated: true,
+  windowStart: NOW - 5 * HOUR,
+  spanMs: 5 * HOUR,
+  verdict: 'burning',
+};
+
+test('a short turn count is tight whatever the percentage says', () => {
+  assert.strictEqual(brief.pressure(rolling, NOW, config, 30), 'roomy');
+  assert.strictEqual(brief.pressure(rolling, NOW, config, 12), 'tight');
+});
+
+test('a rebuilt figure is reacted to sooner, because it reads low', () => {
+  const higher = Object.assign({}, rolling, { percentUsed: 72 });
+  assert.strictEqual(brief.pressure(higher, NOW, config, 500), 'tight');
+  // Same percentage, and deliberately not ahead of pace either: four hours into
+  // a five hour window, 72% is roughly on schedule. The only difference left is
+  // whether the figure was measured or rebuilt.
+  const measured = Object.assign({}, higher, {
+    estimated: false,
+    windowStart: NOW - 4 * HOUR,
+  });
+  assert.strictEqual(
+    brief.pressure(measured, NOW, config, 500),
+    'roomy',
+    '72% of a real reading, on pace, is not yet near the wall'
+  );
+});
+
+test('pace is not consulted for a rolling window', () => {
+  // windowStart is now minus the span, so it is always "fully elapsed" and the
+  // pace comparison would never fire. It must not be what decides this.
+  assert.strictEqual(brief.aheadOfPace(rolling, NOW), 61 - 100);
+  assert.strictEqual(brief.pressure(rolling, NOW, config, 500), 'roomy');
+});
+
+test('the few-turns threshold is configurable', () => {
+  const previous = process.env.USAGE_LIMITS_FEW_TURNS;
+  process.env.USAGE_LIMITS_FEW_TURNS = '40';
+  try {
+    assert.strictEqual(brief.settings().fewTurns, 40);
+    assert.strictEqual(brief.pressure(rolling, NOW, brief.settings(), 30), 'tight');
+  } finally {
+    if (previous === undefined) delete process.env.USAGE_LIMITS_FEW_TURNS;
+    else process.env.USAGE_LIMITS_FEW_TURNS = previous;
+  }
+});

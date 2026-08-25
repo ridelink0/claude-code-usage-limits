@@ -167,6 +167,21 @@ node skills/usage-limits/scripts/usage.js
 node skills/usage-limits/scripts/usage.js --json
 ```
 
+## Which limit it watches
+
+Two windows run at once and the 5-hour one is usually what actually stops you,
+so it gets picked whenever it is tighter, and it wins a tie against the weekly
+window because the shorter window is the one hit first in practice.
+
+It is not forced, though. When the weekly window is genuinely the wall, at 99
+percent with minutes left, that is what gets reported. Forcing the 5-hour there
+would hide the limit about to stop the work, which is the same failure as
+ignoring it.
+
+A window with no recent spend to measure is ranked by how full it is rather
+than being skipped, so a 5-hour window sitting at 95 percent is never passed
+over just because nothing has gone through it in the last few minutes.
+
 ## When you keep typing
 
 Every message sent while work is already running starts another turn, and each
@@ -296,6 +311,7 @@ minute, so it costs about 400ms cold and 120ms warm.
 | `USAGE_LIMITS_FLOOR` | 40 | Below this, pace is ignored. |
 | `USAGE_LIMITS_AHEAD` | 15 | Points ahead of pace that count as burning fast. |
 | `USAGE_LIMITS_CACHE` | 60 | Seconds the measured half stays good for. |
+| `USAGE_LIMITS_FEW_TURNS` | 20 | Turn count at or below which the budget counts as tight. |
 
 ## What would this job cost
 
@@ -448,7 +464,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-130 tests over the pricing, the window arithmetic, plan and credit detection,
+142 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, job forecasting, per-project
 attribution, the CLI, packaging, and the settings save/restore.
 

@@ -936,3 +936,45 @@ test('a rebuilt window is eligible to be the binding one', () => {
     'dropping it would hide the limit that actually stops short work'
   );
 });
+
+const shortSpan = 5 * HOUR;
+const longSpan = 7 * 24 * HOUR;
+
+function window5(percent, headroomMs) {
+  return { key: 'five_hour', label: '5-hour', percentUsed: percent, stale: false,
+           headroomMs, spanMs: shortSpan };
+}
+function windowWeek(percent, headroomMs) {
+  return { key: 'seven_day', label: 'weekly', percentUsed: percent, stale: false,
+           headroomMs, spanMs: longSpan };
+}
+
+test('a nearly full window is not passed over for lacking a pace estimate', () => {
+  // The failure this guards: 5-hour at 95% with nothing spent lately loses to
+  // a roomy weekly window purely because the weekly one had a pace.
+  const binding = usage.bindingWindow([window5(95, null), windowWeek(20, 40 * HOUR)]);
+  assert.strictEqual(binding.key, 'five_hour');
+});
+
+test('an empty window with no pace does not claim to be binding', () => {
+  const binding = usage.bindingWindow([window5(5, null), windowWeek(60, 2 * HOUR)]);
+  assert.strictEqual(binding.key, 'seven_day');
+});
+
+test('an equally urgent tie goes to the shorter window', () => {
+  const binding = usage.bindingWindow([windowWeek(50, 3 * HOUR), window5(50, 3 * HOUR)]);
+  assert.strictEqual(
+    binding.key,
+    'five_hour',
+    'the 5-hour limit is the one hit first in practice'
+  );
+});
+
+test('the weekly window still binds when it is genuinely the wall', () => {
+  const binding = usage.bindingWindow([window5(50, 3 * HOUR), windowWeek(99, 0.2 * HOUR)]);
+  assert.strictEqual(
+    binding.key,
+    'seven_day',
+    'forcing the 5-hour here would hide the limit about to stop the work'
+  );
+});

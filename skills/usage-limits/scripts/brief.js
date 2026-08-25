@@ -28,6 +28,8 @@ const DEFAULTS = {
   // How long the measured part stays good for. Prompts often arrive in
   // bursts, and a transcript scan per prompt would be wasteful.
   cacheSeconds: 60,
+  // Few enough turns that the count itself is the warning.
+  fewTurns: 20,
 };
 
 function configDir() {
@@ -104,6 +106,7 @@ function settings() {
     floor: number(env.USAGE_LIMITS_FLOOR, DEFAULTS.floor),
     ahead: number(env.USAGE_LIMITS_AHEAD, DEFAULTS.ahead),
     cacheSeconds: number(env.USAGE_LIMITS_CACHE, DEFAULTS.cacheSeconds),
+    fewTurns: number(env.USAGE_LIMITS_FEW_TURNS, DEFAULTS.fewTurns),
   };
 }
 
@@ -117,15 +120,31 @@ function aheadOfPace(window, now) {
 }
 
 // Not whether to speak, which is always, but how hard to lean on it.
-function pressure(window, now, config) {
+// Not whether to speak, which is always, but how hard to lean on it.
+function pressure(window, now, config, turnsLeft) {
   if (!window || window.percentUsed === null || window.stale) return 'unknown';
-  if (window.verdict === 'exhausted') return 'gone';
+  if (window.verdict === 'exhausted' || window.percentUsed >= 100) return 'gone';
   if (window.verdict === 'runs-out') return 'tight';
-  if (window.percentUsed >= config.near) return 'tight';
 
-  const lead = aheadOfPace(window, now);
-  if (window.percentUsed >= config.floor && lead !== null && lead >= config.ahead) {
+  // A rebuilt figure only counts this machine, so it reads low. React to it
+  // sooner than to a figure the API actually reported.
+  const near = window.estimated ? Math.min(config.near, 70) : config.near;
+  if (window.percentUsed >= near) return 'tight';
+
+  // Turns are the number the work is planned in, so a short count is tight
+  // whatever the percentage says.
+  if (Number.isFinite(turnsLeft) && turnsLeft <= config.fewTurns) {
     return 'tight';
+  }
+
+  // Pace only means something for a window with a real start. A rebuilt one
+  // is anchored at now minus its span, so it is always "fully elapsed" and
+  // the comparison can never fire.
+  if (!window.estimated) {
+    const lead = aheadOfPace(window, now);
+    if (window.percentUsed >= config.floor && lead !== null && lead >= config.ahead) {
+      return 'tight';
+    }
   }
   return 'roomy';
 }
@@ -292,7 +311,7 @@ async function run(now, hookInput) {
     session: view.session,
     rebuilt: Boolean(binding && binding.estimated),
     snapshotAge: usage.formatDuration(base.snapshotAgeMs),
-    pressure: pressure(binding, now, config),
+    pressure: pressure(binding, now, config, view.turnsLeft),
   });
 }
 
