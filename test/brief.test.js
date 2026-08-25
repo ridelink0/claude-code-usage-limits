@@ -407,3 +407,34 @@ test('the few-turns threshold is configurable', () => {
     else process.env.USAGE_LIMITS_FEW_TURNS = previous;
   }
 });
+
+test('the line says how many of those turns are actually yours', () => {
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 30, stale: false },
+    othersSummary: 'weekly 38%',
+    turnsLeft: 169,
+    yourTurnsLeft: 101,
+    sessions: 2,
+    resetsIn: '3h',
+    session: null,
+    pressure: 'roomy',
+  });
+  assert.match(text, /about 169 turns of headroom/);
+  assert.match(text, /2 sessions active, roughly 101 of them yours/);
+});
+
+test('a session working alone is not told about sharing', () => {
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 30, stale: false },
+    othersSummary: '',
+    turnsLeft: 169,
+    yourTurnsLeft: 169,
+    sessions: 1,
+    resetsIn: '3h',
+    session: null,
+    pressure: 'roomy',
+  });
+  assert.match(text, /about 169 turns of headroom, resets in 3h/);
+  assert.doesNotMatch(text, /sessions active/);
+  assert.doesNotMatch(text, /of them yours/);
+});

@@ -215,7 +215,14 @@ function briefText(parts) {
   const described = describeWindow(parts.binding);
   if (described) bound.push(described + (parts.binding.stale ? '' : ' used'));
   if (Number.isFinite(parts.turnsLeft)) {
-    bound.push('about ' + parts.turnsLeft + ' turns of headroom');
+    // Another session spending the same budget means fewer of those turns are
+    // yours, so say both numbers rather than the flattering one.
+    const shared =
+      parts.sessions > 1 && Number.isFinite(parts.yourTurnsLeft)
+        ? ' (' + parts.sessions + ' sessions active, roughly ' + parts.yourTurnsLeft +
+          ' of them yours)'
+        : '';
+    bound.push('about ' + parts.turnsLeft + ' turns of headroom' + shared);
   }
   if (parts.resetsIn) bound.push('resets in ' + parts.resetsIn);
 
@@ -282,6 +289,7 @@ async function run(now, hookInput) {
       turnsLeft: binding && Number.isFinite(binding.turnsLeft) ? binding.turnsLeft : null,
       session: sessionSpend(events, sessionId),
       othersSummary: summariseOthers(windows, binding && binding.key),
+      sessions: usage.activeSessions(events, now, usage.CONCURRENT_WINDOW_MS),
       binding: binding
         ? {
             key: binding.key,
@@ -300,7 +308,13 @@ async function run(now, hookInput) {
   }
 
   const binding = view.binding;
+  const sessions = view.sessions || [];
+  const share = usage.shareOf(sessions, sessionId);
   return briefText({
+    sessions: sessions.length,
+    yourTurnsLeft: Number.isFinite(view.turnsLeft)
+      ? Math.max(1, Math.round(view.turnsLeft * share))
+      : null,
     binding,
     othersSummary: view.othersSummary,
     turnsLeft: view.turnsLeft,

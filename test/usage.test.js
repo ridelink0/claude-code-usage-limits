@@ -1021,3 +1021,57 @@ test('typicalTurnCost gives up on an empty history', () => {
   assert.strictEqual(usage.typicalTurnCost([], [], [], 5), null);
   assert.strictEqual(usage.typicalTurnCost(null, null, null, 5), null);
 });
+
+const MIN = 60 * 1000;
+
+function turn(minutesAgo, cost, sessionId) {
+  return { at: NOW - minutesAgo * MIN, cost, tokens: 0, sessionId };
+}
+
+test('activeSessions finds the sessions spending right now', () => {
+  const rows = usage.activeSessions(
+    [turn(2, 3, 'mine'), turn(5, 2, 'mine'), turn(3, 3, 'other')],
+    NOW
+  );
+  assert.strictEqual(rows.length, 2);
+  assert.strictEqual(rows[0].sessionId, 'mine', 'dearest first');
+  assert.strictEqual(rows[0].turns, 2);
+  assert.strictEqual(rows[0].cost, 5);
+  assert.strictEqual(Math.round(rows[0].share * 100), 63);
+  assert.strictEqual(Math.round(rows[1].share * 100), 38);
+});
+
+test('activeSessions ignores a session that has gone quiet', () => {
+  const rows = usage.activeSessions([turn(2, 3, 'mine'), turn(40, 9, 'finished')], NOW);
+  assert.deepStrictEqual(
+    rows.map((r) => r.sessionId),
+    ['mine'],
+    'a session idle for forty minutes is not competing for the budget'
+  );
+});
+
+test('activeSessions takes a custom window', () => {
+  const rows = usage.activeSessions([turn(2, 1, 'a'), turn(40, 1, 'b')], NOW, 60 * MIN);
+  assert.strictEqual(rows.length, 2);
+});
+
+test('activeSessions copes with turns that carry no session', () => {
+  const rows = usage.activeSessions([turn(1, 1, null)], NOW);
+  assert.strictEqual(rows[0].sessionId, 'unknown');
+});
+
+test('shareOf gives the whole budget to a session working alone', () => {
+  assert.strictEqual(usage.shareOf([{ sessionId: 'mine', share: 1 }], 'mine'), 1);
+  assert.strictEqual(usage.shareOf([], 'mine'), 1);
+  assert.strictEqual(usage.shareOf(null, 'mine'), 1);
+});
+
+test('shareOf splits the budget when another session is working', () => {
+  const rows = usage.activeSessions([turn(2, 3, 'mine'), turn(3, 1, 'other')], NOW);
+  assert.strictEqual(usage.shareOf(rows, 'mine'), 0.75);
+});
+
+test('shareOf assumes an even split when it cannot identify the caller', () => {
+  const rows = usage.activeSessions([turn(2, 3, 'a'), turn(3, 1, 'b')], NOW);
+  assert.strictEqual(usage.shareOf(rows, 'unknown-to-us'), 0.5);
+});

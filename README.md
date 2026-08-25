@@ -167,6 +167,26 @@ node skills/usage-limits/scripts/usage.js
 node skills/usage-limits/scripts/usage.js --json
 ```
 
+## When another Claude is working too
+
+Two Claude Code windows share one limit, so headroom measured in turns is
+optimistic while another session is also spending. It watches for that:
+
+```
+  Sharing       2 sessions have spent in the last 15m, splitting this budget 75% / 25%
+                The turns above are the whole window, not your slice of it.
+```
+
+and the before-prompt line says how many of those turns are actually yours:
+
+```
+about 38 turns of headroom (2 sessions active, roughly 10 of them yours)
+```
+
+The split comes from measured spend rather than an assumption that everyone is
+working equally hard, because they usually are not. A session that has gone
+quiet for a quarter of an hour is not counted as competing.
+
 ## Which limit it watches
 
 Two windows run at once and the 5-hour one is usually what actually stops you,
@@ -471,7 +491,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-148 tests over the pricing, the window arithmetic, plan and credit detection,
+157 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, job forecasting, per-project
 attribution, the CLI, packaging, and the settings save/restore.
 

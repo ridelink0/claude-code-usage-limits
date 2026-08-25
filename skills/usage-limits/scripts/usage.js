@@ -499,6 +499,39 @@ function forecastWindow(window, turns, rates) {
   };
 }
 
+const CONCURRENT_WINDOW_MS = 15 * MINUTE;
+
+// Sessions that have spent something recently. Two Claude Code windows share
+// one limit, so headroom measured in "turns" is optimistic when another one is
+// also working: the budget drains while you are not the one spending it.
+function activeSessions(events, now, windowMs) {
+  const since = now - (Number.isFinite(windowMs) ? windowMs : CONCURRENT_WINDOW_MS);
+  const bySession = new Map();
+
+  for (const event of events) {
+    if (event.at < since || event.at > now) continue;
+    const id = event.sessionId || 'unknown';
+    if (!bySession.has(id)) bySession.set(id, { sessionId: id, turns: 0, cost: 0 });
+    const row = bySession.get(id);
+    row.turns += 1;
+    row.cost += event.cost;
+  }
+
+  const rows = [...bySession.values()].sort((a, b) => b.cost - a.cost);
+  const total = rows.reduce((sum, row) => sum + row.cost, 0);
+  for (const row of rows) row.share = total > 0 ? row.cost / total : 0;
+  return rows;
+}
+
+// The slice of the shared budget this session is actually getting. With
+// another session spending half of it, only half those turns are yours.
+function shareOf(sessions, sessionId) {
+  if (!sessions || sessions.length < 2) return 1;
+  const mine = sessions.find((row) => row.sessionId === sessionId);
+  if (!mine) return 1 / sessions.length;
+  return mine.share > 0 ? mine.share : 1 / sessions.length;
+}
+
 // Everything the report needs about one limit window.
 function buildWindow(spec, snapshot, events, now, options) {
   const extra = options || {};
@@ -550,9 +583,19 @@ function buildWindow(spec, snapshot, events, now, options) {
   };
 
   // Calibrate against this account: how many dollars of measured traffic
-  // moved the meter one point.
-  if (percent !== null && percent > 0 && spent.cost > 0) {
-    window.usdPerPercent = spent.cost / percent;
+  // moved the meter one point. A rebuilt window hands its own figure in,
+  // because rounding to 0% would otherwise leave it unpriced and drop it out
+  // of the binding choice just after a reset.
+  const derived = percent !== null && percent > 0 && spent.cost > 0 ? spent.cost / percent : null;
+  const priced =
+    derived !== null
+      ? derived
+      : Number.isFinite(extra.usdPerPercent) && extra.usdPerPercent > 0
+        ? extra.usdPerPercent
+        : null;
+
+  if (percent !== null && priced !== null) {
+    window.usdPerPercent = priced;
     window.remainingUSD = window.usdPerPercent * window.percentLeft;
     // The API reports whole numbers, so a low reading is a wide bracket.
     window.coarse = percent < 5;
@@ -773,7 +816,11 @@ function buildWindows(utilization, events, now) {
       { utilization: rebuilt.percentUsed, resets_at: null },
       events,
       now,
-      { estimated: true, windowStart: rebuilt.windowStart }
+      {
+        estimated: true,
+        windowStart: rebuilt.windowStart,
+        usdPerPercent: rebuilt.usdPerPercent,
+      }
     );
   }).filter(Boolean);
 }
@@ -799,6 +846,7 @@ async function report(now) {
     windows,
     binding,
     credits: creditsFrom(base.utilization),
+    sessions: activeSessions(events, now, CONCURRENT_WINDOW_MS),
     rates: costPercentiles(recentEvents.length >= 5 ? recentEvents : scoped),
     resumeAt: binding ? binding.resetsAt : null,
     models: byModel(scoped),
@@ -1001,6 +1049,17 @@ function render(data) {
     lines.push('');
   }
 
+  if (data.sessions && data.sessions.length > 1) {
+    const split = data.sessions.map((row) => Math.round(row.share * 100) + '%').join(' / ');
+    lines.push(
+      '  Sharing       ' + data.sessions.length + ' sessions have spent in the last 15m, ' +
+        'splitting this budget ' + split
+    );
+    lines.push(
+      '                The turns above are the whole window, not your slice of it.'
+    );
+  }
+
   if (data.recent.turns) {
     lines.push(
       '  Recent pace   ' + data.recent.turns + ' turns in the last hour, ' +
@@ -1181,6 +1240,9 @@ module.exports = {
   bindingWindow,
   dominantEffort,
   typicalTurnCost,
+  activeSessions,
+  shareOf,
+  CONCURRENT_WINDOW_MS,
   MIN_PACE_SAMPLE,
   formatDuration,
   formatUSD,
