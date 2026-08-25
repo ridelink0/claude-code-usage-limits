@@ -43,10 +43,25 @@ function cacheFile() {
 // ever got a hit and both paid for a full scan each time.
 const KEEP_SESSIONS = 5;
 
+// A cache written before slots were keyed by session keeps its fields at the
+// top level, so upgrading would carry "at", "turnsLeft", "session" and
+// "sessionId" forward as if each were a session, crowding out real slots and
+// quietly undoing the per-session caching. Anything that is not a slot goes.
+function keepSlots(parsed) {
+  if (!parsed || typeof parsed !== 'object') return {};
+  const slots = {};
+  for (const key of Object.keys(parsed)) {
+    const value = parsed[key];
+    if (value && typeof value === 'object' && Number.isFinite(value.at)) {
+      slots[key] = value;
+    }
+  }
+  return slots;
+}
+
 function readCache() {
   try {
-    const parsed = JSON.parse(fs.readFileSync(cacheFile(), 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    return keepSlots(JSON.parse(fs.readFileSync(cacheFile(), 'utf8')));
   } catch (err) {
     return {};
   }
@@ -285,6 +300,7 @@ module.exports = {
   summariseOthers,
   briefText,
   settings,
+  keepSlots,
   pickCached,
   mergeCache,
   KEEP_SESSIONS,

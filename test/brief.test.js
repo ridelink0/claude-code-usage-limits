@@ -273,3 +273,31 @@ test('mergeCache defaults to the shipped slot count', () => {
   }
   assert.strictEqual(Object.keys(all).length, brief.KEEP_SESSIONS);
 });
+
+test('a cache from before per-session slots is discarded, not carried forward', () => {
+  // What 1.1.1 wrote: the fields sat at the top level, with no session key.
+  const old = { at: NOW - 5000, turnsLeft: 40, session: { turns: 3, cost: 1 }, sessionId: 'old' };
+  assert.deepStrictEqual(
+    brief.keepSlots(old),
+    {},
+    'carrying those forward would squat four of the five slots'
+  );
+});
+
+test('keepSlots keeps real slots and drops the rest', () => {
+  const mixed = {
+    alpha: { at: NOW, turnsLeft: 10 },
+    at: 12345,
+    session: { turns: 3, cost: 1 },
+    beta: { at: NOW - 1000, turnsLeft: 20 },
+    broken: { turnsLeft: 5 },
+  };
+  assert.deepStrictEqual(Object.keys(brief.keepSlots(mixed)).sort(), ['alpha', 'beta']);
+});
+
+test('keepSlots survives anything at all', () => {
+  assert.deepStrictEqual(brief.keepSlots(null), {});
+  assert.deepStrictEqual(brief.keepSlots('nonsense'), {});
+  assert.deepStrictEqual(brief.keepSlots(42), {});
+  assert.deepStrictEqual(brief.keepSlots({}), {});
+});
