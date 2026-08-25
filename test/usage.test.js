@@ -869,16 +869,15 @@ test('reconstructWindow prices the live window from the closed one', () => {
   assert.strictEqual(shot.windowStart, NOW - 5 * HOUR);
 });
 
-test('reconstructWindow will not exceed a full window', () => {
+test('reconstructWindow refuses a rebuild that overflows the window', () => {
+  // Was: capped at 100. Capping turned a broken calibration into a confident
+  // "your budget is gone", which is exactly the wrong way to be wrong.
   const closed = events([{ offset: -7 * HOUR, cost: 10 }]);
   const live = events([{ offset: -1 * HOUR, cost: 999 }]);
-  const shot = usage.reconstructWindow(
-    fiveHour,
-    rolledOver(100, 2 * HOUR),
-    closed.concat(live),
-    NOW
+  assert.strictEqual(
+    usage.reconstructWindow(fiveHour, rolledOver(100, 2 * HOUR), closed.concat(live), NOW),
+    null
   );
-  assert.strictEqual(shot.percentUsed, 100);
 });
 
 test('reconstructWindow leaves a window that has not rolled over alone', () => {
@@ -1074,4 +1073,53 @@ test('shareOf splits the budget when another session is working', () => {
 test('shareOf assumes an even split when it cannot identify the caller', () => {
   const rows = usage.activeSessions([turn(2, 3, 'a'), turn(3, 1, 'b')], NOW);
   assert.strictEqual(usage.shareOf(rows, 'unknown-to-us'), 0.5);
+});
+
+test('a rebuild that overflows the window refuses instead of reporting 100%', () => {
+  // The closed window was reported fully used, but only $5 of it is in local
+  // transcripts because the rest was spent elsewhere. That makes a point look
+  // like five cents, so $30 of live spend divides to 600%.
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 100, resets_at: new Date(NOW - 2 * HOUR).toISOString() };
+  const sample = events([{ offset: -7 * HOUR, cost: 5 }, { offset: -1 * HOUR, cost: 30 }]);
+
+  assert.strictEqual(
+    usage.reconstructWindow(spec, snapshot, sample, NOW),
+    null,
+    'capping that at 100 would tell someone at half their budget that it is gone'
+  );
+});
+
+test('an overflowing rebuild leaves the window unknown, not full', () => {
+  const utilization = {
+    five_hour: { utilization: 100, resets_at: new Date(NOW - 2 * HOUR).toISOString() },
+    seven_day: { utilization: 50, resets_at: new Date(NOW + 5 * 24 * HOUR).toISOString() },
+  };
+  const sample = events([{ offset: -7 * HOUR, cost: 5 }, { offset: -1 * HOUR, cost: 30 }]);
+  const five = usage.buildWindows(utilization, sample, NOW).find((w) => w.key === 'five_hour');
+
+  assert.strictEqual(five.stale, true, 'unknown, so it must not pose as a reading');
+  assert.strictEqual(five.estimated, false);
+  assert.strictEqual(five.verdict, 'rolled-over');
+});
+
+test('a sound rebuild is still accepted', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 100, resets_at: new Date(NOW - 2 * HOUR).toISOString() };
+  const sample = events([{ offset: -7 * HOUR, cost: 100 }, { offset: -1 * HOUR, cost: 37 }]);
+  assert.strictEqual(usage.reconstructWindow(spec, snapshot, sample, NOW).percentUsed, 37);
+});
+
+test('the saturation limit leaves room for rounding, not for nonsense', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 100, resets_at: new Date(NOW - 2 * HOUR).toISOString() };
+
+  // 102% of a window is plausible rounding, and is kept.
+  const near = events([{ offset: -7 * HOUR, cost: 100 }, { offset: -1 * HOUR, cost: 102 }]);
+  assert.strictEqual(usage.reconstructWindow(spec, snapshot, near, NOW).percentUsed, 100);
+
+  // 130% is not.
+  const over = events([{ offset: -7 * HOUR, cost: 100 }, { offset: -1 * HOUR, cost: 130 }]);
+  assert.strictEqual(usage.reconstructWindow(spec, snapshot, over, NOW), null);
+  assert.strictEqual(usage.SATURATION_LIMIT, 105);
 });

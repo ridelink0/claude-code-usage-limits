@@ -772,6 +772,9 @@ function collect(now) {
 // was spent inside the window it describes equalled its percentage. That
 // dollars-per-point figure is a property of the plan, not of the moment, so it
 // still prices the window running now.
+// Anything above this and the calibration, not the budget, is what is full.
+const SATURATION_LIMIT = 105;
+
 function reconstructWindow(spec, snapshot, events, now) {
   if (!snapshot || typeof snapshot.utilization !== 'number') return null;
   if (snapshot.utilization <= 0) return null;
@@ -786,9 +789,18 @@ function reconstructWindow(spec, snapshot, events, now) {
   const usdPerPercent = past.cost / snapshot.utilization;
   const liveStart = now - spec.span;
   const live = totals(events.filter((e) => e.at >= liveStart && e.at <= now));
+  const raw = live.cost / usdPerPercent;
+
+  // A rebuild that overflows the window is not a full window, it is a broken
+  // calibration. Local transcripts only see this machine, so if the closed
+  // window was mostly spent elsewhere its price per point comes out far too
+  // small and any live spend divides to hundreds of percent. Capping that at
+  // 100 would report a full budget to someone sitting at half, which is worse
+  // than admitting the reading cannot be rebuilt.
+  if (raw > SATURATION_LIMIT) return null;
 
   return {
-    percentUsed: Math.min(100, Math.round(live.cost / usdPerPercent)),
+    percentUsed: Math.min(100, Math.round(raw)),
     usdPerPercent,
     spentUSD: live.cost,
     turns: live.turns,
@@ -1236,6 +1248,7 @@ module.exports = {
   readEvents,
   buildWindow,
   reconstructWindow,
+  SATURATION_LIMIT,
   buildWindows,
   bindingWindow,
   dominantEffort,

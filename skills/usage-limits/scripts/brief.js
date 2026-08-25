@@ -237,6 +237,14 @@ function briefText(parts) {
       'That figure was rebuilt from local history because the ' +
         'snapshot is ' + parts.snapshotAge + ' old; run /usage to refresh it.'
     );
+  } else if (parts.staleWindows) {
+    // Do not quietly carry on with a window we know is wrong and could not
+    // rebuild. Say it is unknown and point at the one command that fixes it.
+    sentences.push(
+      'A window is past its reset and could not be rebuilt from local history, ' +
+        'so its reading is unknown rather than current; the snapshot is ' +
+        parts.snapshotAge + ' old, so run /usage before trusting the rest.'
+    );
   }
   if (parts.othersSummary) sentences.push('Other windows: ' + parts.othersSummary + '.');
   if (parts.session) {
@@ -290,6 +298,7 @@ async function run(now, hookInput) {
       session: sessionSpend(events, sessionId),
       othersSummary: summariseOthers(windows, binding && binding.key),
       sessions: usage.activeSessions(events, now, usage.CONCURRENT_WINDOW_MS),
+      staleWindows: windows.filter((w) => w.stale).length,
       binding: binding
         ? {
             key: binding.key,
@@ -324,6 +333,7 @@ async function run(now, hookInput) {
         : null,
     session: view.session,
     rebuilt: Boolean(binding && binding.estimated),
+    staleWindows: view.staleWindows || 0,
     snapshotAge: usage.formatDuration(base.snapshotAgeMs),
     pressure: pressure(binding, now, config, view.turnsLeft),
   });

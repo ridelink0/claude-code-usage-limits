@@ -466,6 +466,12 @@ Good enough to plan with, not a bill. The honest caveats:
 - A rebuilt figure only counts what this machine did. If you also worked on
   another device it reads low, which is the dangerous direction, so treat it as
   a floor until you refresh.
+- If a rebuild comes out above a full window, it is refused rather than capped.
+  Local transcripts only see this machine, so a window mostly spent elsewhere
+  makes a point look far too cheap and any live spend divides to hundreds of
+  percent. Capping that at 100 would tell someone sitting at half their budget
+  that it was gone. The window is reported as unknown instead, with a nudge to
+  run `/usage`.
 
 [how-it-works.md](skills/usage-limits/references/how-it-works.md) has the field
 names, the formulas, and the rest of it.
@@ -491,7 +497,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-157 tests over the pricing, the window arithmetic, plan and credit detection,
+164 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, job forecasting, per-project
 attribution, the CLI, packaging, and the settings save/restore.
 

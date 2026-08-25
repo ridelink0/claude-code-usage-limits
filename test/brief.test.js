@@ -438,3 +438,52 @@ test('a session working alone is not told about sharing', () => {
   assert.doesNotMatch(text, /sessions active/);
   assert.doesNotMatch(text, /of them yours/);
 });
+
+test('a window it could not rebuild is called unknown, and the fix is named', () => {
+  const text = brief.briefText({
+    binding: { key: 'seven_day', label: 'weekly', percentUsed: 57, stale: false },
+    othersSummary: '5-hour rolling over',
+    turnsLeft: 100,
+    resetsIn: '5d',
+    session: null,
+    rebuilt: false,
+    staleWindows: 1,
+    snapshotAge: '10h',
+    pressure: 'roomy',
+  });
+  assert.match(text, /could not be rebuilt/);
+  assert.match(text, /unknown rather than current/);
+  assert.match(text, /run \/usage/);
+});
+
+test('a rebuilt window explains itself instead of the unknown wording', () => {
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 41, stale: false, estimated: true },
+    othersSummary: 'weekly 34%',
+    turnsLeft: 30,
+    resetsIn: null,
+    session: null,
+    rebuilt: true,
+    staleWindows: 1,
+    snapshotAge: '10h',
+    pressure: 'tight',
+  });
+  assert.match(text, /rebuilt from local history/);
+  assert.doesNotMatch(text, /could not be rebuilt/);
+});
+
+test('nothing stale means neither message appears', () => {
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 49, stale: false },
+    othersSummary: 'weekly 57%',
+    turnsLeft: 105,
+    resetsIn: '4h',
+    session: null,
+    rebuilt: false,
+    staleWindows: 0,
+    snapshotAge: '2m',
+    pressure: 'roomy',
+  });
+  assert.doesNotMatch(text, /could not be rebuilt/);
+  assert.doesNotMatch(text, /rebuilt from local history/);
+});
