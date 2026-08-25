@@ -124,6 +124,26 @@ window that no longer exists. Those are marked stale, excluded from the
 binding choice, and never used for projections, because treating one as
 current would report an empty budget at the exact moment the budget came back.
 
+**Time of day is not modelled, and does not need to be.** Anthropic used to
+shrink the Claude Code five-hour limit during peak hours, so the same work cost
+more of it in the afternoon. That ended on 6 May 2026, when the five-hour
+limits were doubled and, in Anthropic's words, they removed "the peak hours
+limit reduction on Claude Code for Pro and Max accounts". So there is no
+peak-hour penalty to model today.
+
+If one ever returns, nothing here needs changing. Every figure is calibrated
+from what your own traffic actually did to the meter, so if a point of budget
+starts costing more at four in the afternoon, the measured dollars-per-point
+moves with it and the headroom follows. That is the advantage of measuring
+rather than assuming: the tool does not need to know why a point got dearer.
+
+**One turn is not a pace.** The turn cost behind "turns of headroom" is the
+median of a sample, not the mean, and never from fewer than five turns. A
+compaction or a large file read can cost ten times an ordinary turn, and one of
+those landing in a thin sample once put a window that was 13 percent full at
+nine turns remaining. Thin samples widen to the whole window, and then to
+everything on record.
+
 **Pace is not a promise.** Turns left assumes the next turns look like the last
 hour's. A debugging spiral or a large file read breaks that assumption
 immediately. Re-run the report if the shape of the work changes.

@@ -355,6 +355,36 @@ function byModel(events) {
   return list;
 }
 
+const MIN_PACE_SAMPLE = 5;
+
+// The middle turn, not the mean, and never from a sample so small that one
+// turn defines the pace. A compaction or a big file read can cost ten times an
+// ordinary turn, and treating that as "the" turn cost sends the headroom
+// estimate swinging: a single $7 turn once put a 13% full window at nine turns
+// left. Too few recent turns to be sure, so widen to the whole window.
+function typicalTurnCost(recentEvents, windowEvents, allEvents, minSample) {
+  const floor = Number.isFinite(minSample) ? minSample : MIN_PACE_SAMPLE;
+
+  // What a turn costs is a fact about how you work, not about which budget it
+  // is being measured against, so a thin window borrows from a wider sample
+  // rather than inventing a figure from two turns.
+  const tiers = [recentEvents, windowEvents, allEvents];
+  let pool = [];
+  for (const tier of tiers) {
+    if (tier && tier.length >= floor) {
+      pool = tier;
+      break;
+    }
+    if (tier && tier.length > pool.length) pool = tier;
+  }
+  const costs = pool
+    .map((event) => event.cost)
+    .filter((cost) => Number.isFinite(cost) && cost > 0)
+    .sort((a, b) => a - b);
+  if (!costs.length) return null;
+  return costs[Math.floor(costs.length / 2)];
+}
+
 function dominantEffort(events) {
   const counts = new Map();
   for (const event of events) {
@@ -527,12 +557,11 @@ function buildWindow(spec, snapshot, events, now, options) {
     // The API reports whole numbers, so a low reading is a wide bracket.
     window.coarse = percent < 5;
 
-    const perTurn = recent.turns
-      ? recent.cost / recent.turns
-      : spent.cost / Math.max(spent.turns, 1);
-    window.percentPerTurn = perTurn / window.usdPerPercent;
+    const perTurn = typicalTurnCost(recentEvents, inWindow, events, MIN_PACE_SAMPLE);
+    window.percentPerTurn = perTurn === null ? null : perTurn / window.usdPerPercent;
+    window.typicalTurnUSD = perTurn;
     window.percentPerHour = window.recentUSDPerHour / window.usdPerPercent;
-    if (window.percentPerTurn > 0) {
+    if (window.percentPerTurn !== null && window.percentPerTurn > 0) {
       window.turnsLeft = Math.floor(window.percentLeft / window.percentPerTurn);
     }
     if (window.percentPerHour > 0) {
@@ -1151,6 +1180,8 @@ module.exports = {
   buildWindows,
   bindingWindow,
   dominantEffort,
+  typicalTurnCost,
+  MIN_PACE_SAMPLE,
   formatDuration,
   formatUSD,
   formatCount,

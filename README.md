@@ -428,6 +428,13 @@ Good enough to plan with, not a bill. The honest caveats:
 - A model released after this table was written is priced at its family's
   average rate, and the report marks those rows with an asterisk rather than
   passing the guess off as a published price.
+- Time of day is not modelled. Anthropic used to shrink the five-hour limit
+  during peak hours, but removed that on 6 May 2026 for Pro and Max while
+  doubling the limits. If demand-based limits ever return, the numbers here
+  follow automatically, because they are calibrated from what your traffic did
+  to the meter rather than from an assumption about the clock.
+- The turn cost behind "turns of headroom" is a median over at least five
+  turns, so one compaction cannot define your pace.
 - The cache only refreshes when Claude Code talks to the API, so after a gap it
   can be hours old and its 5-hour window long since rolled over. Dropping that
   window would hide the limit that actually stops short work, so it gets rebuilt
@@ -464,7 +471,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-142 tests over the pricing, the window arithmetic, plan and credit detection,
+148 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, job forecasting, per-project
 attribution, the CLI, packaging, and the settings save/restore.
 

@@ -978,3 +978,46 @@ test('the weekly window still binds when it is genuinely the wall', () => {
     'forcing the 5-hour here would hide the limit about to stop the work'
   );
 });
+
+function costs(list) {
+  return list.map((cost) => ({ cost }));
+}
+
+test('typicalTurnCost takes the middle turn, not the mean', () => {
+  // One huge turn must not define the pace. The mean here is 2.3.
+  const sample = costs([0.2, 0.25, 0.3, 0.35, 10]);
+  assert.strictEqual(usage.typicalTurnCost(sample, [], [], 5), 0.3);
+});
+
+test('typicalTurnCost ignores a sample too thin to trust', () => {
+  const oneBigTurn = costs([7.13]);
+  const window = costs([0.2, 0.2, 0.25, 0.3, 0.3, 0.35]);
+  // Six turns, so the middle is the upper of the two: 0.3, not the 2.3 mean.
+  assert.strictEqual(
+    usage.typicalTurnCost(oneBigTurn, window, [], 5),
+    0.3,
+    'a single expensive turn is not a pace'
+  );
+});
+
+test('typicalTurnCost widens again when the window itself is thin', () => {
+  const everything = costs([0.2, 0.2, 0.25, 0.3, 0.3, 0.35]);
+  assert.strictEqual(
+    usage.typicalTurnCost(costs([9]), costs([9, 8]), everything, 5),
+    0.3,
+    'a five hour window holding two turns cannot price a turn'
+  );
+});
+
+test('typicalTurnCost uses the best it has when nothing reaches the floor', () => {
+  assert.strictEqual(usage.typicalTurnCost(costs([1]), costs([1, 2, 3]), costs([5]), 5), 2);
+});
+
+test('typicalTurnCost ignores turns that cost nothing', () => {
+  assert.strictEqual(usage.typicalTurnCost(costs([0, 0, 0.5, -1]), [], [], 1), 0.5);
+});
+
+test('typicalTurnCost gives up on an empty history', () => {
+  assert.strictEqual(usage.typicalTurnCost([], [], [], 5), null);
+  assert.strictEqual(usage.typicalTurnCost(null, null, null, 5), null);
+});
