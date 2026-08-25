@@ -167,6 +167,28 @@ node skills/usage-limits/scripts/usage.js
 node skills/usage-limits/scripts/usage.js --json
 ```
 
+## When you keep typing
+
+Every message sent while work is already running starts another turn, and each
+turn re-sends the whole conversation. Three follow-ups during one task can cost
+more than the task did.
+
+So when several additions arrive mid-task and the binding window is tight,
+Claude says so once and keeps working:
+
+> I have got all three. While the weekly window is this tight, sending them
+> together costs a good deal less than one at a time, so I will fold these in
+> and carry on.
+
+It asks once, never repeatedly, and only when the budget is actually tight.
+Asking someone to hold their thoughts when there is room to spare is rude for
+no gain.
+
+The important exclusion: it never discourages a correction, a stop, or a bug
+report. Those are the messages that save the most work, and a rule that trains
+people out of interrupting to say "that is wrong" costs far more than the turns
+it saves. Only additive scope is worth batching.
+
 ## Credits, and what happens at the wall
 
 The report says which of two things happens when the plan allowance runs out,
@@ -390,10 +412,17 @@ Good enough to plan with, not a bill. The honest caveats:
 - A model released after this table was written is priced at its family's
   average rate, and the report marks those rows with an asterisk rather than
   passing the guess off as a published price.
-- The cache only refreshes when Claude Code talks to the API, so after an idle
-  spell a window can sit past its own reset time. When that happens the report
-  says `stale` and the status line says `rolling` rather than reporting a
-  percentage for a window that has already turned over.
+- The cache only refreshes when Claude Code talks to the API, so after a gap it
+  can be hours old and its 5-hour window long since rolled over. Dropping that
+  window would hide the limit that actually stops short work, so it gets rebuilt
+  from your transcripts instead: whatever was spent inside the window the stale
+  reading describes equalled its percentage, and that price per point still
+  values the window running now. Rebuilt figures are written `~41%` in the
+  report and "about 41%" in the before-prompt line, and they say how old the
+  snapshot is so you can run `/usage` and replace the estimate with a reading.
+- A rebuilt figure only counts what this machine did. If you also worked on
+  another device it reads low, which is the dangerous direction, so treat it as
+  a floor until you refresh.
 
 [how-it-works.md](skills/usage-limits/references/how-it-works.md) has the field
 names, the formulas, and the rest of it.
@@ -419,7 +448,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-119 tests over the pricing, the window arithmetic, plan and credit detection,
+130 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, job forecasting, per-project
 attribution, the CLI, packaging, and the settings save/restore.
 

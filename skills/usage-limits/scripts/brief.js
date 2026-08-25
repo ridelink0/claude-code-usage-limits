@@ -175,9 +175,9 @@ function sessionSpend(events, sessionId) {
 
 function describeWindow(window) {
   if (!window) return null;
-  return window.stale
-    ? window.label + ' rolling over'
-    : window.label + ' ' + window.percentUsed + '%';
+  if (window.stale) return window.label + ' rolling over';
+  const about = window.estimated ? ' about ' : ' ';
+  return window.label + about + window.percentUsed + '%';
 }
 
 // Everything except the window that will actually stop the work.
@@ -206,6 +206,12 @@ function briefText(parts) {
       ? '[usage-limits] binding window is ' + bound.join(', ') + '.'
       : '[usage-limits] no usable window reading.'
   );
+  if (parts.rebuilt) {
+    sentences.push(
+      'That figure was rebuilt from local history because the ' +
+        'snapshot is ' + parts.snapshotAge + ' old; run /usage to refresh it.'
+    );
+  }
   if (parts.othersSummary) sentences.push('Other windows: ' + parts.othersSummary + '.');
   if (parts.session) {
     sentences.push(
@@ -218,7 +224,9 @@ function briefText(parts) {
     parts.pressure === 'tight' || parts.pressure === 'gone'
       ? 'Open your reply with one line on where this leaves the budget, then say ' +
         'what you will do now and what you will leave for after the reset. ' +
-        'Do not start work that clearly will not finish.'
+        'Do not start work that clearly will not finish. If several additions ' +
+        'arrive while you are working, say once that sending them together ' +
+        'costs less, then carry on; never say it about a correction or a stop.'
       : 'Open your reply with one short line stating this and confirming the ' +
         'request fits, then get on with the work. Keep it to a single line.';
 
@@ -240,38 +248,50 @@ async function run(now, hookInput) {
   if (!base.utilization) return '';
 
   const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
-
-  // The percentages are cheap: one small file, no transcripts.
-  const cheap = usage.buildWindows(base.utilization, [], now);
-  if (!cheap.length) return '';
-
   const all = readCache();
-  const cached = pickCached(all, sessionId, now, config.cacheSeconds * SECOND);
+  let view = pickCached(all, sessionId, now, config.cacheSeconds * SECOND);
 
-  let turnsLeft = cached ? cached.turnsLeft : null;
-  let session = cached ? cached.session : null;
-  let windows = cheap;
-
-  if (!cached) {
+  // Everything shown has to come from one pass. Deriving the turns from a
+  // full scan and the binding window from somewhere cheaper is how the two
+  // end up describing different windows.
+  if (!view || !view.binding) {
     const events = await usage.readEvents(now - 8 * DAY);
-    windows = usage.buildWindows(base.utilization, events, now);
+    const windows = usage.buildWindows(base.utilization, events, now);
     const binding = usage.bindingWindow(windows);
-    turnsLeft = binding && Number.isFinite(binding.turnsLeft) ? binding.turnsLeft : null;
-    session = sessionSpend(events, sessionId);
-    writeCache(mergeCache(all, sessionId, { at: now, turnsLeft, session }, KEEP_SESSIONS));
+    view = {
+      at: now,
+      turnsLeft: binding && Number.isFinite(binding.turnsLeft) ? binding.turnsLeft : null,
+      session: sessionSpend(events, sessionId),
+      othersSummary: summariseOthers(windows, binding && binding.key),
+      binding: binding
+        ? {
+            key: binding.key,
+            label: binding.label,
+            percentUsed: binding.percentUsed,
+            stale: binding.stale,
+            estimated: binding.estimated,
+            resetsAt: binding.resetsAt,
+            verdict: binding.verdict,
+            windowStart: binding.windowStart,
+            spanMs: binding.spanMs,
+          }
+        : null,
+    };
+    writeCache(mergeCache(all, sessionId, view, KEEP_SESSIONS));
   }
 
-  const binding = usage.bindingWindow(windows) || windows[0];
-
+  const binding = view.binding;
   return briefText({
     binding,
-    othersSummary: summariseOthers(windows, binding && binding.key),
-    turnsLeft,
+    othersSummary: view.othersSummary,
+    turnsLeft: view.turnsLeft,
     resetsIn:
-      binding && !binding.stale && binding.msToReset !== null
-        ? usage.formatDuration(binding.msToReset)
+      binding && !binding.stale && Number.isFinite(binding.resetsAt)
+        ? usage.formatDuration(binding.resetsAt - now)
         : null,
-    session,
+    session: view.session,
+    rebuilt: Boolean(binding && binding.estimated),
+    snapshotAge: usage.formatDuration(base.snapshotAgeMs),
     pressure: pressure(binding, now, config),
   });
 }

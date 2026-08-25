@@ -842,3 +842,97 @@ test('byModel flags rows that were priced by assumption', () => {
   assert.strictEqual(known.estimated, false);
   assert.strictEqual(guessed.estimated, true);
 });
+
+const fiveHour = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+
+// A snapshot whose window closed `ago` before now, reporting `percent` used.
+function rolledOver(percent, ago) {
+  return { utilization: percent, resets_at: new Date(NOW - ago).toISOString() };
+}
+
+test('reconstructWindow prices the live window from the closed one', () => {
+  // The closed window cost $100 and was reported as 100% used, so a point is
+  // worth a dollar. $37 has gone through the window running now.
+  const closed = events([
+    { offset: -7 * HOUR, cost: 60 },
+    { offset: -6 * HOUR, cost: 40 },
+  ]);
+  const live = events([{ offset: -1 * HOUR, cost: 37 }]);
+  const shot = usage.reconstructWindow(
+    fiveHour,
+    rolledOver(100, 2 * HOUR),
+    closed.concat(live),
+    NOW
+  );
+  assert.strictEqual(shot.usdPerPercent, 1);
+  assert.strictEqual(shot.percentUsed, 37);
+  assert.strictEqual(shot.windowStart, NOW - 5 * HOUR);
+});
+
+test('reconstructWindow will not exceed a full window', () => {
+  const closed = events([{ offset: -7 * HOUR, cost: 10 }]);
+  const live = events([{ offset: -1 * HOUR, cost: 999 }]);
+  const shot = usage.reconstructWindow(
+    fiveHour,
+    rolledOver(100, 2 * HOUR),
+    closed.concat(live),
+    NOW
+  );
+  assert.strictEqual(shot.percentUsed, 100);
+});
+
+test('reconstructWindow leaves a window that has not rolled over alone', () => {
+  const snapshot = { utilization: 50, resets_at: new Date(NOW + HOUR).toISOString() };
+  assert.strictEqual(
+    usage.reconstructWindow(fiveHour, snapshot, events([{ offset: -HOUR, cost: 5 }]), NOW),
+    null
+  );
+});
+
+test('reconstructWindow refuses when it cannot calibrate', () => {
+  const spend = events([{ offset: -1 * HOUR, cost: 5 }]);
+  // Nothing was spent inside the closed window, so a point has no price.
+  assert.strictEqual(usage.reconstructWindow(fiveHour, rolledOver(100, 2 * HOUR), spend, NOW), null);
+  // An untouched closed window says nothing either.
+  assert.strictEqual(usage.reconstructWindow(fiveHour, rolledOver(0, 2 * HOUR), spend, NOW), null);
+  assert.strictEqual(usage.reconstructWindow(fiveHour, null, spend, NOW), null);
+  assert.strictEqual(
+    usage.reconstructWindow(fiveHour, { utilization: 50, resets_at: null }, spend, NOW),
+    null
+  );
+});
+
+test('a rolled over window comes back rebuilt, and says it was rebuilt', () => {
+  const utilization = {
+    five_hour: rolledOver(100, 2 * HOUR),
+    seven_day: { utilization: 34, resets_at: new Date(NOW + 5 * 24 * HOUR).toISOString() },
+  };
+  const sample = events([
+    { offset: -7 * HOUR, cost: 100 },
+    { offset: -1 * HOUR, cost: 37 },
+  ]);
+  const windows = usage.buildWindows(utilization, sample, NOW);
+  const five = windows.find((w) => w.key === 'five_hour');
+
+  assert.strictEqual(five.stale, false, 'it is usable again');
+  assert.strictEqual(five.estimated, true, 'but the reader has to know it was derived');
+  assert.strictEqual(five.percentUsed, 37);
+});
+
+test('a rebuilt window is eligible to be the binding one', () => {
+  const utilization = {
+    five_hour: rolledOver(100, 2 * HOUR),
+    seven_day: { utilization: 5, resets_at: new Date(NOW + 5 * 24 * HOUR).toISOString() },
+  };
+  const sample = events([
+    { offset: -7 * HOUR, cost: 100 },
+    { offset: -0.5 * HOUR, cost: 80 },
+  ]);
+  const windows = usage.buildWindows(utilization, sample, NOW);
+  const binding = usage.bindingWindow(windows);
+  assert.strictEqual(
+    binding.key,
+    'five_hour',
+    'dropping it would hide the limit that actually stops short work'
+  );
+});

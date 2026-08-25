@@ -78,6 +78,37 @@ abandoned mid-edit.
 **The window resets first.** If the reset lands before the budget runs out,
 the limit is not the constraint. Say that and stop optimising for it.
 
+## When messages stack up
+
+Every message sent while work is already running starts another turn, and every
+turn re-sends the whole conversation. Three follow-ups during one task can cost
+more than the task did.
+
+So when several additions arrive while you are still working and the binding
+window is tight, say it once, then keep going:
+
+> I have got all three. While the weekly window is this tight, sending them
+> together costs a good deal less than one at a time, so I will fold these in
+> and carry on. Send the rest in one go if you can.
+
+Four rules keep that from being obnoxious, and they matter more than the saving.
+
+**Ask once per stretch of work.** A second reminder costs more goodwill than
+the tokens it saves.
+
+**Only when the budget is actually tight.** With room to spare, asking someone
+to hold their thoughts is rude for no gain. Say nothing.
+
+**Never discourage a correction, a stop, or a bug report.** Those are the
+messages that save the most work. Someone interrupting to say the approach is
+wrong has just paid for their own interruption many times over, and a rule that
+trains people out of that is far more expensive than the turns it saves. Only
+additive scope, the "also do X" and "and can you Y", is worth batching.
+
+**Never make it about you.** The cost lands on their limit, not yours. Frame it
+as their budget, offer the saving, and let them decide. Then work. Do not stop
+to negotiate about whether to stop.
+
 ## Credits
 
 The `Credits` line in the report says what actually happens at the limit, and

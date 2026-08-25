@@ -470,12 +470,17 @@ function forecastWindow(window, turns, rates) {
 }
 
 // Everything the report needs about one limit window.
-function buildWindow(spec, snapshot, events, now) {
+function buildWindow(spec, snapshot, events, now, options) {
+  const extra = options || {};
   const percent =
     snapshot && typeof snapshot.utilization === 'number' ? snapshot.utilization : null;
   const resetsAt = snapshot && snapshot.resets_at ? Date.parse(snapshot.resets_at) : null;
   const hasReset = Number.isFinite(resetsAt);
-  const start = hasReset ? resetsAt - spec.span : now - spec.span;
+  const start = Number.isFinite(extra.windowStart)
+    ? extra.windowStart
+    : hasReset
+      ? resetsAt - spec.span
+      : now - spec.span;
 
   const inWindow = events.filter((event) => event.at >= start && event.at <= now);
   const spent = totals(inWindow);
@@ -508,6 +513,9 @@ function buildWindow(spec, snapshot, events, now) {
     headroomMs: null,
     coarse: false,
     stale: false,
+    // True when the percentage was rebuilt from local history because the
+    // snapshot had gone stale, rather than read from the snapshot itself.
+    estimated: Boolean(extra.estimated),
     verdict: 'unknown',
   };
 
@@ -667,6 +675,39 @@ function collect(now) {
   };
 }
 
+// A snapshot only refreshes when Claude Code talks to the API, so after a
+// gap it can be hours old and its 5-hour window long since rolled over.
+// Dropping that window loses the limit that actually stops short work, so
+// rebuild it from the transcripts instead.
+//
+// The trick is that the stale reading is still a usable calibration: whatever
+// was spent inside the window it describes equalled its percentage. That
+// dollars-per-point figure is a property of the plan, not of the moment, so it
+// still prices the window running now.
+function reconstructWindow(spec, snapshot, events, now) {
+  if (!snapshot || typeof snapshot.utilization !== 'number') return null;
+  if (snapshot.utilization <= 0) return null;
+
+  const resetsAt = snapshot.resets_at ? Date.parse(snapshot.resets_at) : null;
+  if (!Number.isFinite(resetsAt) || resetsAt > now) return null;
+
+  const pastStart = resetsAt - spec.span;
+  const past = totals(events.filter((e) => e.at >= pastStart && e.at <= resetsAt));
+  if (past.cost <= 0) return null;
+
+  const usdPerPercent = past.cost / snapshot.utilization;
+  const liveStart = now - spec.span;
+  const live = totals(events.filter((e) => e.at >= liveStart && e.at <= now));
+
+  return {
+    percentUsed: Math.min(100, Math.round(live.cost / usdPerPercent)),
+    usdPerPercent,
+    spentUSD: live.cost,
+    turns: live.turns,
+    windowStart: liveStart,
+  };
+}
+
 // No snapshot at all means no windows, which is what tells the report to
 // explain itself rather than print a table of dashes.
 function buildWindows(utilization, events, now) {
@@ -675,7 +716,20 @@ function buildWindows(utilization, events, now) {
     const snapshot = utilization[spec.key];
     // The per-model weekly windows only exist on some plans.
     if (spec.key !== 'five_hour' && spec.key !== 'seven_day' && !snapshot) return null;
-    return buildWindow(spec, snapshot, events, now);
+
+    const window = buildWindow(spec, snapshot, events, now);
+    if (!window.stale) return window;
+
+    // Rolled over. Rebuild from local history rather than going blind on it.
+    const rebuilt = reconstructWindow(spec, snapshot, events, now);
+    if (!rebuilt) return window;
+    return buildWindow(
+      spec,
+      { utilization: rebuilt.percentUsed, resets_at: null },
+      events,
+      now,
+      { estimated: true, windowStart: rebuilt.windowStart }
+    );
   }).filter(Boolean);
 }
 
@@ -842,7 +896,11 @@ function render(data) {
     lines.push(
       '  ' + pad(window.label, 15) +
         padLeft(
-          window.stale ? 'stale' : window.percentUsed === null ? '-' : window.percentUsed + '%',
+          window.stale
+            ? 'stale'
+            : window.percentUsed === null
+              ? '-'
+              : (window.estimated ? '~' : '') + window.percentUsed + '%',
           6
         ) +
         padLeft(formatDuration(window.msToReset), 12) +
@@ -908,6 +966,15 @@ function render(data) {
     lines.push('  Recent pace   no turns in the last hour');
   }
   lines.push('  Measured      ' + formatCount(data.measuredTurns) + ' turns of local transcript');
+
+  if (data.windows.some((window) => window.estimated)) {
+    lines.push(
+      '  Note          ~ means the snapshot had gone stale and that window was rebuilt'
+    );
+    lines.push(
+      '                from local history. Run /usage to replace it with a real reading.'
+    );
+  }
 
   if (data.binding && data.binding.coarse) {
     lines.push('  Note          the meter reads in whole percent, so a low reading is a wide bracket');
@@ -1064,6 +1131,7 @@ module.exports = {
   eventFrom,
   readEvents,
   buildWindow,
+  reconstructWindow,
   buildWindows,
   bindingWindow,
   dominantEffort,

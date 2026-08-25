@@ -301,3 +301,57 @@ test('keepSlots survives anything at all', () => {
   assert.deepStrictEqual(brief.keepSlots(42), {});
   assert.deepStrictEqual(brief.keepSlots({}), {});
 });
+
+test('a rebuilt reading is hedged, a read one is not', () => {
+  assert.strictEqual(brief.describeWindow(weekly(41, 2 * DAY)), 'weekly 41%');
+  assert.strictEqual(
+    brief.describeWindow(Object.assign(weekly(41, 2 * DAY), { estimated: true })),
+    'weekly about 41%',
+    'a derived number must not read as a measured one'
+  );
+});
+
+test('the line explains a rebuilt reading and how to replace it', () => {
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 41, stale: false, estimated: true },
+    othersSummary: 'weekly 34%',
+    turnsLeft: 30,
+    resetsIn: null,
+    session: null,
+    rebuilt: true,
+    snapshotAge: '10h 19m',
+    pressure: 'tight',
+  });
+  assert.match(text, /5-hour about 41% used/);
+  assert.match(text, /rebuilt from local history/);
+  assert.match(text, /snapshot is 10h 19m old/);
+  assert.match(text, /run \/usage/);
+});
+
+test('a normal reading says nothing about rebuilding', () => {
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 41, stale: false, estimated: false },
+    othersSummary: 'weekly 34%',
+    turnsLeft: 30,
+    resetsIn: '2h',
+    session: null,
+    rebuilt: false,
+    snapshotAge: '3m',
+    pressure: 'roomy',
+  });
+  assert.doesNotMatch(text, /rebuilt from local history/);
+  assert.doesNotMatch(text, /run \/usage/);
+});
+
+test('the tight instruction asks for batching without discouraging corrections', () => {
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 90, stale: false },
+    othersSummary: '',
+    turnsLeft: 4,
+    resetsIn: '20m',
+    session: null,
+    pressure: 'tight',
+  });
+  assert.match(text, /sending them together/);
+  assert.match(text, /never say it about a correction or a stop/);
+});
