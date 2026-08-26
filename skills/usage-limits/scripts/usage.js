@@ -582,6 +582,8 @@ function buildWindow(spec, snapshot, events, now, options) {
     // True when spend since the snapshot was added to its reading.
     adjusted: false,
     pointsSinceSnapshot: 0,
+    // Set when spend since the snapshot could not be priced sensibly.
+    correctionUnreliable: false,
     verdict: 'unknown',
   };
 
@@ -610,10 +612,22 @@ function buildWindow(spec, snapshot, events, now, options) {
   ) {
     const upTo = totals(inWindow.filter((e) => e.at <= extra.fetchedAt));
     const after = totals(inWindow.filter((e) => e.at > extra.fetchedAt));
-    if (upTo.cost > 0 && after.cost > 0) {
+
+    // The baseline has to be worth something. Pricing a point off two or three
+    // turns makes it far too cheap, and every dollar spent since then is then
+    // divided by that, which is how a window truly at 55% got corrected all the
+    // way to a confident 100.
+    if (upTo.cost > 0 && after.cost > 0 && upTo.turns >= MIN_BASELINE_TURNS) {
       const pricePerPoint = upTo.cost / rawPercent;
       sinceSnapshot = after.cost / pricePerPoint;
-      if (sinceSnapshot >= 1) {
+
+      // Same rule as a rebuild: past this it is the calibration that is full,
+      // not the window. Better to leave the reading uncorrected and say the
+      // snapshot is old than to assert a budget that is gone.
+      if (rawPercent + sinceSnapshot > SATURATION_LIMIT) {
+        sinceSnapshot = 0;
+        window.correctionUnreliable = true;
+      } else if (sinceSnapshot >= 1) {
         percent = Math.min(100, Math.round(rawPercent + sinceSnapshot));
         window.adjusted = true;
         window.pointsSinceSnapshot = Math.round(sinceSnapshot);
@@ -812,6 +826,9 @@ function collect(now) {
 // Anything above this and the calibration, not the budget, is what is full.
 const SATURATION_LIMIT = 105;
 
+// Fewer turns than this before the snapshot and a point cannot be priced.
+const MIN_BASELINE_TURNS = 5;
+
 function reconstructWindow(spec, snapshot, events, now) {
   if (!snapshot || typeof snapshot.utilization !== 'number') return null;
   if (snapshot.utilization <= 0) return null;
@@ -879,7 +896,20 @@ function buildWindows(utilization, events, now, fetchedAt) {
   }).filter(Boolean);
 }
 
-async function report(now) {
+// What one session has spent, out of everything on record.
+function sessionSpend(events, sessionId) {
+  if (!sessionId) return null;
+  let cost = 0;
+  let turns = 0;
+  for (const event of events) {
+    if (event.sessionId !== sessionId) continue;
+    cost += event.cost;
+    turns += 1;
+  }
+  return turns ? { turns, cost } : null;
+}
+
+async function report(now, options) {
   const base = collect(now);
   // A stale snapshot can put a window's start slightly further back than
   // seven days, so give the scan a day of slack.
@@ -901,6 +931,8 @@ async function report(now) {
     binding,
     credits: creditsFrom(base.utilization),
     sessions: activeSessions(events, now, CONCURRENT_WINDOW_MS),
+    session: sessionSpend(events, options && options.sessionId),
+    staleWindows: windows.filter((w) => w.stale).length,
     rates: costPercentiles(recentEvents.length >= 5 ? recentEvents : scoped),
     resumeAt: binding ? binding.resetsAt : null,
     models: byModel(scoped),
@@ -1300,11 +1332,13 @@ module.exports = {
   buildWindow,
   reconstructWindow,
   SATURATION_LIMIT,
+  MIN_BASELINE_TURNS,
   buildWindows,
   bindingWindow,
   dominantEffort,
   typicalTurnCost,
   activeSessions,
+  sessionSpend,
   shareOf,
   CONCURRENT_WINDOW_MS,
   MIN_PACE_SAMPLE,

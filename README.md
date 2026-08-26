@@ -325,6 +325,13 @@ explaining is pace: two days into a week you should be near 29 percent spent, so
 60 percent means you will not last the week, and that is worth hearing at 60
 rather than at 85.
 
+One limit worth knowing: the hook fires when a prompt is submitted, so a
+message sent while Claude is already working does not refresh it. Claude Code
+delivers those into the running turn without re-running hooks, which no plugin
+can intercept. The skill handles it by telling Claude the figures age during a
+turn, and to re-read them before claiming a job fits rather than trusting a
+number from several tool calls ago.
+
 It has to be cheap, because it runs on every prompt. The percentages come from
 one small file. The transcript scan behind "turns of headroom" is cached for a
 minute, so it costs about 400ms cold and 120ms warm.
@@ -502,7 +509,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-179 tests over the pricing, the window arithmetic, plan and credit detection,
+181 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, job forecasting, per-project
 attribution, the CLI, packaging, and the settings save/restore.
 

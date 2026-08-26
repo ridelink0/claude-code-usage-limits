@@ -180,17 +180,8 @@ function readHookInput() {
   });
 }
 
-function sessionSpend(events, sessionId) {
-  if (!sessionId) return null;
-  let cost = 0;
-  let turns = 0;
-  for (const event of events) {
-    if (event.sessionId !== sessionId) continue;
-    cost += event.cost;
-    turns += 1;
-  }
-  return turns ? { turns, cost } : null;
-}
+// Kept as a re-export so there is exactly one implementation.
+const sessionSpend = usage.sessionSpend;
 
 function describeWindow(window) {
   if (!window) return null;
@@ -294,16 +285,18 @@ async function run(now, hookInput) {
   // full scan and the binding window from somewhere cheaper is how the two
   // end up describing different windows.
   if (!view || !view.binding) {
-    const events = await usage.readEvents(now - 8 * DAY);
-    const windows = usage.buildWindows(base.utilization, events, now);
-    const binding = usage.bindingWindow(windows);
+    // One call, shared with the report. Building the view twice is how the
+    // snapshot correction reached the report and never reached the hook.
+    const data = await usage.report(now, { sessionId });
+    const binding = data.binding;
     view = {
       at: now,
       turnsLeft: binding && Number.isFinite(binding.turnsLeft) ? binding.turnsLeft : null,
-      session: sessionSpend(events, sessionId),
-      othersSummary: summariseOthers(windows, binding && binding.key),
-      sessions: usage.activeSessions(events, now, usage.CONCURRENT_WINDOW_MS),
-      staleWindows: windows.filter((w) => w.stale).length,
+      session: data.session,
+      othersSummary: summariseOthers(data.windows, binding && binding.key),
+      sessions: data.sessions,
+      staleWindows: data.staleWindows,
+      snapshotAge: usage.formatDuration(data.snapshotAgeMs),
       binding: binding
         ? {
             key: binding.key,
@@ -313,6 +306,7 @@ async function run(now, hookInput) {
             estimated: binding.estimated,
             adjusted: binding.adjusted,
             pointsSinceSnapshot: binding.pointsSinceSnapshot,
+            correctionUnreliable: binding.correctionUnreliable,
             resetsAt: binding.resetsAt,
             verdict: binding.verdict,
             windowStart: binding.windowStart,
@@ -342,7 +336,7 @@ async function run(now, hookInput) {
     rebuilt: Boolean(binding && binding.estimated),
     staleWindows: view.staleWindows || 0,
     pointsSinceSnapshot: (binding && binding.pointsSinceSnapshot) || 0,
-    snapshotAge: usage.formatDuration(base.snapshotAgeMs),
+    snapshotAge: view.snapshotAge,
     pressure: pressure(binding, now, config, view.turnsLeft),
   });
 }

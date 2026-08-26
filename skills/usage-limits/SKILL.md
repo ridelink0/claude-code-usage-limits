@@ -78,6 +78,29 @@ abandoned mid-edit.
 **The window resets first.** If the reset lands before the budget runs out,
 the limit is not the constraint. Say that and stop optimising for it.
 
+## The budget line ages during a turn
+
+The hook runs when a prompt is submitted, so the figures you were given are
+from the start of the turn. A message sent while you are already working does
+not fire it again: it arrives without a budget line, and the numbers you are
+holding are now older than they look.
+
+That matters most when it is the one thing you are about to assert. Re-check
+before saying a job fits, if any of these are true:
+
+- the turn has run long, or through many tool calls
+- more requests arrived while you were working
+- other sessions are active, so the budget is draining without you
+
+```
+node scripts/usage.js --status
+```
+
+That is one cheap read of a small file, no transcript scan, and it costs far
+less than promising to finish something and stopping halfway. If you have no
+budget line at all this turn, you are mid-turn: use the last one you were given
+and treat it as a ceiling, not a reading.
+
 ## When messages stack up
 
 Every message sent while work is already running starts another turn, and every

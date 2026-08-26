@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const usage = require('../skills/usage-limits/scripts/usage.js');
 
@@ -1132,8 +1134,15 @@ test('spend since the snapshot is added to its reading', () => {
   const fetchedAt = NOW - 10 * 60 * 1000;
   const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
   const snapshot = { utilization: 49, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+  // Six turns before the snapshot, because a point cannot be priced off one.
+  // They have to sit inside the window, which opened an hour ago.
   const sample = events([
-    { offset: -60 * 60 * 1000, cost: 21.06 },
+    { offset: -55 * 60 * 1000, cost: 3.51 },
+    { offset: -50 * 60 * 1000, cost: 3.51 },
+    { offset: -45 * 60 * 1000, cost: 3.51 },
+    { offset: -40 * 60 * 1000, cost: 3.51 },
+    { offset: -35 * 60 * 1000, cost: 3.51 },
+    { offset: -30 * 60 * 1000, cost: 3.51 },
     { offset: -5 * 60 * 1000, cost: 16.97 },
   ]);
 
@@ -1161,15 +1170,38 @@ test('the adjustment never runs on a window that has rolled over', () => {
   assert.strictEqual(window.adjusted, false, 'a stale reading is not a base to build on');
 });
 
-test('the adjustment cannot push a window past full', () => {
+test('a correction that overflows the window is refused, not capped', () => {
+  // Capping produced the reported failure in the other direction: a window
+  // truly at 55% was corrected all the way to a confident 100.
   const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
   const snapshot = { utilization: 90, resets_at: new Date(NOW + HOUR).toISOString() };
   const sample = events([
-    { offset: -60 * 60 * 1000, cost: 90 },
+    { offset: -70 * 60 * 1000, cost: 15 },
+    { offset: -65 * 60 * 1000, cost: 15 },
+    { offset: -60 * 60 * 1000, cost: 15 },
+    { offset: -55 * 60 * 1000, cost: 15 },
+    { offset: -50 * 60 * 1000, cost: 15 },
+    { offset: -45 * 60 * 1000, cost: 15 },
     { offset: -60 * 1000, cost: 500 },
   ]);
   const window = usage.buildWindow(spec, snapshot, sample, NOW, { fetchedAt: NOW - 10 * 60 * 1000 });
-  assert.strictEqual(window.percentUsed, 100);
+  assert.strictEqual(window.percentUsed, 90, 'the reading is left as it was');
+  assert.strictEqual(window.adjusted, false);
+  assert.strictEqual(window.correctionUnreliable, true, 'and it says the figure may be low');
+});
+
+test('a baseline too thin to price a point is not used', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 49, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+  // Two turns before the snapshot cannot say what a point costs.
+  const sample = events([
+    { offset: -60 * 60 * 1000, cost: 2 },
+    { offset: -50 * 60 * 1000, cost: 2 },
+    { offset: -60 * 1000, cost: 30 },
+  ]);
+  const window = usage.buildWindow(spec, snapshot, sample, NOW, { fetchedAt: NOW - 10 * 60 * 1000 });
+  assert.strictEqual(window.adjusted, false);
+  assert.strictEqual(window.percentUsed, 49);
 });
 
 test('no snapshot timestamp means no adjustment rather than a guess', () => {
@@ -1294,10 +1326,13 @@ test('another Claude working alongside is counted in the reading', () => {
   const withSession = (offset, cost, sessionId) =>
     Object.assign(events([{ offset, cost }])[0], { sessionId });
 
-  const alone = [withSession(-60 * 60 * 1000, 21, 'mine'), withSession(-5 * 60 * 1000, 8, 'mine')];
+  const baseline = [55, 50, 45, 40, 35, 30].map((mins) =>
+    withSession(-mins * 60 * 1000, 3.5, 'mine')
+  );
+  const alone = baseline.concat([withSession(-5 * 60 * 1000, 4, 'mine')]);
   const shared = alone.concat([
-    withSession(-4 * 60 * 1000, 9, 'other'),
-    withSession(-2 * 60 * 1000, 9, 'third'),
+    withSession(-4 * 60 * 1000, 3, 'other'),
+    withSession(-2 * 60 * 1000, 3, 'third'),
   ]);
 
   const solo = usage.buildWindow(fiveSpec, snapshot, alone, NOW, { fetchedAt });
@@ -1308,4 +1343,19 @@ test('another Claude working alongside is counted in the reading', () => {
     'the other sessions spent real budget and it has to show'
   );
   assert.ok(together.percentUsed > solo.percentUsed);
+});
+
+test('report carries everything the hook needs, so neither builds its own view', () => {
+  // The reported failure: the hook built windows itself and forgot to pass the
+  // snapshot timestamp, so the correction reached the report and never reached
+  // the line Claude actually reads. One builder, or they drift again.
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'skills', 'usage-limits', 'scripts', 'brief.js'),
+    'utf8'
+  );
+  assert.ok(
+    !/usage\.buildWindows\(/.test(source),
+    'brief.js must not build windows itself; it should ask report() for them'
+  );
+  assert.ok(/usage\.report\(/.test(source), 'brief.js should call report()');
 });
