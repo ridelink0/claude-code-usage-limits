@@ -532,6 +532,43 @@ function shareOf(sessions, sessionId) {
   return mine.share > 0 ? mine.share : 1 / sessions.length;
 }
 
+// What a point of a window costs is a property of the plan, not of the moment,
+// so it should be learned once from a good sample rather than re-derived from
+// whatever slice happens to be to hand. A thin baseline prices a point badly
+// and every correction built on it inherits the error: a 24 minute old
+// snapshot once turned a window truly at 70 per cent into a confident 82.
+function calibrationFile() {
+  return path.join(configDir(), 'usage-limits-calibration.json');
+}
+
+function readCalibration() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(calibrationFile(), 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function writeCalibration(all) {
+  try {
+    fs.mkdirSync(path.dirname(calibrationFile()), { recursive: true });
+    fs.writeFileSync(calibrationFile(), JSON.stringify(all), 'utf8');
+  } catch (err) {
+    // Losing it costs accuracy on the next thin baseline, nothing more.
+  }
+}
+
+// A sample is better when it rests on more turns. Percentages read in whole
+// numbers, so a bigger percentage also divides more precisely.
+function betterCalibration(current, candidate) {
+  if (!candidate || !Number.isFinite(candidate.usdPerPercent) || candidate.usdPerPercent <= 0) {
+    return current || null;
+  }
+  if (!current || !Number.isFinite(current.turns)) return candidate;
+  return candidate.turns > current.turns ? candidate : current;
+}
+
 // Everything the report needs about one limit window.
 function buildWindow(spec, snapshot, events, now, options) {
   const extra = options || {};
@@ -584,6 +621,8 @@ function buildWindow(spec, snapshot, events, now, options) {
     pointsSinceSnapshot: 0,
     // Set when spend since the snapshot could not be priced sensibly.
     correctionUnreliable: false,
+    // The price-per-point this window derived from its own baseline.
+    calibration: null,
     verdict: 'unknown',
   };
 
@@ -618,7 +657,13 @@ function buildWindow(spec, snapshot, events, now, options) {
     // divided by that, which is how a window truly at 55% got corrected all the
     // way to a confident 100.
     if (upTo.cost > 0 && after.cost > 0 && upTo.turns >= MIN_BASELINE_TURNS) {
-      const pricePerPoint = upTo.cost / rawPercent;
+      const mine = { usdPerPercent: upTo.cost / rawPercent, turns: upTo.turns, percent: rawPercent };
+      const known = extra.knownCalibration;
+      // Trust the better-sampled of the two, whichever that is.
+      const chosen =
+        known && Number.isFinite(known.turns) && known.turns > upTo.turns ? known : mine;
+      window.calibration = mine;
+      const pricePerPoint = chosen.usdPerPercent;
       sinceSnapshot = after.cost / pricePerPoint;
 
       // Same rule as a rebuild: past this it is the calibration that is full,
@@ -887,14 +932,17 @@ function reconstructWindow(spec, snapshot, events, now) {
 
 // No snapshot at all means no windows, which is what tells the report to
 // explain itself rather than print a table of dashes.
-function buildWindows(utilization, events, now, fetchedAt) {
+function buildWindows(utilization, events, now, fetchedAt, learned) {
   if (!utilization) return [];
   return WINDOWS.map((spec) => {
     const snapshot = utilization[spec.key];
     // The per-model weekly windows only exist on some plans.
     if (spec.key !== 'five_hour' && spec.key !== 'seven_day' && !snapshot) return null;
 
-    const window = buildWindow(spec, snapshot, events, now, { fetchedAt });
+    const window = buildWindow(spec, snapshot, events, now, {
+      fetchedAt,
+      knownCalibration: learned ? learned[spec.key] : null,
+    });
     if (!window.stale) return window;
 
     // Rolled over. Rebuild from local history rather than going blind on it.
@@ -934,7 +982,27 @@ async function report(now, options) {
   const earliest = now - 8 * DAY;
   const events = await readEvents(earliest);
 
-  const windows = buildWindows(base.utilization, events, now, base.snapshotFetchedAt);
+  const learned = readCalibration();
+  const windows = buildWindows(
+    base.utilization,
+    events,
+    now,
+    base.snapshotFetchedAt,
+    learned
+  );
+
+  // Keep the best sample seen so far, so a thin baseline never has to guess.
+  const updated = Object.assign({}, learned);
+  let changed = false;
+  for (const window of windows) {
+    if (!window.calibration) continue;
+    const best = betterCalibration(learned[window.key], window.calibration);
+    if (best && best !== learned[window.key]) {
+      updated[window.key] = best;
+      changed = true;
+    }
+  }
+  if (changed) writeCalibration(updated);
 
   const recentEvents = events.filter((event) => event.at >= now - HOUR);
   const recent = totals(recentEvents);
@@ -1359,6 +1427,8 @@ module.exports = {
   buildWindows,
   bindingWindow,
   criticalOthers,
+  betterCalibration,
+  calibrationFile,
   CRITICAL_PERCENT,
   dominantEffort,
   typicalTurnCost,

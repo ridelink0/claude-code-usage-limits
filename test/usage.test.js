@@ -1387,3 +1387,62 @@ test('criticalOthers ignores comfortable and unreadable windows', () => {
   assert.deepStrictEqual(usage.criticalOthers([roomy, stale, blank], 'five_hour'), []);
   assert.strictEqual(usage.CRITICAL_PERCENT, 85);
 });
+
+test('betterCalibration keeps whichever sample rests on more turns', () => {
+  const thin = { usdPerPercent: 0.9, turns: 3, percent: 30 };
+  const solid = { usdPerPercent: 0.54, turns: 50, percent: 68 };
+  assert.strictEqual(usage.betterCalibration(thin, solid), solid);
+  assert.strictEqual(usage.betterCalibration(solid, thin), solid, 'a thin sample cannot displace a good one');
+  assert.strictEqual(usage.betterCalibration(null, thin), thin, 'anything beats nothing');
+});
+
+test('betterCalibration refuses a nonsense sample', () => {
+  const solid = { usdPerPercent: 0.54, turns: 50, percent: 68 };
+  assert.strictEqual(usage.betterCalibration(solid, null), solid);
+  assert.strictEqual(usage.betterCalibration(solid, { usdPerPercent: 0, turns: 999 }), solid);
+  assert.strictEqual(usage.betterCalibration(solid, { usdPerPercent: NaN, turns: 999 }), solid);
+  assert.strictEqual(usage.betterCalibration(null, { usdPerPercent: -1, turns: 9 }), null);
+});
+
+test('a thin baseline borrows the remembered price instead of guessing', () => {
+  // The reported failure: a stale snapshot with few turns behind it priced a
+  // point far too cheaply, and a window truly at 70% was reported as 82%.
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 30, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+  const fetchedAt = NOW - 24 * 60 * 1000;
+  const sample = events([
+    { offset: -40 * 60 * 1000, cost: 3 },
+    { offset: -35 * 60 * 1000, cost: 3 },
+    { offset: -30 * 60 * 1000, cost: 3 },
+    { offset: -28 * 60 * 1000, cost: 3 },
+    { offset: -26 * 60 * 1000, cost: 3 },
+    { offset: -10 * 60 * 1000, cost: 21 },
+  ]);
+
+  const guessing = usage.buildWindow(spec, snapshot, sample, NOW, { fetchedAt });
+  const remembering = usage.buildWindow(spec, snapshot, sample, NOW, {
+    fetchedAt,
+    knownCalibration: { usdPerPercent: 0.54, turns: 50, percent: 68 },
+  });
+
+  assert.ok(
+    remembering.percentUsed < guessing.percentUsed,
+    'the remembered price is dearer, so it adds fewer points'
+  );
+  assert.strictEqual(remembering.calibration.turns, 5, 'it still reports what it saw itself');
+});
+
+test('a better baseline is preferred over a remembered one', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 50, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+  const many = [];
+  for (let i = 0; i < 40; i += 1) many.push({ offset: -(60 - i) * 60 * 1000, cost: 1 });
+  many.push({ offset: -60 * 1000, cost: 5 });
+
+  const window = usage.buildWindow(spec, snapshot, events(many), NOW, {
+    fetchedAt: NOW - 10 * 60 * 1000,
+    knownCalibration: { usdPerPercent: 99, turns: 2, percent: 10 },
+  });
+  assert.ok(window.calibration.turns > 2);
+  assert.ok(window.adjusted, 'its own richer sample should have been used');
+});

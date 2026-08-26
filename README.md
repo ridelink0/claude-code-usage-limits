@@ -473,6 +473,11 @@ Good enough to plan with, not a bill. The honest caveats:
   to the meter rather than from an assumption about the clock.
 - The turn cost behind "turns of headroom" is a median over at least five
   turns, so one compaction cannot define your pace.
+- What a point of a window costs is learned once from the best sample seen and
+  remembered, rather than re-derived each time from whatever slice is to hand.
+  A thin baseline prices a point badly and every correction built on it
+  inherits the error, which is how a window truly at 70 percent once came out
+  at 82.
 - The cache only refreshes when Claude Code talks to the API, so after a gap it
   can be hours old and its 5-hour window long since rolled over. Dropping that
   window would hide the limit that actually stops short work, so it gets rebuilt
@@ -515,7 +520,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-186 tests over the pricing, the window arithmetic, plan and credit detection,
+190 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, job forecasting, per-project
 attribution, the CLI, packaging, and the settings save/restore.
 
