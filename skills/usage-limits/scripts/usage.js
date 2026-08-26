@@ -824,7 +824,12 @@ function reconstructWindow(spec, snapshot, events, now) {
   if (past.cost <= 0) return null;
 
   const usdPerPercent = past.cost / snapshot.utilization;
-  const liveStart = now - spec.span;
+
+  // The window running now began when the old one reset, not five hours ago.
+  // Summing a rolling span sweeps in the window that already expired: three
+  // minutes after a reset that meant counting 103 turns instead of 6, and
+  // reporting a fresh window as completely full.
+  const liveStart = Math.max(now - spec.span, resetsAt);
   const live = totals(events.filter((e) => e.at >= liveStart && e.at <= now));
   const raw = live.cost / usdPerPercent;
 

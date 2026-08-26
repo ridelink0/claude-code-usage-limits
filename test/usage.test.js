@@ -866,7 +866,9 @@ test('reconstructWindow prices the live window from the closed one', () => {
   );
   assert.strictEqual(shot.usdPerPercent, 1);
   assert.strictEqual(shot.percentUsed, 37);
-  assert.strictEqual(shot.windowStart, NOW - 5 * HOUR);
+  // The old window reset two hours ago, so the one running now is two hours
+  // old, not five. Reaching back a full span would count the expired window.
+  assert.strictEqual(shot.windowStart, NOW - 2 * HOUR);
 });
 
 test('reconstructWindow refuses a rebuild that overflows the window', () => {
@@ -1177,4 +1179,53 @@ test('no snapshot timestamp means no adjustment rather than a guess', () => {
   const window = usage.buildWindow(spec, snapshot, sample, NOW, {});
   assert.strictEqual(window.adjusted, false);
   assert.strictEqual(window.percentUsed, 49);
+});
+
+test('a rebuild counts only the window running now, not the one that reset', () => {
+  // The reported failure: the old window reset three minutes ago, so the new
+  // one is three minutes old, but a rolling five hour sum swept in the whole
+  // expired window and called a fresh window completely full.
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const resetAt = NOW - 3 * 60 * 1000;
+  const snapshot = { utilization: 100, resets_at: new Date(resetAt).toISOString() };
+  const sample = events([
+    { offset: -4 * HOUR, cost: 42 },
+    { offset: -1 * HOUR, cost: 15 },
+    { offset: -1 * 60 * 1000, cost: 14 },
+  ]);
+
+  const shot = usage.reconstructWindow(spec, snapshot, sample, NOW);
+  assert.strictEqual(shot.windowStart, resetAt, 'the new window began at the reset');
+  assert.ok(
+    shot.percentUsed < 50,
+    'got ' + shot.percentUsed + '%, but only the last turn belongs to this window'
+  );
+});
+
+test('a reset longer ago than the span falls back to the rolling window', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const resetAt = NOW - 9 * HOUR;
+  const snapshot = { utilization: 80, resets_at: new Date(resetAt).toISOString() };
+  const sample = events([
+    { offset: -13 * HOUR, cost: 80 },
+    { offset: -1 * HOUR, cost: 20 },
+  ]);
+
+  const shot = usage.reconstructWindow(spec, snapshot, sample, NOW);
+  assert.strictEqual(
+    shot.windowStart,
+    NOW - 5 * HOUR,
+    'nothing from the expired window is in range anyway'
+  );
+});
+
+test('spend before the reset never counts toward the new window', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const resetAt = NOW - 10 * 60 * 1000;
+  const snapshot = { utilization: 100, resets_at: new Date(resetAt).toISOString() };
+  // Everything is in the expired window; nothing has been spent since.
+  const sample = events([{ offset: -2 * HOUR, cost: 100 }]);
+
+  const shot = usage.reconstructWindow(spec, snapshot, sample, NOW);
+  assert.strictEqual(shot.percentUsed, 0, 'a window with nothing spent in it is empty');
 });
