@@ -487,3 +487,27 @@ test('nothing stale means neither message appears', () => {
   assert.doesNotMatch(text, /could not be rebuilt/);
   assert.doesNotMatch(text, /rebuilt from local history/);
 });
+
+test('an adjusted figure is hedged, an untouched one is not', () => {
+  const adjusted = { key: 'five_hour', label: '5-hour', percentUsed: 88, stale: false, adjusted: true };
+  const plain = { key: 'five_hour', label: '5-hour', percentUsed: 49, stale: false, adjusted: false };
+  assert.strictEqual(brief.describeWindow(adjusted), '5-hour about 88%');
+  assert.strictEqual(brief.describeWindow(plain), '5-hour 49%');
+});
+
+test('the line explains points added since the snapshot', () => {
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 88, stale: false, adjusted: true },
+    othersSummary: 'weekly 57%',
+    turnsLeft: 12,
+    resetsIn: '4h',
+    session: null,
+    rebuilt: false,
+    staleWindows: 0,
+    pointsSinceSnapshot: 39,
+    snapshotAge: '9m',
+    pressure: 'tight',
+  });
+  assert.match(text, /about 39 points spent since the snapshot/);
+  assert.match(text, /9m ago/);
+});

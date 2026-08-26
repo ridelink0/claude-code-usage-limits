@@ -1229,3 +1229,83 @@ test('spend before the reset never counts toward the new window', () => {
   const shot = usage.reconstructWindow(spec, snapshot, sample, NOW);
   assert.strictEqual(shot.percentUsed, 0, 'a window with nothing spent in it is empty');
 });
+
+// Guards for the two reporting bugs fixed on 25 Aug 2026. Both understated
+// usage, which is the direction that lets someone run out unwarned.
+const liveSnapshot = { utilization: 49, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+const laggingSpend = events([
+  { offset: -60 * 60 * 1000, cost: 21 },
+  { offset: -5 * 60 * 1000, cost: 17 },
+]);
+const fiveSpec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+
+test('a rebuilt window is never also adjusted', () => {
+  const utilization = {
+    five_hour: { utilization: 100, resets_at: new Date(NOW - 10 * 60 * 1000).toISOString() },
+    seven_day: { utilization: 40, resets_at: new Date(NOW + 5 * 24 * HOUR).toISOString() },
+  };
+  const sample = events([{ offset: -4 * HOUR, cost: 50 }, { offset: -60 * 1000, cost: 10 }]);
+  const five = usage
+    .buildWindows(utilization, sample, NOW, NOW - 30 * 60 * 1000)
+    .find((w) => w.key === 'five_hour');
+
+  assert.strictEqual(five.estimated, true);
+  assert.strictEqual(five.adjusted, false, 'a rebuild already covers the whole live window');
+});
+
+test('adjusting keeps used and left adding up', () => {
+  const w = usage.buildWindow(fiveSpec, liveSnapshot, laggingSpend, NOW, {
+    fetchedAt: NOW - 10 * 60 * 1000,
+  });
+  assert.strictEqual(w.percentUsed + w.percentLeft, 100);
+  assert.ok(Math.abs(w.remainingUSD - w.usdPerPercent * w.percentLeft) < 1e-9);
+});
+
+test('a snapshot timestamp outside the window is ignored', () => {
+  const future = usage.buildWindow(fiveSpec, liveSnapshot, laggingSpend, NOW, {
+    fetchedAt: NOW + 9999999,
+  });
+  assert.strictEqual(future.adjusted, false, 'clock skew must not invent spend');
+
+  const ancient = usage.buildWindow(fiveSpec, liveSnapshot, laggingSpend, NOW, {
+    fetchedAt: NOW - 9 * HOUR,
+  });
+  assert.strictEqual(ancient.adjusted, false, 'a reading older than the window anchors nothing');
+});
+
+test('adjusting cannot drive headroom below zero', () => {
+  const w = usage.buildWindow(
+    fiveSpec,
+    { utilization: 90, resets_at: new Date(NOW + HOUR).toISOString() },
+    events([{ offset: -60 * 60 * 1000, cost: 90 }, { offset: -60 * 1000, cost: 900 }]),
+    NOW,
+    { fetchedAt: NOW - 10 * 60 * 1000 }
+  );
+  assert.ok(w.percentLeft >= 0);
+  assert.ok(w.turnsLeft >= 0);
+});
+
+test('another Claude working alongside is counted in the reading', () => {
+  // Sessions share one limit, so the correction has to cover every session's
+  // spend, not just the one asking. Otherwise the reading understates by
+  // exactly what the other windows are burning.
+  const snapshot = { utilization: 49, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+  const fetchedAt = NOW - 10 * 60 * 1000;
+  const withSession = (offset, cost, sessionId) =>
+    Object.assign(events([{ offset, cost }])[0], { sessionId });
+
+  const alone = [withSession(-60 * 60 * 1000, 21, 'mine'), withSession(-5 * 60 * 1000, 8, 'mine')];
+  const shared = alone.concat([
+    withSession(-4 * 60 * 1000, 9, 'other'),
+    withSession(-2 * 60 * 1000, 9, 'third'),
+  ]);
+
+  const solo = usage.buildWindow(fiveSpec, snapshot, alone, NOW, { fetchedAt });
+  const together = usage.buildWindow(fiveSpec, snapshot, shared, NOW, { fetchedAt });
+
+  assert.ok(
+    together.pointsSinceSnapshot > solo.pointsSinceSnapshot,
+    'the other sessions spent real budget and it has to show'
+  );
+  assert.ok(together.percentUsed > solo.percentUsed);
+});

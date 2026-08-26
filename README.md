@@ -187,6 +187,11 @@ The split comes from measured spend rather than an assumption that everyone is
 working equally hard, because they usually are not. A session that has gone
 quiet for a quarter of an hour is not counted as competing.
 
+Every session's spend also feeds the reading itself, not just the split. The
+percentage is corrected using all spend recorded since the snapshot was taken,
+whichever window produced it, so another Claude burning budget in the next
+terminal moves your number too.
+
 ## Which limit it watches
 
 Two windows run at once and the 5-hour one is usually what actually stops you,
@@ -497,7 +502,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-164 tests over the pricing, the window arithmetic, plan and credit detection,
+179 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, job forecasting, per-project
 attribution, the CLI, packaging, and the settings save/restore.
 
