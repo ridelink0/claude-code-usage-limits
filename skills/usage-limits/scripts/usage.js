@@ -1214,13 +1214,18 @@ function formatPercent(value) {
 
 function renderForecast(data, turns) {
   const lines = [];
-  lines.push('Forecast for ' + turns + ' turns');
-  lines.push('');
 
+  // Checked before the heading is built, or a bad argument prints straight
+  // into it: "Forecast for NaN turns".
   if (!Number.isFinite(turns) || turns <= 0) {
+    lines.push('Forecast');
+    lines.push('');
     lines.push('  Give a number of turns, for example --forecast 15.');
     return lines.join('\n');
   }
+
+  lines.push('Forecast for ' + turns + ' turns');
+  lines.push('');
   if (!data.rates) {
     lines.push('  Nothing recent to price this against yet. Do some work in this');
     lines.push('  session first, then ask again.');

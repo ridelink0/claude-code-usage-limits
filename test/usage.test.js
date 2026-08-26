@@ -782,7 +782,15 @@ test('renderForecast says whether the job fits and why', () => {
 
 test('renderForecast asks for a number rather than guessing', () => {
   const data = { windows: [priced], rates: { median: 1, high: 2, sample: 20 } };
-  assert.ok(usage.renderForecast(data, NaN).includes('Give a number of turns'));
+  for (const bad of [NaN, 0, -3, undefined]) {
+    const text = usage.renderForecast(data, bad);
+    assert.ok(text.includes('Give a number of turns'), 'should ask, for ' + bad);
+    // The heading used to be built before the check, so a bad argument printed
+    // straight into it as "Forecast for NaN turns".
+    assert.ok(!text.includes('NaN'), 'must not print the bad value back');
+    assert.ok(!text.includes('undefined'));
+    assert.ok(!/Forecast for -/.test(text));
+  }
 });
 
 test('renderForecast admits when it has nothing to price against', () => {

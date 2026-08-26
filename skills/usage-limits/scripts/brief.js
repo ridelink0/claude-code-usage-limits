@@ -120,7 +120,6 @@ function aheadOfPace(window, now) {
 }
 
 // Not whether to speak, which is always, but how hard to lean on it.
-// Not whether to speak, which is always, but how hard to lean on it.
 function pressure(window, now, config, turnsLeft) {
   if (!window || window.percentUsed === null || window.stale) return 'unknown';
   if (window.verdict === 'exhausted' || window.percentUsed >= 100) return 'gone';
