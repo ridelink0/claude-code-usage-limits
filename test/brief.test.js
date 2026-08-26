@@ -511,3 +511,31 @@ test('the line explains points added since the snapshot', () => {
   assert.match(text, /about 39 points spent since the snapshot/);
   assert.match(text, /9m ago/);
 });
+
+test('a near-full window is called out even when something else binds', () => {
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 68, stale: false },
+    othersSummary: 'weekly 91%',
+    turnsLeft: 41,
+    resetsIn: '4h 20m',
+    session: null,
+    critical: [{ label: 'weekly', percentUsed: 91, resetsIn: '4d 2h' }],
+    pressure: 'roomy',
+  });
+  assert.match(text, /weekly is at 91% and resets in 4d 2h/);
+  assert.match(text, /stops work for far longer/);
+  assert.match(text, /not what runs out first/);
+});
+
+test('nothing is called out when the other windows are comfortable', () => {
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 68, stale: false },
+    othersSummary: 'weekly 40%',
+    turnsLeft: 41,
+    resetsIn: '4h 20m',
+    session: null,
+    critical: [],
+    pressure: 'roomy',
+  });
+  assert.doesNotMatch(text, /stops work for far longer/);
+});

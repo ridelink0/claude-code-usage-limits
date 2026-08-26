@@ -685,6 +685,24 @@ function buildWindow(spec, snapshot, events, now, options) {
   return window;
 }
 
+// Which window binds is about what stops you soonest. It says nothing about
+// what stopping costs. Running out of a 5-hour window waits hours; running out
+// of the weekly one waits days. So a weekly window near the wall is worth
+// hearing about even while a shorter window binds.
+const CRITICAL_PERCENT = 85;
+
+function criticalOthers(windows, bindingKey, threshold) {
+  const limit = Number.isFinite(threshold) ? threshold : CRITICAL_PERCENT;
+  return (windows || []).filter(
+    (w) =>
+      w &&
+      w.key !== bindingKey &&
+      !w.stale &&
+      w.percentUsed !== null &&
+      w.percentUsed >= limit
+  );
+}
+
 // The window that will stop the work first.
 function bindingWindow(windows) {
   const known = windows.filter((w) => w.percentUsed !== null);
@@ -1340,6 +1358,8 @@ module.exports = {
   MIN_BASELINE_TURNS,
   buildWindows,
   bindingWindow,
+  criticalOthers,
+  CRITICAL_PERCENT,
   dominantEffort,
   typicalTurnCost,
   activeSessions,

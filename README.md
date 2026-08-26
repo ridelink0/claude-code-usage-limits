@@ -207,6 +207,12 @@ A window with no recent spend to measure is ranked by how full it is rather
 than being skipped, so a 5-hour window sitting at 95 percent is never passed
 over just because nothing has gone through it in the last few minutes.
 
+Binding is about what stops you soonest, though, not what stopping costs, and
+those are different: a 5-hour window returns in hours, the weekly one in days.
+So a window above 85 percent gets called out even when something shorter binds,
+with its own reset time, because spending the weekly window to save a few turns
+of the 5-hour one is a bad trade.
+
 ## When you keep typing
 
 Every message sent while work is already running starts another turn, and each
@@ -509,7 +515,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-181 tests over the pricing, the window arithmetic, plan and credit detection,
+186 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, job forecasting, per-project
 attribution, the CLI, packaging, and the settings save/restore.
 

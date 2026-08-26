@@ -1367,3 +1367,23 @@ test('report carries everything the hook needs, so neither builds its own view',
   );
   assert.ok(/usage\.report\(/.test(source), 'brief.js should call report()');
 });
+
+test('criticalOthers finds a near-full window that is not the binding one', () => {
+  const five = { key: 'five_hour', label: '5-hour', percentUsed: 68, stale: false };
+  const week = { key: 'seven_day', label: 'weekly', percentUsed: 91, stale: false };
+  const found = usage.criticalOthers([five, week], 'five_hour');
+  assert.deepStrictEqual(found.map((w) => w.key), ['seven_day']);
+});
+
+test('criticalOthers never reports the binding window back', () => {
+  const week = { key: 'seven_day', label: 'weekly', percentUsed: 96, stale: false };
+  assert.deepStrictEqual(usage.criticalOthers([week], 'seven_day'), []);
+});
+
+test('criticalOthers ignores comfortable and unreadable windows', () => {
+  const roomy = { key: 'seven_day', label: 'weekly', percentUsed: 40, stale: false };
+  const stale = { key: 'seven_day', label: 'weekly', percentUsed: 99, stale: true };
+  const blank = { key: 'seven_day', label: 'weekly', percentUsed: null, stale: false };
+  assert.deepStrictEqual(usage.criticalOthers([roomy, stale, blank], 'five_hour'), []);
+  assert.strictEqual(usage.CRITICAL_PERCENT, 85);
+});

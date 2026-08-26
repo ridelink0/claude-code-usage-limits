@@ -171,6 +171,12 @@ Keep it to one line unless the work genuinely does not fit. The budget note is
 a header, not a section, and it must never push the actual answer down the
 page.
 
+Which window binds is about what stops you soonest, not what stopping costs.
+Those differ: a 5-hour window comes back in hours, the weekly one in days. So
+when a window that is not binding sits near its wall, say so and weigh it. The
+hook flags those. Running the weekly out to save a few turns of the 5-hour
+window is a bad trade even though the 5-hour is what runs out first.
+
 One thing to get right: **quote the binding window, not the roomiest one.**
 Two windows run at once and they are rarely in the same place. The turns of
 headroom and the reset time belong to whichever runs out first. Putting the

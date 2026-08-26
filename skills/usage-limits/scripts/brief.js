@@ -242,6 +242,17 @@ function briefText(parts) {
     );
   }
   if (parts.othersSummary) sentences.push('Other windows: ' + parts.othersSummary + '.');
+
+  // A window that is not binding can still be the expensive one to exhaust.
+  if (parts.critical && parts.critical.length) {
+    for (const other of parts.critical) {
+      sentences.push(
+        'Note that ' + other.label + ' is at ' + other.percentUsed + '% and resets in ' +
+          other.resetsIn + ', so running that one out stops work for far longer than the ' +
+          'binding window would. Weigh it even though it is not what runs out first.'
+      );
+    }
+  }
   if (parts.session) {
     sentences.push(
       'This session: ' + parts.session.turns + ' turns, ' +
@@ -295,6 +306,11 @@ async function run(now, hookInput) {
       othersSummary: summariseOthers(data.windows, binding && binding.key),
       sessions: data.sessions,
       staleWindows: data.staleWindows,
+      critical: usage.criticalOthers(data.windows, binding && binding.key).map((w) => ({
+        label: w.label,
+        percentUsed: w.percentUsed,
+        resetsIn: Number.isFinite(w.msToReset) ? usage.formatDuration(w.msToReset) : 'an unknown time',
+      })),
       snapshotAge: usage.formatDuration(data.snapshotAgeMs),
       binding: binding
         ? {
@@ -334,6 +350,7 @@ async function run(now, hookInput) {
     session: view.session,
     rebuilt: Boolean(binding && binding.estimated),
     staleWindows: view.staleWindows || 0,
+    critical: view.critical || [],
     pointsSinceSnapshot: (binding && binding.pointsSinceSnapshot) || 0,
     snapshotAge: view.snapshotAge,
     pressure: pressure(binding, now, config, view.turnsLeft),
