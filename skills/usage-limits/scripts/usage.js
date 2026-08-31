@@ -21,6 +21,28 @@ const os = require('os');
 const path = require('path');
 const readline = require('readline');
 
+const host = require('./host.js');
+const codex = require('./codex.js');
+
+// Which agent's meter to read. Resolved once from the command line or the
+// environment, because a process that changed its mind halfway through would
+// mix one host's percentages with the other's turns.
+let activeHost = null;
+
+function currentHost() {
+  if (!activeHost) activeHost = host.detect(process.argv.slice(2), process.env);
+  return activeHost;
+}
+
+function setHost(name) {
+  activeHost = host.normalise(name) || host.CLAUDE;
+  return activeHost;
+}
+
+function isCodex() {
+  return currentHost() === host.CODEX;
+}
+
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -206,7 +228,7 @@ function tokensOf(usage) {
 // The four token classes, kept apart because they are priced differently
 // and because knowing the split is what makes the totals reasonable about.
 function tokenParts(usage) {
-  if (!usage) return { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
+  if (!usage) return { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, reasoning: 0 };
   const creation = usage.cache_creation || {};
   const written =
     usage.cache_creation_input_tokens ||
@@ -216,6 +238,16 @@ function tokenParts(usage) {
     cacheWrite: written,
     cacheRead: usage.cache_read_input_tokens || 0,
     output: usage.output_tokens || 0,
+    // Reasoning is not a fifth class of token, it is a slice of the fourth.
+    // Measured over 1,565 turns of this account's transcripts, thinking never
+    // once exceeded output, so it is counted inside it and must not be added to
+    // any total: doing that would price every thinking turn twice.
+    //
+    // It is worth carrying separately all the same. Output is the dearest class
+    // there is, reasoning is about half of it, and it is the one part of the
+    // bill a setting can change. The skill has always said so; this is the
+    // number that says how much.
+    reasoning: (usage.output_tokens_details && usage.output_tokens_details.thinking_tokens) || 0,
   };
 }
 
@@ -232,6 +264,37 @@ function eventFrom(line, seen, project) {
 
   const at = Date.parse(entry.timestamp);
   if (!Number.isFinite(at)) return null;
+
+  // A request the limit refused is written like an assistant turn, with a
+  // synthetic model and a usage block of zeros. Two things follow.
+  //
+  // It is not a turn, and counting it as one dilutes the measured cost per turn
+  // with free ones, which makes the remaining headroom read longer than it is.
+  //
+  // And it is the only place the account says outright which window stopped the
+  // work and when that window comes back. The cached snapshot reports the
+  // 5-hour bucket as 0% with a null reset on this plan, so without reading
+  // these there is nothing at all to anchor that window to.
+  const quota = entry.quotaLimits;
+  if (entry.isApiErrorMessage && quota && typeof quota === 'object') {
+    const resetsAt = Number(quota.resetsAt);
+    return {
+      at,
+      model: '',
+      effort: null,
+      cost: 0,
+      tokens: 0,
+      parts: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, reasoning: 0 },
+      project: project || null,
+      sessionId: entry.sessionId || null,
+      rejected: {
+        status: typeof quota.status === 'string' ? quota.status : null,
+        key: typeof quota.rateLimitType === 'string' ? quota.rateLimitType : null,
+        // Seconds on the wire, milliseconds everywhere in here.
+        resetsAt: Number.isFinite(resetsAt) && resetsAt > 0 ? resetsAt * 1000 : null,
+      },
+    };
+  }
 
   // A resumed or forked session repeats earlier turns in a new file.
   const id = (entry.message.id || '') + '|' + (entry.requestId || '');
@@ -253,6 +316,11 @@ function eventFrom(line, seen, project) {
 }
 
 async function readEvents(since) {
+  if (isCodex()) return codex.readEvents(since);
+  return readClaudeEvents(since);
+}
+
+async function readClaudeEvents(since) {
   const root = path.join(configDir(), 'projects');
   let dirs = [];
   try {
@@ -309,7 +377,7 @@ async function readEvents(since) {
 function totals(events) {
   let cost = 0;
   let tokens = 0;
-  const parts = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
+  const parts = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, reasoning: 0 };
   for (const event of events) {
     cost += event.cost;
     tokens += event.tokens;
@@ -318,6 +386,7 @@ function totals(events) {
       parts.cacheWrite += event.parts.cacheWrite;
       parts.cacheRead += event.parts.cacheRead;
       parts.output += event.parts.output;
+      parts.reasoning += event.parts.reasoning || 0;
     }
   }
   return { cost, tokens, turns: events.length, parts };
@@ -335,7 +404,7 @@ function byModel(events) {
         turns: 0,
         tokens: 0,
         cost: 0,
-        parts: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 },
+        parts: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, reasoning: 0 },
       });
     }
     const row = rows.get(id);
@@ -347,6 +416,7 @@ function byModel(events) {
       row.parts.cacheWrite += event.parts.cacheWrite;
       row.parts.cacheRead += event.parts.cacheRead;
       row.parts.output += event.parts.output;
+      row.parts.reasoning += event.parts.reasoning || 0;
     }
   }
   const list = [...rows.values()].sort((a, b) => b.cost - a.cost);
@@ -382,7 +452,22 @@ function typicalTurnCost(recentEvents, windowEvents, allEvents, minSample) {
     .filter((cost) => Number.isFinite(cost) && cost > 0)
     .sort((a, b) => a - b);
   if (!costs.length) return null;
-  return costs[Math.floor(costs.length / 2)];
+
+  // The middle turn resists a freak one, which is the point, but it is the
+  // wrong statistic for counting how many more turns fit. Turn costs are
+  // skewed: most are cheap, a few are far dearer, and they get dearer still as
+  // the context grows. The remaining budget is divided by the *average*, so
+  // taking the middle one systematically promises more turns than there are.
+  // Measured on the window that ran out on 2026-08-30: 182 turns promised, 110
+  // actually left.
+  //
+  // Trimming both ends and averaging what is left keeps the resistance to a
+  // single $7 turn while respecting the skew, and errs toward under-promising,
+  // which is the safe direction for a budget.
+  const cut = costs.length >= MIN_PACE_SAMPLE ? Math.max(1, Math.round(costs.length * 0.1)) : 0;
+  const kept = cut > 0 ? costs.slice(cut, costs.length - cut) : costs;
+  const middle = kept.length ? kept : costs;
+  return middle.reduce((sum, cost) => sum + cost, 0) / middle.length;
 }
 
 function dominantEffort(events) {
@@ -396,6 +481,36 @@ function dominantEffort(events) {
     if (!best || entry[1] > best[1]) best = entry;
   }
   return best ? best[0] : null;
+}
+
+// What the thinking actually cost, rather than what it is generally said to
+// cost. Reasoning is billed as output, so it is priced at the output rate of
+// whichever models did the thinking, weighted by how much each of them did.
+//
+// This deliberately does not try to tell an `ultrathink` turn from a high
+// effort setting from a model that simply chose to think. They are the same
+// spend and the same lever, and the transcript does not reliably separate them
+// anyway. What matters is how much of the bill is reasoning.
+function reasoningSpend(models, tokens) {
+  const total = tokens && Number.isFinite(tokens.reasoning) ? tokens.reasoning : 0;
+  const output = tokens && Number.isFinite(tokens.output) ? tokens.output : 0;
+  if (total <= 0 || output <= 0) return null;
+
+  let cost = 0;
+  let priced = 0;
+  for (const row of models || []) {
+    const amount = row.parts && Number.isFinite(row.parts.reasoning) ? row.parts.reasoning : 0;
+    if (amount <= 0) continue;
+    cost += (amount * rateFor(row.model).output) / 1e6;
+    priced += amount;
+  }
+
+  return {
+    tokens: total,
+    shareOfOutput: total / output,
+    // Only claim a price when the models that did the thinking were priced.
+    cost: priced > 0 ? cost : null,
+  };
 }
 
 // Which project directory the spend went to. Claude Code names these after
@@ -537,8 +652,12 @@ function shareOf(sessions, sessionId) {
 // whatever slice happens to be to hand. A thin baseline prices a point badly
 // and every correction built on it inherits the error: a 24 minute old
 // snapshot once turned a window truly at 70 per cent into a confident 82.
+// Kept beside whichever agent it describes. The two hosts happen to use the
+// same window keys, so a shared file would price a Codex point with what a
+// Claude point costs and be wrong on both.
 function calibrationFile() {
-  return path.join(configDir(), 'usage-limits-calibration.json');
+  const dir = isCodex() ? codex.homeDir() : configDir();
+  return path.join(dir, 'usage-limits-calibration.json');
 }
 
 function readCalibration() {
@@ -640,11 +759,18 @@ function buildWindow(spec, snapshot, events, now, options) {
   // was truly at 88% was reported at 49%. Calibrate on spend up to the reading
   // only, or the very spend being accounted for inflates the price per point
   // and shrinks its own correction.
+  // A reading with no reset time cannot be told apart from a current one by
+  // looking at it, so age is the only guide. Once the snapshot is older than
+  // the window itself, whatever it says describes a window that has since
+  // rolled over at least once, and quoting it as current is how a long gap
+  // ends up reported as a full budget.
+  window.snapshotOlderThanWindow =
+    Number.isFinite(extra.fetchedAt) && now - extra.fetchedAt >= spec.span;
+
   let percent = rawPercent;
   let sinceSnapshot = 0;
   if (
     rawPercent !== null &&
-    rawPercent > 0 &&
     !window.stale &&
     Number.isFinite(extra.fetchedAt) &&
     extra.fetchedAt > start
@@ -656,13 +782,29 @@ function buildWindow(spec, snapshot, events, now, options) {
     // turns makes it far too cheap, and every dollar spent since then is then
     // divided by that, which is how a window truly at 55% got corrected all the
     // way to a confident 100.
-    if (upTo.cost > 0 && after.cost > 0 && upTo.turns >= MIN_BASELINE_TURNS) {
-      const mine = { usdPerPercent: upTo.cost / rawPercent, turns: upTo.turns, percent: rawPercent };
-      const known = extra.knownCalibration;
-      // Trust the better-sampled of the two, whichever that is.
-      const chosen =
-        known && Number.isFinite(known.turns) && known.turns > upTo.turns ? known : mine;
-      window.calibration = mine;
+    //
+    // A reading of exactly 0 cannot price itself at all: there is no meter
+    // movement to divide the spend by. That used to end the correction here,
+    // which was the worst place to stop, because 0% is what a window reads
+    // right after a reset and therefore what a snapshot most often goes stale
+    // holding. The learned price covers it: what a point costs is a property
+    // of the plan, not of this reading.
+    const selfPriced =
+      rawPercent > 0 && upTo.cost > 0 && upTo.turns >= MIN_BASELINE_TURNS
+        ? { usdPerPercent: upTo.cost / rawPercent, turns: upTo.turns, percent: rawPercent }
+        : null;
+    if (selfPriced) window.calibration = selfPriced;
+
+    const known = extra.knownCalibration;
+    const usable =
+      known && Number.isFinite(known.usdPerPercent) && known.usdPerPercent > 0 ? known : null;
+    // Trust the better-sampled of the two, whichever that is.
+    const chosen =
+      selfPriced && usable
+        ? (usable.turns > selfPriced.turns ? usable : selfPriced)
+        : selfPriced || usable;
+
+    if (after.cost > 0 && chosen) {
       const pricePerPoint = chosen.usdPerPercent;
       sinceSnapshot = after.cost / pricePerPoint;
 
@@ -682,13 +824,27 @@ function buildWindow(spec, snapshot, events, now, options) {
     }
   }
 
-  const derived = percent !== null && percent > 0 && spent.cost > 0 ? spent.cost / percent : null;
+  // Pricing a point off this window's own spend only works when this machine
+  // did most of that spending. It often has not: another device, a cloud task,
+  // or simply a window that opened before the local history did, and then a
+  // meter reading 61% divides by almost nothing and every remaining point looks
+  // free. The visible symptom is a window with plenty left reporting one turn
+  // of headroom, which is worse advice than reporting none.
+  // A couple of turns cannot account for a meter already well into the window,
+  // so when the two disagree that badly it is the local history that is
+  // incomplete, not the meter.
+  const thin = spent.turns < MIN_BASELINE_TURNS && percent >= UNEXPLAINED_PERCENT;
+  const measured = percent !== null && percent > 0 && spent.cost > 0 && !thin;
+  const derived = measured ? spent.cost / percent : null;
+  const known = extra.knownCalibration;
   const priced =
     derived !== null
       ? derived
       : Number.isFinite(extra.usdPerPercent) && extra.usdPerPercent > 0
         ? extra.usdPerPercent
-        : null;
+        : known && Number.isFinite(known.usdPerPercent) && known.usdPerPercent > 0
+          ? known.usdPerPercent
+          : null;
 
   if (percent !== null && priced !== null) {
     window.usdPerPercent = priced;
@@ -728,6 +884,23 @@ function buildWindow(spec, snapshot, events, now, options) {
   else window.verdict = 'runs-out';
 
   return window;
+}
+
+// The most recent time the account actually refused work, per window. This is
+// ground truth: not an estimate of where the budget stands but a record of it
+// having run out, with the window named and its reset time attached.
+function lastRejections(events) {
+  const byKey = new Map();
+  for (const event of events || []) {
+    const rejected = event && event.rejected;
+    if (!rejected || rejected.status !== 'rejected') continue;
+    const key = rejected.key || 'unknown';
+    const seen = byKey.get(key);
+    if (!seen || event.at > seen.at) {
+      byKey.set(key, { key, at: event.at, resetsAt: rejected.resetsAt });
+    }
+  }
+  return byKey;
 }
 
 // Which window binds is about what stops you soonest. It says nothing about
@@ -851,7 +1024,40 @@ function detectPlan(oauth) {
   };
 }
 
+// The snapshot carries buckets this table has never heard of, and it gains more
+// over time: alongside five_hour and seven_day there are per-product and
+// codenamed limits that come and go. Dropping them silently means a limit that
+// is actually biting never gets mentioned, so anything carrying real spend is
+// reported even though there is no span to price it against.
+const KNOWN_KEYS = new Set(['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet']);
+const NOT_A_WINDOW = new Set(['extra_usage', 'spend', 'limits', 'member_dashboard_available']);
+
+function otherLimits(utilization, threshold) {
+  if (!utilization) return [];
+  const floor = Number.isFinite(threshold) ? threshold : 1;
+  const rows = [];
+  for (const key of Object.keys(utilization)) {
+    if (KNOWN_KEYS.has(key) || NOT_A_WINDOW.has(key)) continue;
+    const bucket = utilization[key];
+    if (!bucket || typeof bucket.utilization !== 'number') continue;
+    if (bucket.utilization < floor) continue;
+    const resetsAt = bucket.resets_at ? Date.parse(bucket.resets_at) : null;
+    rows.push({
+      key,
+      label: key.replace(/_/g, ' '),
+      percentUsed: bucket.utilization,
+      resetsAt: Number.isFinite(resetsAt) ? resetsAt : null,
+    });
+  }
+  return rows.sort((a, b) => b.percentUsed - a.percentUsed);
+}
+
 function collect(now) {
+  if (isCodex()) return codex.collect(now);
+  return collectClaude(now);
+}
+
+function collectClaude(now) {
   const account = readJson(accountFile()) || {};
   const settings = readJson(path.join(configDir(), 'settings.json')) || {};
   const cache = account.cachedUsageUtilization || null;
@@ -861,6 +1067,8 @@ function collect(now) {
 
   return {
     now,
+    host: host.CLAUDE,
+    money: true,
     accountFile: accountFile(),
     plan: plan.label,
     planId: plan.id,
@@ -891,6 +1099,10 @@ const SATURATION_LIMIT = 105;
 
 // Fewer turns than this before the snapshot and a point cannot be priced.
 const MIN_BASELINE_TURNS = 5;
+
+// Past this much of a window, a handful of local turns is not what spent it,
+// so their total is not a fair price for a point.
+const UNEXPLAINED_PERCENT = 20;
 
 function reconstructWindow(spec, snapshot, events, now) {
   if (!snapshot || typeof snapshot.utilization !== 'number') return null;
@@ -930,20 +1142,90 @@ function reconstructWindow(spec, snapshot, events, now) {
   };
 }
 
+// The snapshot can be older than the window it describes without ever looking
+// stale, because a window with no reset time has nothing to compare against.
+// That is the ordinary case after a long gap: the 5-hour reading was taken
+// seven hours ago and says 0%, the window running now started two hours ago,
+// and the reading is about a window that no longer exists. Adding spend to it
+// is not the fix, because none of that spend is inside the window it describes.
+// Rebuilding is: the learned price per point turns this window's own spend
+// straight into a percentage.
+function reconstructUnanchored(spec, window, events, now, learned) {
+  if (!window || window.stale) return null;
+  if (!window.snapshotOlderThanWindow) return null;
+  // Only worth doing when the reading is low enough to be the thing that is
+  // wrong. A high reading that is old is already alarming and is left alone.
+  if (window.percentUsed === null || window.percentUsed > 5) return null;
+  if (!learned || !Number.isFinite(learned.usdPerPercent) || learned.usdPerPercent <= 0) {
+    return null;
+  }
+
+  const start = window.windowStart;
+  const live = totals(events.filter((event) => event.at >= start && event.at <= now));
+  if (live.cost <= 0) return null;
+
+  const raw = live.cost / learned.usdPerPercent;
+  if (raw < 1) return null;
+  // Same rule as every other rebuild: past this it is the calibration that is
+  // full rather than the window, and claiming a spent budget is worse than
+  // admitting the reading could not be rebuilt.
+  if (raw > SATURATION_LIMIT) return null;
+
+  return buildWindow(
+    spec,
+    { utilization: Math.min(100, Math.round(raw)), resets_at: null },
+    events,
+    now,
+    { estimated: true, windowStart: start, usdPerPercent: learned.usdPerPercent }
+  );
+}
+
 // No snapshot at all means no windows, which is what tells the report to
 // explain itself rather than print a table of dashes.
-function buildWindows(utilization, events, now, fetchedAt, learned) {
+function buildWindows(utilization, events, now, fetchedAt, learned, specs, rejections) {
   if (!utilization) return [];
-  return WINDOWS.map((spec) => {
+  const refused = rejections || new Map();
+  // Claude Code's windows are fixed and known. Codex reports the length of each
+  // of its two windows in the payload, so it hands its own spans in rather than
+  // having them assumed.
+  const table = specs && specs.length ? specs : WINDOWS;
+  return table.map((spec) => {
     const snapshot = utilization[spec.key];
     // The per-model weekly windows only exist on some plans.
     if (spec.key !== 'five_hour' && spec.key !== 'seven_day' && !snapshot) return null;
 
-    const window = buildWindow(spec, snapshot, events, now, {
+    const known = learned ? learned[spec.key] : null;
+    const refusal = refused.get(spec.key);
+
+    // With no reset time the window has to be treated as rolling, which starts
+    // it five hours ago and sweeps in whatever the window before it spent. When
+    // the account has refused work on this window, its reset time is known
+    // exactly: a refusal in the future is this window's own reset, and one in
+    // the past is the moment the window running now began.
+    let anchored = snapshot;
+    let windowStart;
+    if (snapshot && !snapshot.resets_at && refusal && Number.isFinite(refusal.resetsAt)) {
+      if (refusal.resetsAt > now) {
+        anchored = Object.assign({}, snapshot, {
+          resets_at: new Date(refusal.resetsAt).toISOString(),
+        });
+      } else if (now - refusal.resetsAt < spec.span) {
+        windowStart = refusal.resetsAt;
+      }
+    }
+
+    const window = buildWindow(spec, anchored, events, now, {
       fetchedAt,
-      knownCalibration: learned ? learned[spec.key] : null,
+      knownCalibration: known,
+      ...(windowStart === undefined ? {} : { windowStart }),
     });
-    if (!window.stale) return window;
+    if (refusal) {
+      window.refusedAt = refusal.at;
+      window.refusedResetsAt = refusal.resetsAt;
+    }
+    if (!window.stale) {
+      return reconstructUnanchored(spec, window, events, now, known) || window;
+    }
 
     // Rolled over. Rebuild from local history rather than going blind on it.
     const rebuilt = reconstructWindow(spec, snapshot, events, now);
@@ -976,31 +1258,62 @@ function sessionSpend(events, sessionId) {
 }
 
 async function report(now, options) {
-  const base = collect(now);
+  let base = collect(now);
   // A stale snapshot can put a window's start slightly further back than
   // seven days, so give the scan a day of slack.
   const earliest = now - 8 * DAY;
-  const events = await readEvents(earliest);
+  const all = await readEvents(earliest);
+  // A refused request is a record of the limit, not a turn against it, so it is
+  // kept apart from everything that measures spend or pace.
+  const rejections = lastRejections(all);
+  const events = all.filter((event) => !event.rejected);
 
-  const learned = readCalibration();
+  // Codex carries the meter inside the same records as the turns, so the full
+  // scan can find a newer reading than the quick one collect() does. Reuse it
+  // rather than scanning twice or reporting the older of the two.
+  if (isCodex()) {
+    const live = options && options.codexMeter;
+    const latest = live || codex.latestMeter(events);
+    if (latest && (live || !base.snapshotFetchedAt || latest.at > base.snapshotFetchedAt)) {
+      base = codex.collect(now, { meter: latest });
+    }
+  }
+
+  const onDisk = readCalibration();
+  const learned = Object.assign({}, onDisk);
+
+  // Codex logs the meter next to every request, so the price of a point can be
+  // measured outright instead of inferred. A measurement from this session
+  // beats anything remembered from an earlier one.
+  if (isCodex()) {
+    for (const spec of base.windowSpecs || []) {
+      const measured = codex.calibrate(events, spec.key, now);
+      if (measured) learned[spec.key] = betterCalibration(learned[spec.key], measured);
+    }
+  }
+
   const windows = buildWindows(
     base.utilization,
     events,
     now,
     base.snapshotFetchedAt,
-    learned
+    learned,
+    base.windowSpecs,
+    rejections
   );
 
   // Keep the best sample seen so far, so a thin baseline never has to guess.
   const updated = Object.assign({}, learned);
-  let changed = false;
   for (const window of windows) {
     if (!window.calibration) continue;
-    const best = betterCalibration(learned[window.key], window.calibration);
-    if (best && best !== learned[window.key]) {
-      updated[window.key] = best;
-      changed = true;
-    }
+    const best = betterCalibration(updated[window.key], window.calibration);
+    if (best) updated[window.key] = best;
+  }
+  // Compared against what is actually on disk, so a measurement taken during
+  // this run is saved too rather than only the ones inferred from a window.
+  let changed = false;
+  for (const key of Object.keys(updated)) {
+    if (updated[key] !== onDisk[key]) changed = true;
   }
   if (changed) writeCalibration(updated);
 
@@ -1011,19 +1324,28 @@ async function report(now, options) {
   const scopeStart = binding ? binding.windowStart : now - 7 * DAY;
   const scoped = events.filter((event) => event.at >= scopeStart && event.at <= now);
   const scopedTotals = totals(scoped);
+  // Worked out once and used twice: the table of models, and the price of the
+  // reasoning inside it.
+  const scopedModels = byModel(scoped);
 
   return Object.assign({}, base, {
     windows,
     binding,
-    credits: creditsFrom(base.utilization),
+    otherLimits: otherLimits(base.utilization),
+    // The last time the account actually refused work, so a report taken just
+    // after a cutoff says so rather than describing the fresh window as though
+    // nothing happened.
+    lastRefusal: [...rejections.values()].sort((a, b) => b.at - a.at)[0] || null,
+    credits: base.codexCredits || creditsFrom(base.utilization),
     sessions: activeSessions(events, now, CONCURRENT_WINDOW_MS),
     session: sessionSpend(events, options && options.sessionId),
     staleWindows: windows.filter((w) => w.stale).length,
     rates: costPercentiles(recentEvents.length >= 5 ? recentEvents : scoped),
     resumeAt: binding ? binding.resetsAt : null,
-    models: byModel(scoped),
+    models: scopedModels,
     projects: byProject(scoped),
     tokens: scopedTotals.parts,
+    reasoning: reasoningSpend(scopedModels, scopedTotals.parts),
     scopeLabel: binding ? binding.label : 'last 7 days',
     recent: {
       turns: recent.turns,
@@ -1087,7 +1409,9 @@ function statusLine(collected) {
 
   const now = collected.now || Date.now();
   const parts = [];
-  for (const spec of WINDOWS) {
+  for (const spec of collected.windowSpecs && collected.windowSpecs.length
+    ? collected.windowSpecs
+    : WINDOWS) {
     const snapshot = utilization[spec.key];
     if (!snapshot || typeof snapshot.utilization !== 'number') continue;
     const resetsAt = snapshot.resets_at ? Date.parse(snapshot.resets_at) : null;
@@ -1097,11 +1421,16 @@ function statusLine(collected) {
       percent: snapshot.utilization,
       msToReset,
       stale: msToReset !== null && msToReset <= 0,
+      // Zero with no reset time is not an empty window, it is a bucket that is
+      // not reporting: a real window at 0% has just reset and says when it will
+      // do so again. The status line cannot scan transcripts to find out which,
+      // so it must not print the flattering reading as though it were measured.
+      unreported: snapshot.utilization === 0 && !Number.isFinite(resetsAt),
     });
   }
   if (!parts.length) return '';
 
-  const trusted = parts.filter((part) => !part.stale);
+  const trusted = parts.filter((part) => !part.stale && !part.unreported);
   const worst = trusted.length
     ? trusted.reduce((a, b) => (b.percent > a.percent ? b : a))
     : null;
@@ -1109,8 +1438,10 @@ function statusLine(collected) {
     .map((part) =>
       part.stale
         ? part.label + ' rolling'
-        : part.label + ' ' + part.percent + '%' +
-          (part.msToReset === null ? '' : ' ' + formatDuration(part.msToReset))
+        : part.unreported
+          ? part.label + ' ?'
+          : part.label + ' ' + part.percent + '%' +
+            (part.msToReset === null ? '' : ' ' + formatDuration(part.msToReset))
     )
     .join('  ');
 
@@ -1119,7 +1450,11 @@ function statusLine(collected) {
 
 function render(data) {
   const lines = [];
-  lines.push('Claude Code usage');
+  // Codex meters an allowance and never quotes a price, so its report has no
+  // honest money column. Everything else in the table means the same thing on
+  // both hosts.
+  const money = data.money !== false;
+  lines.push((data.host === host.CODEX ? 'Codex usage' : 'Claude Code usage'));
   lines.push('');
   lines.push('  Plan       ' + data.plan);
   lines.push(
@@ -1128,9 +1463,13 @@ function render(data) {
   );
   lines.push('  Settings   model=' + data.settings.model + '  effort=' + data.settings.effortLevel);
   const credits = data.credits;
-  if (credits) {
+  if (credits && credits.unlimited) {
+    lines.push('  Credits    unlimited');
+  } else if (credits) {
     if (!credits.enabled) {
       lines.push('  Credits    off, work stops when the plan allowance runs out');
+    } else if (!money) {
+      lines.push('  Credits    on, balance ' + (credits.balance === null ? 'unknown' : credits.balance));
     } else {
       const amounts =
         credits.used === null
@@ -1147,14 +1486,31 @@ function render(data) {
   lines.push('');
 
   if (!data.windows.length) {
+    // Two different situations, and telling them apart matters. Nothing to read
+    // is a setup problem. Nothing to report is the correct answer on a plan
+    // whose usage scales with credits rather than resetting on a clock.
+    if (data.windowless) {
+      lines.push('  This account reports no rolling usage window.');
+      lines.push('  On flexible pricing there is no percentage to run down: usage scales');
+      lines.push('  with credits, so the credit balance above is the budget to plan against.');
+      if (data.planAdvice) {
+        lines.push('');
+        lines.push(data.planAdvice);
+      }
+      return lines.join('\n');
+    }
     lines.push('  No usage snapshot in ' + (data.accountFile || '~/.claude.json') + '.');
-    lines.push('  Run /usage once inside Claude Code to populate it, then try again.');
+    lines.push(
+      data.host === host.CODEX
+        ? '  Run a Codex turn once so it writes one, or --refresh to ask for it now.'
+        : '  Run /usage once inside Claude Code to populate it, then try again.'
+    );
     return lines.join('\n');
   }
 
   lines.push(
     '  ' + pad('Window', 15) + padLeft('Used', 6) + padLeft('Resets in', 12) +
-      padLeft('Left', 10) + padLeft('Turns left', 12)
+      (money ? padLeft('Left', 10) : '') + padLeft('Turns left', 12)
   );
   for (const window of data.windows) {
     const marker = data.binding && window.key === data.binding.key ? '   <- binding' : '';
@@ -1169,12 +1525,29 @@ function render(data) {
           6
         ) +
         padLeft(formatDuration(window.msToReset), 12) +
-        padLeft(formatUSD(window.remainingUSD), 10) +
+        (money ? padLeft(formatUSD(window.remainingUSD), 10) : '') +
         padLeft(window.turnsLeft === null ? '-' : '~' + formatCount(window.turnsLeft), 12) +
         marker
     );
   }
   lines.push('');
+
+  // A bucket with no span cannot be priced or projected, but saying nothing
+  // about one that is nearly full would be the worse failure.
+  if (data.otherLimits && data.otherLimits.length) {
+    lines.push('  Other limits reported by the account');
+    for (const row of data.otherLimits) {
+      lines.push(
+        '  ' + pad('  ' + row.label, 24) + padLeft(row.percentUsed + '%', 6) +
+          padLeft(
+            Number.isFinite(row.resetsAt) ? formatDuration(row.resetsAt - data.now) : '-',
+            12
+          )
+      );
+    }
+    lines.push('    No window length is reported for these, so they are not projected.');
+    lines.push('');
+  }
 
   if (data.models && data.models.length) {
     lines.push('  Models in the ' + (data.scopeLabel || 'window') + ' window');
@@ -1184,14 +1557,15 @@ function render(data) {
     );
     for (const row of data.models) {
       lines.push(
-        '  ' + pad('  ' + row.model + (row.estimated ? ' *' : ''), 24) +
+        '  ' + pad('  ' + row.model + (money && row.estimated ? ' *' : ''), 24) +
           padLeft(row.turns, 7) +
           padLeft(formatTokens(row.tokens), 10) +
           padLeft(formatTokens(row.parts.output), 9) +
           padLeft(Math.round(row.share * 100) + '%', 8)
       );
     }
-    if (data.models.some((row) => row.estimated)) {
+    // The footnote is about the price table, which only the Claude reader uses.
+    if (money && data.models.some((row) => row.estimated)) {
       lines.push('    * no published rate for this one yet, priced at the family average');
     }
     if (data.tokens) {
@@ -1201,6 +1575,19 @@ function render(data) {
           ', cache read ' + formatTokens(data.tokens.cacheRead) +
           ', output ' + formatTokens(data.tokens.output)
       );
+      // Output is the dearest class and reasoning is usually about half of it,
+      // which makes this the largest number on the report that a setting can
+      // actually move. Saying so without measuring it was advice; this is the
+      // measurement.
+      const reasoning = data.reasoning;
+      if (reasoning && reasoning.tokens > 0) {
+        lines.push(
+          '    Of that output, ' + formatTokens(reasoning.tokens) + ' was reasoning (' +
+            Math.round(reasoning.shareOfOutput * 100) + '%' +
+            (money && reasoning.cost !== null ? ', about ' + formatUSD(reasoning.cost) : '') +
+            '), the part effort controls.'
+        );
+      }
     }
     lines.push('');
   }
@@ -1234,8 +1621,8 @@ function render(data) {
 
   if (data.recent.turns) {
     lines.push(
-      '  Recent pace   ' + data.recent.turns + ' turns in the last hour, ' +
-        formatUSD(data.recent.usdPerTurn) + ' per turn' +
+      '  Recent pace   ' + data.recent.turns + ' turns in the last hour' +
+        (money ? ', ' + formatUSD(data.recent.usdPerTurn) + ' per turn' : '') +
         (data.recent.effort ? ', effort ' + data.recent.effort : '')
     );
   } else {
@@ -1263,6 +1650,34 @@ function render(data) {
 
   if (data.binding && data.binding.coarse) {
     lines.push('  Note          the meter reads in whole percent, so a low reading is a wide bracket');
+  }
+
+  // A report taken shortly after a cutoff should say so. The percentages
+  // describe the window running now and look perfectly healthy, which is
+  // exactly why the fact that work was stopped an hour ago has to be stated
+  // rather than left to be inferred from a number that no longer shows it.
+  if (data.lastRefusal && Number.isFinite(data.lastRefusal.at) &&
+      data.now - data.lastRefusal.at < 12 * HOUR) {
+    const window = data.windows.find((one) => one.key === data.lastRefusal.key);
+    lines.push(
+      '  Cut off       ' + formatDuration(data.now - data.lastRefusal.at) + ' ago the ' +
+        ((window && window.label) || data.lastRefusal.key) + ' limit refused work' +
+        (Number.isFinite(data.lastRefusal.resetsAt)
+          ? ', and came back at ' + formatClock(data.lastRefusal.resetsAt)
+          : '')
+    );
+  }
+
+  if (data.windows.some((window) => window.snapshotOlderThanWindow && !window.stale)) {
+    lines.push(
+      '  Note          the snapshot is older than one of these windows, so its reading'
+    );
+    lines.push(
+      '                describes a window that has since rolled over. ' +
+        (data.host === host.CODEX
+          ? 'Run --refresh for a live one.'
+          : 'Run /usage for a fresh one.')
+    );
   }
 
   lines.push('');
@@ -1341,9 +1756,11 @@ function renderForecast(data, turns) {
   }
   lines.push('');
   lines.push(
-    '  Priced from ' + data.rates.sample + ' recent turns: ' +
-      formatUSD(data.rates.median) + ' typical, ' + formatUSD(data.rates.high) +
-      ' at the expensive end.'
+    data.money === false
+      ? '  Priced from ' + data.rates.sample + ' recent turns, cheapest to dearest.'
+      : '  Priced from ' + data.rates.sample + ' recent turns: ' +
+        formatUSD(data.rates.median) + ' typical, ' + formatUSD(data.rates.high) +
+        ' at the expensive end.'
   );
 
   const blocked = rows.filter((row) => !row.fits);
@@ -1359,6 +1776,15 @@ function renderForecast(data, turns) {
       '  It fits, but only if nothing goes wrong. Order the work so the valuable ' +
         'part lands first.'
     );
+  } else if (data.sessions && data.sessions.length > 1) {
+    // The percentages say it fits, and they would be right if this were the
+    // only thing spending. It is not: the budget drains while these turns run,
+    // so a verdict of "room for this" on its own is the one that gets someone
+    // cut off mid-job.
+    lines.push(
+      '  It fits on its own, but ' + data.sessions.length + ' sessions are spending this ' +
+        'budget at once, so it will be gone sooner than these figures alone suggest.'
+    );
   } else {
     lines.push('  There is room for this. No need to work around the limit.');
   }
@@ -1371,14 +1797,37 @@ function renderForecast(data, turns) {
 }
 
 async function main(argv) {
+  // Settle the host before anything reads a file, so one run never mixes one
+  // agent's percentages with the other's turns.
+  setHost(host.detect(argv, process.env));
+
   // The status line runs on every redraw, so it must not scan transcripts.
   if (argv.indexOf('--status') !== -1) {
     process.stdout.write(statusLine(collect(Date.now())) + '\n');
     return 0;
   }
 
+  // Codex writes its meter into the session rollouts, so the cached reading is
+  // only as fresh as the last request it made. Asking Codex itself is a second
+  // and a child process, which is why it is opt-in rather than the default.
+  let codexMeter = null;
+  if (argv.indexOf('--refresh') !== -1) {
+    if (!isCodex()) {
+      process.stderr.write('usage: --refresh applies to Codex. Run /usage in Claude Code.\n');
+      return 2;
+    }
+    try {
+      codexMeter = await codex.refresh();
+    } catch (err) {
+      process.stderr.write(
+        'usage: could not read a live figure from Codex (' +
+          ((err && err.code) || 'unknown') + '). Falling back to the newest one on disk.\n'
+      );
+    }
+  }
+
   const wantsJson = argv.indexOf('--json') !== -1;
-  const data = await report(Date.now());
+  const data = await report(Date.now(), { codexMeter });
 
   const forecastAt = argv.indexOf('--forecast');
   if (forecastAt !== -1) {
@@ -1410,6 +1859,12 @@ if (require.main === module) {
 
 module.exports = {
   main,
+  setHost,
+  currentHost,
+  isCodex,
+  otherLimits,
+  collectClaude,
+  readClaudeEvents,
   RATES,
   WINDOWS,
   rateFor,
@@ -1425,6 +1880,7 @@ module.exports = {
   SATURATION_LIMIT,
   MIN_BASELINE_TURNS,
   buildWindows,
+  lastRejections,
   bindingWindow,
   criticalOthers,
   betterCalibration,
@@ -1446,6 +1902,7 @@ module.exports = {
   collect,
   detectPlan,
   costPercentiles,
+  reasoningSpend,
   forecastWindow,
   renderForecast,
   creditsFrom,

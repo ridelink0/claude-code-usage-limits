@@ -47,15 +47,30 @@ test('a window in step with the clock reads roomy', () => {
   assert.strictEqual(brief.pressure(weekly(29, 2 * DAY), NOW, config), 'roomy');
 });
 
-test('near the wall reads tight regardless of pace', () => {
-  assert.strictEqual(brief.pressure(weekly(85, 6 * DAY), NOW, config), 'tight');
+test('the wall reads tight regardless of pace', () => {
+  assert.strictEqual(brief.pressure(weekly(92, 6 * DAY), NOW, config), 'tight');
 });
 
-test('well ahead of pace reads tight before the wall', () => {
-  assert.strictEqual(brief.pressure(weekly(60, 2 * DAY), NOW, config), 'tight');
+// The wall is the only thing that changes behaviour, and it is at 90 per cent.
+// Everything below it is reported and nothing below it is discouraged, because
+// budget left unspent at the reset is destroyed rather than saved. An earlier
+// version escalated from 40 per cent used and spent its time telling sessions
+// with a third of their budget left to stop starting things.
+test('a budget that is merely well used is not a reason to wind down', () => {
+  for (const percent of [60, 75, 85, 89]) {
+    assert.strictEqual(
+      brief.pressure(weekly(percent, 2 * DAY), NOW, config),
+      'roomy',
+      percent + '% used, with the rest of it about to expire, is room to work'
+    );
+  }
 });
 
-test('ahead of pace but barely used is still roomy', () => {
+test('being ahead of the clock is reported, not escalated on', () => {
+  // Two days into a week at 60% is well ahead of pace, and that is a fact about
+  // how the week is going rather than an instruction to do less today.
+  assert.ok(brief.aheadOfPace(weekly(60, 2 * DAY), NOW) > 15);
+  assert.strictEqual(brief.pressure(weekly(60, 2 * DAY), NOW, config), 'roomy');
   assert.strictEqual(brief.pressure(weekly(30, HOUR), NOW, config), 'roomy');
 });
 
@@ -164,9 +179,13 @@ test('a tight budget changes the instruction, not just the numbers', () => {
     session: null,
     pressure: 'tight',
   });
-  assert.match(text, /what you will do now and what you will leave/);
-  assert.match(text, /will not finish/);
+  assert.match(text, /This is the wall/);
+  assert.match(text, /write the plan for the next session/);
+  assert.match(text, /Do not start anything new/);
   assert.doesNotMatch(text, /confirming the request fits/);
+  // The wrap-up is the one thing worth spending the last of the budget on, so
+  // it must not tell anyone to hurry it.
+  assert.match(text, /Do not rush or shorten the wrap-up/);
 });
 
 test('the line still works when parts are missing', () => {
@@ -343,7 +362,7 @@ test('a normal reading says nothing about rebuilding', () => {
   assert.doesNotMatch(text, /run \/usage/);
 });
 
-test('the tight instruction asks for batching without discouraging corrections', () => {
+test('the wall asks for a handoff rather than for tidier prompts', () => {
   const text = brief.briefText({
     binding: { key: 'five_hour', label: '5-hour', percentUsed: 90, stale: false },
     othersSummary: '',
@@ -352,8 +371,12 @@ test('the tight instruction asks for batching without discouraging corrections',
     session: null,
     pressure: 'tight',
   });
-  assert.match(text, /sending them together/);
-  assert.match(text, /never say it about a correction or a stop/);
+  assert.match(text, /save what is done|Save what is done/i);
+  assert.doesNotMatch(
+    text,
+    /sending them together/,
+    'asking someone to batch their prompts is a saving measure, and saving is not what the wall calls for'
+  );
 });
 
 const rolling = {
@@ -369,12 +392,143 @@ const rolling = {
 
 test('a short turn count is tight whatever the percentage says', () => {
   assert.strictEqual(brief.pressure(rolling, NOW, config, 30), 'roomy');
-  assert.strictEqual(brief.pressure(rolling, NOW, config, 12), 'tight');
+  assert.strictEqual(brief.pressure(rolling, NOW, config, 12), 'roomy');
+  assert.strictEqual(brief.pressure(rolling, NOW, config, 8), 'tight');
 });
 
-test('a rebuilt figure is reacted to sooner, because it reads low', () => {
+// The failure this reproduces: on 2026-08-30 three sessions were cut off by the
+// 5-hour limit at 23:31Z. Nine minutes earlier the window had been rebuilt at
+// 58%, with headroomMs of 43 minutes and no reset time, so its verdict was
+// 'burning'. Every escalation branch looked at something else - the percentage,
+// the turn count, the pace against the clock - and none of them looked at the
+// one figure that said the budget was nearly gone. The brief said it fitted
+// easily.
+test('a window with little runway left is tight even with no reset time', () => {
+  const burning = Object.assign({}, rolling, {
+    percentUsed: 58,
+    verdict: 'burning',
+    msToReset: null,
+    headroomMs: 6 * MINUTE,
+  });
+  assert.strictEqual(
+    brief.pressure(burning, NOW, config, 231),
+    'tight',
+    'six minutes is not enough to land the work, whatever the percentage says'
+  );
+});
+
+// The escalation above is judged against the cached copy of the window, not the
+// window itself, so a field the cache drops is a field the decision never sees.
+// headroomMs was dropped, which made the runway rule dead in production while
+// every test of it passed.
+test('the cache keeps every field the pressure decision reads', () => {
+  const window = { key: 'five_hour', label: '5-hour', percentUsed: 58, headroomMs: 43 * MINUTE };
+  const cached = brief.cacheableBinding(window);
+  for (const field of brief.pressureInputs()) {
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(cached, field),
+      field + ' is read by pressure() but not kept in the cache'
+    );
+  }
+  assert.strictEqual(cached.headroomMs, 43 * MINUTE);
+  assert.strictEqual(brief.cacheableBinding(null), null);
+});
+
+test('a cached window is judged the same as a fresh one', () => {
+  const fresh = Object.assign({}, rolling, {
+    percentUsed: 58,
+    verdict: 'burning',
+    msToReset: null,
+    headroomMs: 43 * MINUTE,
+  });
+  assert.strictEqual(
+    brief.pressure(brief.cacheableBinding(fresh), NOW, config, 231),
+    brief.pressure(fresh, NOW, config, 231)
+  );
+});
+
+// A five hour window resets whole, so holding budget back in one buys nothing.
+// Anchoring the window start correctly at its reset made this worse rather than
+// better: twenty minutes in, the elapsed fraction is tiny, so any real work
+// reads as far ahead of the clock. That is how 44% used came to be reported as
+// tight, which is the plugin telling someone to slow down for no gain.
+test('a short window is not paced, only measured', () => {
+  const justReset = {
+    key: 'five_hour',
+    label: '5-hour',
+    percentUsed: 44,
+    stale: false,
+    estimated: false,
+    windowStart: NOW - 20 * MINUTE,
+    spanMs: 5 * HOUR,
+    msToReset: 5 * HOUR - 20 * MINUTE,
+    verdict: 'burning',
+  };
+  assert.strictEqual(brief.pacingMatters(justReset, NOW), false);
+  assert.strictEqual(
+    brief.pressure(justReset, NOW, config, 190),
+    'roomy',
+    '44% of a window that resets in hours is room to work, not a reason to slow down'
+  );
+});
+
+test('a weekly window is still paced once enough of it has gone', () => {
+  assert.strictEqual(brief.pacingMatters(weekly(60, 2 * DAY), NOW), true);
+  // Still true, and still only information: it does not make the budget tight.
+  assert.strictEqual(brief.pressure(weekly(60, 2 * DAY), NOW, config), 'roomy');
+  // Early on, the elapsed fraction dominates and the comparison says nothing.
+  assert.strictEqual(brief.pacingMatters(weekly(30, HOUR), NOW), false);
+});
+
+test('a short window still escalates on the runway that actually binds', () => {
+  // Removing the pace rule must not remove the warning: the measured runway is
+  // what replaces it, and it is the honest version of the same concern.
+  const burning = {
+    key: 'five_hour',
+    label: '5-hour',
+    percentUsed: 44,
+    stale: false,
+    estimated: false,
+    windowStart: NOW - 20 * MINUTE,
+    spanMs: 5 * HOUR,
+    msToReset: 5 * HOUR - 20 * MINUTE,
+    verdict: 'burning',
+    headroomMs: 5 * MINUTE,
+  };
+  assert.strictEqual(brief.pressure(burning, NOW, config, 190), 'tight');
+});
+
+test('plenty of runway is still roomy', () => {
+  const easy = Object.assign({}, rolling, {
+    percentUsed: 30,
+    verdict: 'burning',
+    msToReset: null,
+    headroomMs: 6 * HOUR,
+  });
+  assert.strictEqual(brief.pressure(easy, NOW, config, 400), 'roomy');
+});
+
+test('the runway that binds is the one the whole account is burning', () => {
+  // headroomMs is measured from every session's spend, not just this one, so it
+  // already carries the cost of sharing. That is exactly why it is the figure
+  // to escalate on when several agents are running.
+  const shared = Object.assign({}, rolling, {
+    percentUsed: 40,
+    verdict: 'burning',
+    msToReset: null,
+    headroomMs: 4 * MINUTE,
+  });
+  assert.strictEqual(brief.pressure(shared, NOW, config, 900), 'tight');
+});
+
+test('a rebuilt figure is held to the same wall as a measured one', () => {
+  // It used to be escalated from 70% because a rebuilt reading only counts this
+  // machine and so reads low. The runway and the spend-since-snapshot
+  // correction both cover that better, and reacting early to a number that is
+  // merely uncertain is how a session with a quarter of its budget left was
+  // told to wind down.
   const higher = Object.assign({}, rolling, { percentUsed: 72 });
-  assert.strictEqual(brief.pressure(higher, NOW, config, 500), 'tight');
+  assert.strictEqual(brief.pressure(higher, NOW, config, 500), 'roomy');
   // Same percentage, and deliberately not ahead of pace either: four hours into
   // a five hour window, 72% is roughly on schedule. The only difference left is
   // whether the figure was measured or rebuilt.
@@ -385,7 +539,7 @@ test('a rebuilt figure is reacted to sooner, because it reads low', () => {
   assert.strictEqual(
     brief.pressure(measured, NOW, config, 500),
     'roomy',
-    '72% of a real reading, on pace, is not yet near the wall'
+    '72% is not near the wall, measured or rebuilt'
   );
 });
 

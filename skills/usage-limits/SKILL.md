@@ -1,6 +1,6 @@
 ---
 name: usage-limits
-description: Check how much of the Claude Code usage limit is left and plan the work to fit inside it. Use before starting anything long, when the 5-hour or weekly limit is getting close, when asked how much usage is left or whether there is enough left to finish, and when asked to work cheaply, burn fewer credits, or stretch the rest of the limit.
+description: Check how much usage limit is left in this agent (Claude Code or Codex) and plan the work to fit inside it. Use before starting anything long, when the 5-hour or weekly limit is getting close, when asked how much usage or quota is left, whether there is enough left to finish, whether a job fits before the reset, when to stop and hand off, and when asked to work cheaply, burn fewer credits, or stretch the rest of the limit.
 ---
 
 # usage-limits
@@ -18,6 +18,11 @@ node scripts/usage.js
 Paths here are relative to this skill's own directory, not the project you are
 working in. Run them from there, or prefix them with the skill's path.
 
+This works the same in Claude Code and in Codex. The host is detected from the
+environment; add `--host codex` or `--host claude` if a machine has both
+installed and the wrong one is picked. Everything below applies to both unless
+it says otherwise.
+
 It prints the real percentages and reset times from the CLI's own cache, plus
 a pace measured from the local session transcripts:
 
@@ -34,7 +39,13 @@ by what a turn has actually been costing over the last hour, on this account,
 at this effort level. Add `--json` when you want the raw fields.
 
 If it says no snapshot was found, run `/usage` once in Claude Code and try
-again. That populates the cache the script reads.
+again. That populates the cache the script reads. In Codex the equivalent is
+`node scripts/usage.js --refresh`, which asks Codex itself for a live reading
+instead of using the newest one it happened to write.
+
+`Left` is money, so it only appears under Claude Code. Codex meters a share of
+an allowance and never quotes a price, so its report has no money column and
+its percentages are exactly what they say they are.
 
 The last line names the plan (Pro, Max 5x, Max 20x, Team, Enterprise) and what
 it means for spending. Pro has the least room and the 5-hour window usually
@@ -222,6 +233,20 @@ to `low` is the largest per-turn saving available without changing model or
 scope. The file change applies to new sessions; for the session already
 running, `/effort low` takes effect immediately.
 
+Do not take that on trust: the report measures it. Under the model table it
+says how much of the output was reasoning and what that cost, for example
+
+```
+    Of that output, 74k was reasoning (40%, about $1.85), the part effort controls.
+```
+
+That share is the ceiling on what lowering effort can save, so read it before
+deciding whether the saving is worth the loss of reasoning. Forty per cent of
+output is worth acting on; four per cent is not, and turning effort down for it
+would cost more in rework than it saves. The same figure covers reasoning asked
+for per prompt, by `ultrathink` or any other means, because it is all the same
+spend on the same meter and the transcript does not separate them.
+
 The behaviour, which applies **even at xhigh or max effort**, because the
 effort setting does not control any of it:
 
@@ -256,6 +281,54 @@ of headroom, stop adding work and land what exists:
 
 A handoff written with ten turns left is worth more than the tenth turn.
 
+## Running under Codex
+
+Everything above works the same. The numbers come from a different place and
+one thing about how they arrive is different, and both are worth knowing.
+
+Codex writes its session rollouts to `~/.codex/sessions`, one JSON object per
+line, and every model request appends a record carrying both the account meter
+and what that request cost in tokens. So the two things this skill needs, the
+percentages and the pace, come out of the same files. Nothing is sent anywhere
+and no credentials are read.
+
+```
+node scripts/usage.js --host codex
+node scripts/usage.js --host codex --refresh
+```
+
+`--refresh` asks Codex itself for a live reading instead of the newest one it
+happened to write. It starts a short-lived `codex app-server`, takes about a
+second, and is the Codex equivalent of running `/usage` in Claude Code. Use it
+when the report says the snapshot is old, not routinely.
+
+The difference that matters: **there is no budget line in front of the prompt.**
+Claude Code lets a plugin ship hooks, so it gets one automatically. Codex will
+not load hooks from a plugin, and on current builds it does not run them from
+`~/.codex/hooks.json` or `config.toml` either, so nothing puts the figures in
+front of you before you start.
+
+What replaces it is an instruction, installed by:
+
+```
+node scripts/install-codex-hook.js on
+```
+
+That writes a marked block into `~/.codex/AGENTS.md` saying to run the report at
+the start of a substantial piece of work, and it stages the hooks for the build
+that runs them. `status` says what is installed, `off` removes both, and neither
+touches anything else in those files.
+
+So under Codex, read the budget deliberately rather than waiting to be told it.
+Once at the start of a piece of work, and again if the job grows or starts
+looping. The rest of this skill applies unchanged.
+
+The report has no money column under Codex. Codex meters a share of an
+allowance and never quotes a price, so the percentages are exactly what they
+say and there is no dollar figure to attach. `scripts/lowpower.js` is for Claude
+Code only: it writes Claude's `settings.json`, so it must not be run under
+Codex. Change model or effort through Codex's own controls instead.
+
 ## When to skip this skill
 
 Do not run the report on every prompt. Once at the start of a long piece of
@@ -266,8 +339,12 @@ a turn, which is the thing it is trying to save.
 
 | Path | What it is |
 | --- | --- |
-| `scripts/usage.js` | The report. `--json` for raw fields, `--status` for a one-line readout that skips the transcript scan, `--forecast N` for what an N turn job would cost. |
+| `scripts/usage.js` | The report. `--json` for raw fields, `--status` for a one-line readout that skips the transcript scan, `--forecast N` for what an N turn job would cost, `--host codex` to read Codex's limits, `--refresh` to ask Codex for a live figure. |
 | `scripts/brief.js` | What the hook runs before each prompt. Not meant to be called by hand. |
-| `scripts/lowpower.js` | `status`, `on`, `off`. Restores what it replaced. |
+| `scripts/pulse.js` | What runs after tool calls, to re-check the budget during a long turn. Not meant to be called by hand. |
+| `scripts/host.js` | Works out which agent this is running inside, so one host's percentages are never reported against the other's turns. |
+| `scripts/codex.js` | The Codex reader: the meter and the pace out of `~/.codex/sessions`, plus the live `--refresh` call. |
+| `scripts/install-codex-hook.js` | `status`, `on`, `off`. Installs the Codex-side instruction, which Claude Code does not need. |
+| `scripts/lowpower.js` | `status`, `on`, `off`. Restores what it replaced. Claude Code only. |
 | `references/tactics.md` | Every lever that lowers cost, and why it works. |
 | `references/how-it-works.md` | Where the numbers come from and where they are soft. |

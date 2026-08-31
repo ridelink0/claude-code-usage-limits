@@ -14,30 +14,58 @@ const os = require('os');
 const path = require('path');
 
 const usage = require('./usage.js');
+const host = require('./host.js');
 
 const SECOND = 1000;
 const DAY = 24 * 60 * 60 * 1000;
 
+// There is one threshold that changes behaviour, and it is the wall.
+//
+// Everything below it is reported and nothing below it is discouraged. That is
+// the whole design, and it is a correction: an earlier version escalated from
+// 40 per cent used, or whenever the runway dropped under three quarters of an
+// hour, and so spent its time telling a session with a third of its budget left
+// to stop starting things. Budget left unspent at the reset is not saved, it is
+// destroyed, so winding down early is not caution. It is waste with a
+// respectable name.
+//
+// Above the wall the instruction is not "hurry" either. It is: write the plan
+// for what is left, save the work, and stop.
 const DEFAULTS = {
-  // Close enough to the wall that the wording should change.
-  near: 80,
-  // Below this, pace is not worth worrying about.
+  // The wall. Below this, work normally at full quality.
+  near: 90,
+  // Kept for `aheadOfPace`, which is still reported. It no longer decides
+  // anything: spending a week's budget faster than the clock is information,
+  // not a reason to slow down.
   floor: 40,
-  // Points of budget spent beyond the share of the window that has elapsed.
   ahead: 15,
   // How long the measured part stays good for. Prompts often arrive in
   // bursts, and a transcript scan per prompt would be wasteful.
   cacheSeconds: 60,
-  // Few enough turns that the count itself is the warning.
-  fewTurns: 20,
+  // Few enough turns that the count itself is the wall.
+  fewTurns: 10,
+  // Minutes of runway left at the current pace, below which there is no longer
+  // time to land the work and write the handoff. Not "too little time to start
+  // something ambitious" - that judgement belongs to whoever is doing the work,
+  // and it needs the number, not an instruction.
+  runwayMinutes: 10,
 };
+
+// The runway is worth saying long before it is worth acting on, because it is
+// the figure that stops a turn count from flattering. Two hundred turns sounds
+// like plenty and can be twenty minutes when three sessions are spending.
+const RUNWAY_MENTION_MS = 2 * 60 * 60 * 1000;
 
 function configDir() {
   return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 }
 
+// One cache per host. The slots double as the count of open sessions, so mixing
+// two agents' sessions into one file would have each of them reporting the
+// other's windows as competition for a budget they do not share.
 function cacheFile() {
-  return path.join(configDir(), 'usage-limits-brief.json');
+  const dir = usage.isCodex() ? require('./codex.js').homeDir() : configDir();
+  return path.join(dir, 'usage-limits-brief.json');
 }
 
 // One slot per session. A single shared slot meant that alternating between
@@ -75,6 +103,36 @@ function pickCached(all, sessionId, now, ttlMs) {
   return now - entry.at < ttlMs ? entry : null;
 }
 
+// How many sessions are actually open right now.
+//
+// The count derived from spend is the accurate one, but it is always late: a
+// session only appears in it once it has finished a turn and written the cost
+// to its transcript. Three windows that all submit a prompt at the same moment
+// each see a count of one, which is exactly when knowing about the other two
+// would have mattered most.
+//
+// This cache is the earlier signal. Every session writes its own slot when the
+// hook runs, so a slot touched in the last few minutes is a session that was
+// being used, whether or not its spend has landed yet. It costs nothing: the
+// file has already been read.
+const LIVE_WINDOW_MS = 15 * 60 * 1000;
+
+// Counts the other sessions, not this one. This session's own slot may not be
+// written yet on its first prompt, so counting slots directly would report two
+// when three windows are open.
+function liveSessions(all, now, windowMs, exceptId) {
+  const within = Number.isFinite(windowMs) ? windowMs : LIVE_WINDOW_MS;
+  const mine = exceptId || '_';
+  let count = 0;
+  for (const key of Object.keys(all || {})) {
+    if (key === mine) continue;
+    const entry = all[key];
+    if (!entry || !Number.isFinite(entry.at)) continue;
+    if (now - entry.at <= within) count += 1;
+  }
+  return count;
+}
+
 // Keep the newest few so a machine with many sessions does not grow the file
 // without bound.
 function mergeCache(all, sessionId, entry, keep) {
@@ -107,6 +165,7 @@ function settings() {
     ahead: number(env.USAGE_LIMITS_AHEAD, DEFAULTS.ahead),
     cacheSeconds: number(env.USAGE_LIMITS_CACHE, DEFAULTS.cacheSeconds),
     fewTurns: number(env.USAGE_LIMITS_FEW_TURNS, DEFAULTS.fewTurns),
+    runwayMinutes: number(env.USAGE_LIMITS_RUNWAY, DEFAULTS.runwayMinutes),
   };
 }
 
@@ -119,33 +178,103 @@ function aheadOfPace(window, now) {
   return window.percentUsed - Math.min(100, Math.max(0, elapsed));
 }
 
+// Spending faster than the clock only means something for a window you have to
+// make last. A window that comes back in hours is meant to be spent in a burst:
+// nothing carries over, so holding budget back buys nothing at all, and the
+// only thing an even pace achieves is getting less done for the same money.
+const PACE_MIN_SPAN_MS = 24 * 60 * 60 * 1000;
+const PACE_MIN_ELAPSED = 0.25;
+
+function pacingMatters(window, now) {
+  if (!window || !window.spanMs || !Number.isFinite(window.windowStart)) return false;
+  if (window.spanMs < PACE_MIN_SPAN_MS) return false;
+  // Early on, the comparison is dominated by how little of the window has gone
+  // rather than by how much has been spent. Twenty minutes into a five hour
+  // window every working session is far "ahead of pace", which is exactly how
+  // 44 per cent used came to be reported as tight.
+  return (now - window.windowStart) / window.spanMs >= PACE_MIN_ELAPSED;
+}
+
 // Not whether to speak, which is always, but how hard to lean on it.
 function pressure(window, now, config, turnsLeft) {
   if (!window || window.percentUsed === null || window.stale) return 'unknown';
   if (window.verdict === 'exhausted' || window.percentUsed >= 100) return 'gone';
   if (window.verdict === 'runs-out') return 'tight';
 
-  // A rebuilt figure only counts this machine, so it reads low. React to it
-  // sooner than to a figure the API actually reported.
-  const near = window.estimated ? Math.min(config.near, 70) : config.near;
-  if (window.percentUsed >= near) return 'tight';
+  // How long the budget lasts at the pace it is actually being spent at. This
+  // is the only figure here that answers "am I about to be cut off", and it was
+  // being computed and then ignored.
+  //
+  // When a reset time is known, a short runway already shows up as the
+  // 'runs-out' verdict above. When it is not - and a 5-hour window whose
+  // resets_at comes back null is exactly that case - the verdict is only
+  // 'burning', which fell through every branch below to 'roomy'. Three sessions
+  // were told the budget fitted easily while this number said forty-three
+  // minutes; nine minutes later all three were rejected.
+  //
+  // It is also the right figure when several agents share one budget: the pace
+  // it is measured from is the whole account's, not this session's, so the
+  // runway already shortens as others spend.
+  const runwayMs = Math.max(0, config.runwayMinutes) * 60 * 1000;
+  if (Number.isFinite(window.headroomMs) && window.headroomMs <= runwayMs) {
+    return 'tight';
+  }
 
-  // Turns are the number the work is planned in, so a short count is tight
-  // whatever the percentage says.
+  if (window.percentUsed >= config.near) return 'tight';
+
+  // Turns are the number the work is planned in, so a count this short is the
+  // wall whatever the percentage says.
   if (Number.isFinite(turnsLeft) && turnsLeft <= config.fewTurns) {
     return 'tight';
   }
 
-  // Pace only means something for a window with a real start. A rebuilt one
-  // is anchored at now minus its span, so it is always "fully elapsed" and
-  // the comparison can never fire.
-  if (!window.estimated) {
-    const lead = aheadOfPace(window, now);
-    if (window.percentUsed >= config.floor && lead !== null && lead >= config.ahead) {
-      return 'tight';
-    }
-  }
+  // Being ahead of the clock is reported and is deliberately not escalated. A
+  // five hour window is meant to be spent in a burst, and even a weekly one
+  // being spent quickly is a fact about how the week is going rather than a
+  // reason to do less today. The figures are in the line; the judgement is the
+  // reader's.
   return 'roomy';
+}
+
+// Everything about the binding window that has to survive the cache, because
+// the cached copy is what every later prompt in the minute is judged against.
+//
+// This is a list rather than the window itself so the cache stays small, and it
+// is a named function so it can be checked: leaving `headroomMs` off it once
+// meant the escalation that depends on the runway was dead in production while
+// passing every unit test, which is the quietest way for a warning to fail.
+const CACHED_BINDING_FIELDS = [
+  'key',
+  'label',
+  'percentUsed',
+  'stale',
+  'estimated',
+  'adjusted',
+  'pointsSinceSnapshot',
+  'correctionUnreliable',
+  'resetsAt',
+  'verdict',
+  'windowStart',
+  'spanMs',
+  'headroomMs',
+  'msToReset',
+  'refusedAt',
+  'refusedResetsAt',
+];
+
+function cacheableBinding(binding) {
+  if (!binding) return null;
+  const copy = {};
+  for (const field of CACHED_BINDING_FIELDS) {
+    copy[field] = binding[field] === undefined ? null : binding[field];
+  }
+  return copy;
+}
+
+// Every field `pressure` reads has to be one the cache keeps, or the decision
+// it makes on a cache hit is made from missing data.
+function pressureInputs() {
+  return ['percentUsed', 'stale', 'verdict', 'headroomMs', 'windowStart', 'spanMs', 'estimated'];
 }
 
 // The hook is handed JSON on stdin. The session id in it is what lets this
@@ -213,6 +342,16 @@ function briefText(parts) {
           ' of them yours)'
         : '';
     bound.push('about ' + parts.turnsLeft + ' turns of headroom' + shared);
+    // A turn count is a poor sense of urgency when several agents are spending
+    // at once: two hundred turns sounds like plenty and can be gone in ten
+    // minutes. The runway is the figure that does not flatter.
+    if (parts.runsOutIn) bound.push('about ' + parts.runsOutIn + ' of that at the current pace');
+  } else if (parts.sessions > 1) {
+    // The headroom could not be worked out, but the fact that the budget is
+    // being shared is still the most important thing about it. Attaching this
+    // only to a turn count meant it went unsaid exactly when there was no
+    // reading to attach it to.
+    bound.push(parts.sessions + ' sessions active and sharing it');
   }
   if (parts.resetsIn) bound.push('resets in ' + parts.resetsIn);
 
@@ -241,6 +380,16 @@ function briefText(parts) {
         parts.snapshotAge + ' old, so run /usage before trusting the rest.'
     );
   }
+  // Work having actually been stopped is the most useful thing that can be said
+  // about a budget, and the percentages stop showing it the moment the window
+  // turns over. Saying it plainly is what stops the next session opening with
+  // "plenty of room" an hour after the last one was cut off mid-edit.
+  if (parts.refusedAgo) {
+    sentences.push(
+      'This limit refused work ' + parts.refusedAgo + ' ago, so treat the room above as ' +
+        'the amount that ran out last time, not a fresh allowance.'
+    );
+  }
   if (parts.othersSummary) sentences.push('Other windows: ' + parts.othersSummary + '.');
 
   // A window that is not binding can still be the expensive one to exhaust.
@@ -262,13 +411,17 @@ function briefText(parts) {
 
   const instruction =
     parts.pressure === 'tight' || parts.pressure === 'gone'
-      ? 'Open your reply with one line on where this leaves the budget, then say ' +
-        'what you will do now and what you will leave for after the reset. ' +
-        'Do not start work that clearly will not finish. If several additions ' +
-        'arrive while you are working, say once that sending them together ' +
-        'costs less, then carry on; never say it about a correction or a stop.'
+      ? 'This is the wall, so wrap up rather than pressing on. Save what is ' +
+        'done, then write the plan for the next session: what is finished, ' +
+        'what is next and in what order, which files are mid-change, and when ' +
+        'the window resets. Do not start anything new. Do not rush or shorten ' +
+        'the wrap-up itself to save budget, because a handoff is the one thing ' +
+        'here worth spending the last of it on.'
       : 'Open your reply with one short line stating this and confirming the ' +
-        'request fits, then get on with the work. Keep it to a single line.';
+        'request fits, then get on with the work. Keep it to a single line. ' +
+        'There is room, so use it: work at full quality, take on the whole ' +
+        'request, and do not hold budget back or economise, as anything left ' +
+        'unspent is lost at the reset rather than saved.';
 
   // The mistake this guards against: quoting the roomiest window and pinning
   // the binding window figures to it.
@@ -282,6 +435,11 @@ function briefText(parts) {
 
 async function run(now, hookInput) {
   if (String(process.env.USAGE_LIMITS_BRIEF || '').toLowerCase() === 'off') return '';
+
+  // Codex cannot ship a hook inside a plugin, so its hook is installed into
+  // ~/.codex/hooks.json with the host written into the command. Settle it here,
+  // before any file is read.
+  usage.setHost(host.detect(process.argv.slice(2), process.env));
 
   const config = settings();
   const base = usage.collect(now);
@@ -312,34 +470,38 @@ async function run(now, hookInput) {
         resetsIn: Number.isFinite(w.msToReset) ? usage.formatDuration(w.msToReset) : 'an unknown time',
       })),
       snapshotAge: usage.formatDuration(data.snapshotAgeMs),
-      binding: binding
-        ? {
-            key: binding.key,
-            label: binding.label,
-            percentUsed: binding.percentUsed,
-            stale: binding.stale,
-            estimated: binding.estimated,
-            adjusted: binding.adjusted,
-            pointsSinceSnapshot: binding.pointsSinceSnapshot,
-            correctionUnreliable: binding.correctionUnreliable,
-            resetsAt: binding.resetsAt,
-            verdict: binding.verdict,
-            windowStart: binding.windowStart,
-            spanMs: binding.spanMs,
-          }
-        : null,
+      binding: cacheableBinding(binding),
     };
     writeCache(mergeCache(all, sessionId, view, KEEP_SESSIONS));
   }
 
   const binding = view.binding;
   const sessions = view.sessions || [];
-  const share = usage.shareOf(sessions, sessionId);
+  // The spend-derived count is the accurate one when it has caught up; the
+  // open-session count is the one that is right immediately. Take whichever is
+  // higher rather than the one that happens to be handy, because under-counting
+  // is what makes the headroom read as more yours than it is.
+  const active = Math.max(sessions.length, liveSessions(all, now, LIVE_WINDOW_MS, sessionId) + 1);
+  const share =
+    sessions.length > 1 ? usage.shareOf(sessions, sessionId) : active > 1 ? 1 / active : 1;
+  const yourTurnsLeft = Number.isFinite(view.turnsLeft)
+    ? Math.max(1, Math.round(view.turnsLeft * share))
+    : null;
+  // Only a short runway is worth saying. Quoting it when there are hours left
+  // would make the line longer without making it more useful.
+  const shortRunway =
+    binding && Number.isFinite(binding.headroomMs) &&
+    binding.headroomMs <= RUNWAY_MENTION_MS;
   return briefText({
-    sessions: sessions.length,
-    yourTurnsLeft: Number.isFinite(view.turnsLeft)
-      ? Math.max(1, Math.round(view.turnsLeft * share))
-      : null,
+    sessions: active,
+    yourTurnsLeft,
+    runsOutIn: shortRunway ? usage.formatDuration(binding.headroomMs) : null,
+    // Only while it is still the thing that just happened. A refusal from days
+    // ago says nothing about now.
+    refusedAgo:
+      binding && Number.isFinite(binding.refusedAt) && now - binding.refusedAt < 6 * 60 * 60 * 1000
+        ? usage.formatDuration(now - binding.refusedAt)
+        : null,
     binding,
     othersSummary: view.othersSummary,
     turnsLeft: view.turnsLeft,
@@ -353,7 +515,13 @@ async function run(now, hookInput) {
     critical: view.critical || [],
     pointsSinceSnapshot: (binding && binding.pointsSinceSnapshot) || 0,
     snapshotAge: view.snapshotAge,
-    pressure: pressure(binding, now, config, view.turnsLeft),
+    // The turn count that matters for this session is its share of a shared
+    // budget, not the whole window's. Escalating on the whole window meant a
+    // count that looked comfortable while the part actually available here was
+    // a third of it.
+    pressure: pressure(binding, now, config, Number.isFinite(yourTurnsLeft)
+      ? yourTurnsLeft
+      : view.turnsLeft),
   });
 }
 
@@ -375,6 +543,9 @@ if (require.main === module) {
 module.exports = {
   DEFAULTS,
   aheadOfPace,
+  pacingMatters,
+  PACE_MIN_SPAN_MS,
+  PACE_MIN_ELAPSED,
   pressure,
   sessionSpend,
   describeWindow,
@@ -384,6 +555,12 @@ module.exports = {
   keepSlots,
   pickCached,
   mergeCache,
+  liveSessions,
+  cacheableBinding,
+  pressureInputs,
+  CACHED_BINDING_FIELDS,
+  LIVE_WINDOW_MS,
+  RUNWAY_MENTION_MS,
   KEEP_SESSIONS,
   run,
   cacheFile,

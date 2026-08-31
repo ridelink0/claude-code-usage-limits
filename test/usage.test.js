@@ -88,6 +88,89 @@ test('eventFrom reads an assistant turn', () => {
   near(event.cost, (100 * 5 + 100 * 25) / 1e6, 1e-9);
 });
 
+// A request the limit refused is written to the transcript like an assistant
+// turn, with a synthetic model and a usage block of zeros. Counting it as a turn
+// dilutes the measured cost per turn with free ones; ignoring it altogether
+// throws away the only statement of which window stopped the work and when it
+// comes back. On 2026-08-30 the 5-hour bucket was reporting 0% with a null
+// reset, so these records were the sole anchor available and were not read.
+function refusal(at, key, resetsAtSeconds) {
+  return JSON.stringify({
+    type: 'assistant',
+    timestamp: new Date(at).toISOString(),
+    requestId: 'req_reject_' + at,
+    sessionId: 'session-a',
+    isApiErrorMessage: true,
+    apiErrorStatus: 429,
+    error: 'rate_limit',
+    quotaLimits: { status: 'rejected', rateLimitType: key, resetsAt: resetsAtSeconds },
+    message: {
+      id: 'msg_reject_' + at,
+      model: '<synthetic>',
+      usage: { input_tokens: 0, output_tokens: 0 },
+      content: [{ type: 'text', text: "You've hit your session limit" }],
+    },
+  });
+}
+
+test('eventFrom reads a refused request as a refusal, not a turn', () => {
+  const at = Date.parse('2026-08-30T23:31:12.000Z');
+  const event = usage.eventFrom(refusal(at, 'five_hour', 1788148800), new Set());
+
+  assert.strictEqual(event.cost, 0, 'a refused request cost nothing');
+  assert.strictEqual(event.tokens, 0);
+  assert.ok(event.rejected, 'it is marked so it can be kept out of the spend');
+  assert.strictEqual(event.rejected.key, 'five_hour');
+  assert.strictEqual(event.rejected.status, 'rejected');
+  assert.strictEqual(event.rejected.resetsAt, 1788148800 * 1000, 'seconds become milliseconds');
+});
+
+test('lastRejections keeps the most recent refusal per window', () => {
+  const early = Date.parse('2026-08-30T20:00:00.000Z');
+  const late = Date.parse('2026-08-30T23:31:12.000Z');
+  const events = [
+    usage.eventFrom(refusal(early, 'five_hour', 1788130000), new Set()),
+    usage.eventFrom(refusal(late, 'five_hour', 1788148800), new Set()),
+    usage.eventFrom(refusal(early, 'seven_day', 1788292798), new Set()),
+  ];
+  const found = usage.lastRejections(events);
+
+  assert.strictEqual(found.get('five_hour').at, late);
+  assert.strictEqual(found.get('five_hour').resetsAt, 1788148800 * 1000);
+  assert.strictEqual(found.get('seven_day').at, early);
+  assert.strictEqual(found.size, 2);
+});
+
+test('a refusal in the past anchors the window that is running now', () => {
+  // The state the account was actually in: a 5-hour bucket reading 0% with no
+  // reset time, having refused work when the previous window ran out. Without
+  // the refusal the window is treated as rolling and starts five hours ago,
+  // sweeping in everything the exhausted window spent.
+  const reset = Date.parse('2026-08-31T04:00:00.000Z');
+  const now = reset + HOUR / 3;
+  const spend = [
+    { at: reset - HOUR, cost: 40, tokens: 0, model: 'claude-opus-5', effort: null },
+    { at: reset + HOUR / 12, cost: 1, tokens: 0, model: 'claude-opus-5', effort: null },
+  ];
+
+  const rejections = usage.lastRejections([
+    usage.eventFrom(refusal(reset - HOUR / 2, 'five_hour', reset / 1000), new Set()),
+  ]);
+  const [window] = usage.buildWindows(
+    { five_hour: { utilization: 0, resets_at: null } },
+    spend,
+    now,
+    now - HOUR / 60,
+    null,
+    null,
+    rejections
+  );
+
+  assert.strictEqual(window.windowStart, reset, 'the window began when the refusal said it would');
+  assert.strictEqual(window.turns, 1, 'only the spend after the reset counts');
+  assert.strictEqual(window.refusedAt, reset - HOUR / 2);
+});
+
 test('eventFrom skips a turn already counted in another file', () => {
   const line = JSON.stringify({
     type: 'assistant',
@@ -381,20 +464,76 @@ test('render prints the plan advice when there is one', () => {
   assert.doesNotMatch(silent, /rarely binds/);
 });
 
-test('tokenParts splits the four classes', () => {
+test('tokenParts splits the classes, with reasoning inside output', () => {
   const parts = usage.tokenParts({
     input_tokens: 10,
     cache_read_input_tokens: 100,
     cache_creation_input_tokens: 50,
     output_tokens: 5,
   });
-  assert.deepStrictEqual(parts, { input: 10, cacheWrite: 50, cacheRead: 100, output: 5 });
+  assert.deepStrictEqual(parts, {
+    input: 10,
+    cacheWrite: 50,
+    cacheRead: 100,
+    output: 5,
+    reasoning: 0,
+  });
   assert.deepStrictEqual(usage.tokenParts(null), {
     input: 0,
     cacheWrite: 0,
     cacheRead: 0,
     output: 0,
+    reasoning: 0,
   });
+});
+
+// Reasoning is a slice of output, not a class beside it. Measured over 1,565
+// turns of real transcripts, thinking never once exceeded output. Adding it to
+// a total would price every thinking turn twice.
+test('reasoning is carried alongside output, never added to it', () => {
+  const parts = usage.tokenParts({
+    input_tokens: 10,
+    output_tokens: 900,
+    output_tokens_details: { thinking_tokens: 700 },
+  });
+  assert.strictEqual(parts.output, 900, 'output already includes the thinking');
+  assert.strictEqual(parts.reasoning, 700);
+
+  // And the cost is unchanged by knowing about it, because it was always in
+  // there. This is the guard against a silent doubling.
+  const withDetails = usage.costOf(
+    { input_tokens: 10, output_tokens: 900, output_tokens_details: { thinking_tokens: 700 } },
+    'claude-opus-5'
+  );
+  const without = usage.costOf({ input_tokens: 10, output_tokens: 900 }, 'claude-opus-5');
+  assert.strictEqual(withDetails, without);
+});
+
+test('reasoningSpend prices the thinking at the rate of whoever did it', () => {
+  const models = [
+    { model: 'claude-opus-5', parts: { output: 1e6, reasoning: 1e6 } },
+    { model: 'claude-haiku-4-5', parts: { output: 1e6, reasoning: 1e6 } },
+  ];
+  const spend = usage.reasoningSpend(models, { output: 4e6, reasoning: 2e6 });
+  // A million Opus output tokens is $25, a million Haiku is $5.
+  near(spend.cost, 30);
+  assert.strictEqual(spend.tokens, 2e6);
+  assert.strictEqual(spend.shareOfOutput, 0.5);
+});
+
+test('reasoningSpend stays quiet when there was no thinking to price', () => {
+  assert.strictEqual(usage.reasoningSpend([], { output: 100, reasoning: 0 }), null);
+  assert.strictEqual(usage.reasoningSpend([], { output: 0, reasoning: 0 }), null);
+  assert.strictEqual(usage.reasoningSpend(null, null), null);
+});
+
+test('reasoningSpend reports a share even when it cannot price it', () => {
+  // Codex meters an allowance rather than a price, so there is no rate to
+  // apply, but the share of output is still the useful half.
+  const spend = usage.reasoningSpend([], { output: 1000, reasoning: 400 });
+  assert.strictEqual(spend.cost, null);
+  assert.strictEqual(spend.shareOfOutput, 0.4);
+  assert.strictEqual(spend.tokens, 400);
 });
 
 test('byModel groups by model, dearest first, with shares summing to one', () => {
@@ -994,19 +1133,38 @@ function costs(list) {
   return list.map((cost) => ({ cost }));
 }
 
-test('typicalTurnCost takes the middle turn, not the mean', () => {
-  // One huge turn must not define the pace. The mean here is 2.3.
+test('typicalTurnCost throws out the extremes rather than following them', () => {
+  // One huge turn must not define the pace. The plain mean here is 2.22.
   const sample = costs([0.2, 0.25, 0.3, 0.35, 10]);
   assert.strictEqual(usage.typicalTurnCost(sample, [], [], 5), 0.3);
+});
+
+// It is a trimmed mean rather than the middle turn, because the figure is used
+// to divide a budget into a number of turns. Turn costs are skewed - a few are
+// far dearer than the rest, and they get dearer as context grows - so the
+// middle turn promises more turns than the budget holds. Measured on the window
+// that ran out on 2026-08-30: 182 promised against 110 actually left.
+test('typicalTurnCost follows the skew, so a turn count is not flattered', () => {
+  const skewed = costs([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.9, 1.0]);
+  const middle = 0.1;
+  const measured = usage.typicalTurnCost(skewed, [], [], 5);
+  assert.ok(
+    measured > middle,
+    'the dear turns are real spending and must raise the cost of a turn'
+  );
+  // Still well under the plain mean of 0.27, so one outlier cannot run away
+  // with it either.
+  assert.ok(measured < 0.27);
 });
 
 test('typicalTurnCost ignores a sample too thin to trust', () => {
   const oneBigTurn = costs([7.13]);
   const window = costs([0.2, 0.2, 0.25, 0.3, 0.3, 0.35]);
-  // Six turns, so the middle is the upper of the two: 0.3, not the 2.3 mean.
+  // The thin sample is passed over for the window: 0.2625, not the 7.13 turn
+  // and not the 2.3 mean of both together.
   assert.strictEqual(
     usage.typicalTurnCost(oneBigTurn, window, [], 5),
-    0.3,
+    0.2625,
     'a single expensive turn is not a pace'
   );
 });
@@ -1015,7 +1173,7 @@ test('typicalTurnCost widens again when the window itself is thin', () => {
   const everything = costs([0.2, 0.2, 0.25, 0.3, 0.3, 0.35]);
   assert.strictEqual(
     usage.typicalTurnCost(costs([9]), costs([9, 8]), everything, 5),
-    0.3,
+    0.2625,
     'a five hour window holding two turns cannot price a turn'
   );
 });

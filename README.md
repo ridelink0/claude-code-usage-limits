@@ -392,6 +392,63 @@ own account reports, so it is right on any tier, including ones that did not
 exist when this was written. The plan only decides which line of advice you
 get at the bottom of the report.
 
+## Codex
+
+It reads Codex's limits too, from the same repo and the same commands.
+
+Codex writes its session rollouts to `~/.codex/sessions`, one JSON object per
+line, and every model request appends a record carrying both the account meter
+and what that request cost in tokens. That is the same pair of things this tool
+needs from Claude Code, so the window arithmetic, the turn estimates, the
+forecast and the concurrent-session counting all work unchanged. Nothing is
+uploaded and no credentials are read.
+
+```
+npx claude-usage-limits --host codex
+npx claude-usage-limits --host codex --refresh
+npx claude-usage-limits codex-hook on
+```
+
+The host is detected, so `--host` is only needed on a machine with both
+installed. `--refresh` asks Codex itself for a live reading rather than the
+newest one it happened to write; it starts a short-lived `codex app-server` and
+takes about a second, and it is the Codex equivalent of `/usage`.
+
+As a plugin, Codex installs it from this repo directly:
+
+```
+codex plugin marketplace add https://github.com/ridelink0/claude-code-usage-limits
+codex plugin add usage-limits@usage-limits
+```
+
+### One thing is different, and it is worth being straight about
+
+Under Claude Code the budget line arrives on its own, because a plugin can ship
+hooks. Under Codex it does not, and not for want of trying:
+
+- Codex has the whole hook engine. The binary carries `UserPromptSubmit`,
+  `SessionStart`, `PreToolUse` and the rest, and `codex features list` reports
+  `hooks` as stable and enabled.
+- A plugin cannot ship one: `plugin_hooks` is reported as `removed`.
+- And on `codex-cli 0.151.0-alpha.7.2` nothing fires it. Tested with a hook
+  whose only job was to write a file, from `~/.codex/hooks.json`, from a
+  `[hooks]` table in `config.toml`, and from `~/.codex/hooks/`, in both
+  `codex exec` and the desktop app. The engine is present and inert.
+
+So `codex-hook on` installs two things. A marked block in `~/.codex/AGENTS.md`,
+which Codex reads at the top of every session and which is what actually works
+today; and the hooks themselves, ready for the build that runs them. `status`
+reports both, `off` removes both, and neither touches anything else in those
+files.
+
+The practical difference is that under Codex the budget is read deliberately,
+once at the start of a piece of work, rather than being handed to you before
+every prompt.
+
+Two smaller differences. There is no money column: Codex meters a share of an
+allowance and never quotes a price, so the percentages stand alone. And
+`lowpower` is Claude Code only, because it writes Claude's `settings.json`.
+
 ## Where it works
 
 Every surface of Claude Code on a machine shares one config directory, so
@@ -502,12 +559,17 @@ names, the formulas, and the rest of it.
 ## Layout
 
 ```
-.claude-plugin/plugin.json        plugin manifest
+.claude-plugin/plugin.json        plugin manifest, Claude Code
 .claude-plugin/marketplace.json   lets the repo serve itself
-skills/usage-limits/SKILL.md      what Claude reads
-skills/usage-limits/scripts/      usage.js, lowpower.js, brief.js
+.codex-plugin/plugin.json         plugin manifest, Codex
+agents/openai.yaml                how Codex lists the plugin
+skills/usage-limits/SKILL.md      what the agent reads
+skills/usage-limits/agents/       how Codex lists the skill
+skills/usage-limits/scripts/      usage.js, brief.js, pulse.js, codex.js,
+                                  host.js, lowpower.js, install-codex-hook.js
 skills/usage-limits/references/   the longer notes
-hooks/hooks.json                  runs brief.js before each prompt
+hooks/hooks.json                  runs brief.js before each prompt, and
+                                  pulse.js during long turns
 commands/check.md                 the /usage-limits:check command
 bin/cli.js                        the npx entry point
 tools/sync-version.js             keeps the manifest version in step
@@ -520,9 +582,10 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-190 tests over the pricing, the window arithmetic, plan and credit detection,
-the status line, the before-prompt line, job forecasting, per-project
-attribution, the CLI, packaging, and the settings save/restore.
+248 tests over the pricing, the window arithmetic, plan and credit detection,
+the status line, the before-prompt line, the mid-turn pulse, job forecasting,
+per-project attribution, the Codex reader and its installer, the CLI,
+packaging, and the settings save/restore.
 
 ## Status
 

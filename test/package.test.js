@@ -110,6 +110,54 @@ test('the skill itself ships, not just the scripts', () => {
   }
 });
 
+// The plugin is installable from two hosts, and each reads a manifest the other
+// ignores. Leaving one out of the files list publishes a package that installs
+// on one host and is invisible on the other, with every other test still green.
+test('both hosts get everything they need to install it', () => {
+  const { files } = packInfo();
+  for (const file of [
+    '.codex-plugin/plugin.json',
+    'agents/openai.yaml',
+    'skills/usage-limits/agents/openai.yaml',
+    'skills/usage-limits/scripts/codex.js',
+    'skills/usage-limits/scripts/host.js',
+    'skills/usage-limits/scripts/install-codex-hook.js',
+    'skills/usage-limits/scripts/pulse.js',
+  ]) {
+    assert.ok(
+      files.includes(file),
+      file + ' should be in the package. Without it the Codex side either does ' +
+        'not appear or fails at runtime, while the Claude side keeps working.'
+    );
+  }
+});
+
+// npm version bumps package.json; the manifests carry their own copy and the
+// marketplaces pin to it. Bumping one and forgetting the other publishes a
+// package whose two halves disagree about what version they are.
+test('every host manifest carries the same version as the package', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  for (const manifest of ['.claude-plugin/plugin.json', '.codex-plugin/plugin.json']) {
+    const parsed = JSON.parse(fs.readFileSync(path.join(root, manifest), 'utf8'));
+    assert.strictEqual(
+      parsed.version,
+      pkg.version,
+      manifest + ' is at ' + parsed.version + ' but the package is at ' + pkg.version +
+        '. tools/sync-version.js should keep these in step.'
+    );
+  }
+});
+
+test('the version script updates every manifest, not just the first', () => {
+  const script = fs.readFileSync(path.join(root, 'tools', 'sync-version.js'), 'utf8');
+  assert.ok(script.indexOf('.codex-plugin') !== -1, 'the Codex manifest must be synced too');
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  assert.ok(
+    pkg.scripts.version.indexOf('.codex-plugin/plugin.json') !== -1,
+    'and staged, or the bump is left out of the release commit'
+  );
+});
+
 test('the tarball stays small enough to be uncontroversial', () => {
   const { unpackedSize } = packInfo();
   assert.ok(

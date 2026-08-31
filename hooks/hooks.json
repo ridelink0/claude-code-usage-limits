@@ -1,5 +1,5 @@
 {
-  "description": "Tells Claude how much usage budget is left, but only when it is tight enough to change what can be done.",
+  "description": "Tells Claude how much usage budget is left: once before each prompt, and again during long turns so the figure it is working from does not go stale.",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -7,6 +7,17 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/usage-limits/scripts/brief.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/usage-limits/scripts/pulse.js\"",
             "timeout": 10
           }
         ]
