@@ -179,13 +179,24 @@ test('a tight budget changes the instruction, not just the numbers', () => {
     session: null,
     pressure: 'tight',
   });
-  assert.match(text, /This is the wall/);
-  assert.match(text, /write the plan for the next session/);
-  assert.match(text, /Do not start anything new/);
+  assert.match(text, /nearly gone/);
   assert.doesNotMatch(text, /confirming the request fits/);
-  // The wrap-up is the one thing worth spending the last of the budget on, so
-  // it must not tell anyone to hurry it.
-  assert.match(text, /Do not rush or shorten the wrap-up/);
+
+  // The contract, not the wording. Near the wall the work still gets done in
+  // full; what changes is that being cut off is made cheap. Deciding on the
+  // user's behalf to do less of what they asked spends their request to protect
+  // a budget that expires anyway, and they did not ask for that trade.
+  assert.match(text, /whole request/);
+  assert.match(text, /keep working/i);
+  assert.doesNotMatch(
+    text,
+    /do not start anything new|stop adding work|leave for after the reset/i,
+    'near the wall must not truncate the plan; scaling the work down is a decision for the user, not for the plugin'
+  );
+  // And it must still make the cutoff survivable.
+  assert.match(text, /valuable part lands first/);
+  assert.match(text, /save at clean boundaries/);
+  assert.match(text, /which files are mid-change/);
 });
 
 test('the line still works when parts are missing', () => {
@@ -362,21 +373,33 @@ test('a normal reading says nothing about rebuilding', () => {
   assert.doesNotMatch(text, /run \/usage/);
 });
 
-test('the wall asks for a handoff rather than for tidier prompts', () => {
+test('an exhausted budget is the only state that stops the work', () => {
   const text = brief.briefText({
     binding: { key: 'five_hour', label: '5-hour', percentUsed: 90, stale: false },
     othersSummary: '',
     turnsLeft: 4,
     resetsIn: '20m',
     session: null,
-    pressure: 'tight',
+    pressure: 'gone',
   });
-  assert.match(text, /save what is done|Save what is done/i);
+  assert.match(text, /budget is gone/);
+  assert.match(text, /write the handoff/);
   assert.doesNotMatch(
     text,
     /sending them together/,
-    'asking someone to batch their prompts is a saving measure, and saving is not what the wall calls for'
+    'asking someone to batch their prompts is a saving measure, and there is nothing left to save'
   );
+
+  // Nearly gone is not gone: that one carries on.
+  const nearly = brief.briefText(Object.assign({}, {
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 90, stale: false },
+    othersSummary: '',
+    turnsLeft: 4,
+    resetsIn: '20m',
+    session: null,
+    pressure: 'tight',
+  }));
+  assert.match(nearly, /Carry on with the whole request/);
 });
 
 const rolling = {

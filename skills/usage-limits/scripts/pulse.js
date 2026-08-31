@@ -100,9 +100,12 @@ function pulseText(parts) {
     return head + ' The budget is gone. Stop adding work, save what exists and write the handoff.';
   }
   if (parts.pressure === 'tight') {
+    // Mid-turn, so this has to change how the work is carried out without
+    // changing what the work is. Keep going; just keep it landable.
     return (
-      head + ' This is the wall: save what is done and write the plan for the ' +
-      'next session, rather than starting anything further.'
+      head + ' Keep going with the whole job, but make a cutoff cheap: land the ' +
+      'valuable part first, save at clean boundaries, and keep a note of what is ' +
+      'done and what is next.'
     );
   }
   return head + ' Still room; carry on.';

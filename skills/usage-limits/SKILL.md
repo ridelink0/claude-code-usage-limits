@@ -79,12 +79,26 @@ not tight.
 **It fits only if nothing goes wrong.** Say so, switch to low power for the
 run, and reorder the work so the valuable part lands first.
 
-**It does not fit.** Say so before starting, in plain words. State that not
-all of it can be done in what is left, list what you are doing now and what
-you are leaving, and name the wall-clock time the window resets so the user
-knows when the rest can happen. Then do the part that fits, properly. Do not
-start and hope: half a feature, committed and working, beats a whole one
-abandoned mid-edit.
+**It does not fit.** Say so in one line before starting, and name the
+wall-clock time the window resets so the user knows when the rest can happen.
+Then do the whole thing anyway, ordered so that being cut off costs as little
+as possible.
+
+That is the part to get right, because the tempting move is the wrong one.
+Deciding on the user's behalf to do less of what they asked spends their
+request to protect a budget that expires regardless, and they did not ask for
+that trade. Scaling the work down is their call, not yours.
+
+So take the whole request, and make a cutoff cheap instead:
+
+- Order it so the most valuable part lands first.
+- Save at clean boundaries as you go, rather than once at the end.
+- Keep a short running note of what is done, what is next, and which files are
+  mid-change, so stopping at any moment loses nothing.
+
+Half a feature, committed and working, still beats a whole one abandoned
+mid-edit. The difference is that you get there by sequencing the work, not by
+refusing part of it.
 
 **The window resets first.** If the reset lands before the budget runs out,
 the limit is not the constraint. Say that and stop optimising for it.
@@ -270,16 +284,22 @@ one.
 
 ## 5. Checkpoint before the wall
 
-When the binding window is under roughly 15 percent, or under about ten turns
-of headroom, stop adding work and land what exists:
+When the binding window is under roughly 10 percent, or under about ten turns
+of headroom, keep working and start keeping the work landable:
 
-1. Commit or otherwise save the working state.
-2. Write `HANDOFF.md`: what is done, what is next, which files are mid-change,
-   what the next session should read first.
+1. Commit or otherwise save the working state, at every clean boundary rather
+   than once at the end.
+2. Keep `HANDOFF.md` current as you go: what is done, what is next, which files
+   are mid-change, what the next session should read first.
 3. Say when the window resets, as a clock time and not just a duration, plus
    what to run on the way back in.
 
-A handoff written with ten turns left is worth more than the tenth turn.
+The point of the handoff is that it costs almost nothing and removes the reason
+to stop early. With one in place, being cut off loses a turn instead of an
+afternoon, so there is no longer anything to buy by winding down.
+
+The one thing not to economise on is the handoff itself. Everything else can be
+picked up next session; a session that ends without one cannot.
 
 ## Running under Codex
 

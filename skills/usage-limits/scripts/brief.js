@@ -409,19 +409,33 @@ function briefText(parts) {
     );
   }
 
+  // Three states, and only the last one stops anything.
+  //
+  // The middle one is the one that keeps being got wrong. Near the wall the
+  // instinct is to do less of what was asked, and that is the wrong trade: it
+  // spends the user's request to protect a budget that expires anyway. The job
+  // near the wall is to make being cut off cheap - order the work, save as you
+  // go, keep a note of where things stand - not to shrink the work until it is
+  // guaranteed to fit.
   const instruction =
-    parts.pressure === 'tight' || parts.pressure === 'gone'
-      ? 'This is the wall, so wrap up rather than pressing on. Save what is ' +
-        'done, then write the plan for the next session: what is finished, ' +
-        'what is next and in what order, which files are mid-change, and when ' +
-        'the window resets. Do not start anything new. Do not rush or shorten ' +
-        'the wrap-up itself to save budget, because a handoff is the one thing ' +
-        'here worth spending the last of it on.'
-      : 'Open your reply with one short line stating this and confirming the ' +
-        'request fits, then get on with the work. Keep it to a single line. ' +
-        'There is room, so use it: work at full quality, take on the whole ' +
-        'request, and do not hold budget back or economise, as anything left ' +
-        'unspent is lost at the reset rather than saved.';
+    parts.pressure === 'gone'
+      ? 'The budget is gone, so nothing further will run. Save what exists and ' +
+        'write the handoff: what is finished, what is next and in what order, ' +
+        'which files are mid-change, and when the window resets.'
+      : parts.pressure === 'tight'
+        ? 'The budget is nearly gone, so make being cut off cheap rather than ' +
+          'doing less. Carry on with the whole request at full quality: this is ' +
+          'not a reason to narrow the work, drop parts of it, or stop to ask ' +
+          'whether to go on. Order it so the most valuable part lands first, ' +
+          'save at clean boundaries as you go, and keep a short running note of ' +
+          'what is done, what is next, and which files are mid-change, so that ' +
+          'stopping at any moment loses nothing. Say in one line what may not ' +
+          'land before the reset, then keep working.'
+        : 'Open your reply with one short line stating this and confirming the ' +
+          'request fits, then get on with the work. Keep it to a single line. ' +
+          'There is room, so use it: work at full quality, take on the whole ' +
+          'request, and do not hold budget back or economise, as anything left ' +
+          'unspent is lost at the reset rather than saved.';
 
   // The mistake this guards against: quoting the roomiest window and pinning
   // the binding window figures to it.

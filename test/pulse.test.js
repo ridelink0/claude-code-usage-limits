@@ -70,7 +70,7 @@ test('the line names the window, the runway and the sharing', () => {
   assert.match(text, /about 34 turns left/);
   assert.match(text, /14m at this pace/);
   assert.match(text, /3 sessions sharing it/);
-  assert.match(text, /write the plan for the next session/);
+  assert.match(text, /make a cutoff cheap/);
 });
 
 test('an exhausted budget says to stop rather than to hurry', () => {
