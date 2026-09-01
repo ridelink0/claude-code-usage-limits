@@ -296,6 +296,10 @@ function eventFrom(line, seen, project) {
     };
   }
 
+  // Interrupts and client-side errors are written as assistant messages from
+  // a model called <synthetic>, with a usage block of zeros. Not a call.
+  if (entry.message.model === '<synthetic>') return null;
+
   // A resumed or forked session repeats earlier turns in a new file.
   const id = (entry.message.id || '') + '|' + (entry.requestId || '');
   if (id !== '|' && seen) {
@@ -351,6 +355,28 @@ async function readEvents(since) {
   return readClaudeEvents(since);
 }
 
+// A file last touched before the window opened holds nothing useful.
+function fresh(file, since) {
+  try {
+    return fs.statSync(file).mtimeMs >= since;
+  } catch (err) {
+    return false;
+  }
+}
+
+function freshFiles(dir, since) {
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch (err) {
+    return [];
+  }
+  return names
+    .filter((name) => name.endsWith('.jsonl'))
+    .map((name) => path.join(dir, name))
+    .filter((file) => fresh(file, since));
+}
+
 async function readClaudeEvents(since) {
   const root = path.join(configDir(), 'projects');
   let dirs = [];
@@ -364,21 +390,25 @@ async function readClaudeEvents(since) {
   for (const dir of dirs) {
     if (!dir.isDirectory()) continue;
     const full = path.join(root, dir.name);
-    let names = [];
+    let entries = [];
     try {
-      names = fs.readdirSync(full);
+      entries = fs.readdirSync(full, { withFileTypes: true });
     } catch (err) {
       continue;
     }
-    for (const name of names) {
-      if (!name.endsWith('.jsonl')) continue;
-      const file = path.join(full, name);
-      try {
-        // A file last touched before the window opened holds nothing useful.
-        if (fs.statSync(file).mtimeMs < since) continue;
-      } catch (err) {
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        // A session's subagents write their transcripts under
+        // <project>/<session id>/subagents/. Same budget, different file, and
+        // for a long time an Explore or Plan agent's whole spend went unseen.
+        for (const file of freshFiles(path.join(full, entry.name, 'subagents'), since)) {
+          files.push({ file, project: dir.name });
+        }
         continue;
       }
+      if (!entry.name.endsWith('.jsonl')) continue;
+      const file = path.join(full, entry.name);
+      if (!fresh(file, since)) continue;
       files.push({ file, project: dir.name });
     }
   }
@@ -405,13 +435,20 @@ async function readClaudeEvents(since) {
   return events;
 }
 
+// A turn is one main-thread call, the unit the headroom is planned in. A
+// subagent's calls spend the same budget, so they count in the money and the
+// tokens, and are counted apart so they never inflate the turn figures.
 function totals(events) {
   let cost = 0;
   let tokens = 0;
+  let turns = 0;
+  let subagentTurns = 0;
   const parts = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, reasoning: 0 };
   for (const event of events) {
     cost += event.cost;
     tokens += event.tokens;
+    if (event.sidechain) subagentTurns += 1;
+    else turns += 1;
     if (event.parts) {
       parts.input += event.parts.input;
       parts.cacheWrite += event.parts.cacheWrite;
@@ -420,7 +457,11 @@ function totals(events) {
       parts.reasoning += event.parts.reasoning || 0;
     }
   }
-  return { cost, tokens, turns: events.length, parts };
+  return { cost, tokens, turns, subagentTurns, parts };
+}
+
+function mainThread(events) {
+  return (events || []).filter((event) => !event.sidechain);
 }
 
 // What each model actually cost, dearest first.
@@ -468,8 +509,9 @@ function typicalTurnCost(recentEvents, windowEvents, allEvents, minSample) {
 
   // What a turn costs is a fact about how you work, not about which budget it
   // is being measured against, so a thin window borrows from a wider sample
-  // rather than inventing a figure from two turns.
-  const tiers = [recentEvents, windowEvents, allEvents];
+  // rather than inventing a figure from two turns. Subagent calls are left
+  // out: they are small and many, and would make a turn look cheap.
+  const tiers = [mainThread(recentEvents), mainThread(windowEvents), mainThread(allEvents)];
   let pool = [];
   for (const tier of tiers) {
     if (tier && tier.length >= floor) {
@@ -609,7 +651,7 @@ function creditsFrom(utilization) {
 // files costs many times one that answers from context. A median alone
 // under-promises on the expensive half, so carry a high end too.
 function costPercentiles(events) {
-  const costs = (events || [])
+  const costs = mainThread(events)
     .map((event) => event.cost)
     .filter((cost) => Number.isFinite(cost) && cost > 0)
     .sort((a, b) => a - b);
@@ -813,6 +855,7 @@ function buildWindow(spec, snapshot, events, now, options) {
     spentUSD: spent.cost,
     spentTokens: spent.tokens,
     turns: spent.turns,
+    subagentTurns: spent.subagentTurns,
     recentTurns: recent.turns,
     recentUSDPerHour: recent.cost / recentHours,
     recentUSDPerTurn: recent.turns ? recent.cost / recent.turns : null,
@@ -1358,7 +1401,7 @@ function sessionSpend(events, sessionId) {
     if (event.sessionId !== sessionId) continue;
     cost += event.cost;
     tokens += event.tokens || 0;
-    turns += 1;
+    if (!event.sidechain) turns += 1;
   }
   return turns ? { turns, cost, tokens } : null;
 }
@@ -1472,7 +1515,8 @@ async function report(now, options) {
       tokens: recent.tokens,
       effort: dominantEffort(recentEvents),
     },
-    measuredTurns: events.length,
+    measuredTurns: mainThread(events).length,
+    subagentTurns: events.length - mainThread(events).length,
   });
 }
 
@@ -1752,7 +1796,10 @@ function render(data) {
   } else {
     lines.push('  Recent pace   no turns in the last hour');
   }
-  lines.push('  Measured      ' + formatCount(data.measuredTurns) + ' turns of local transcript');
+  lines.push(
+    '  Measured      ' + formatCount(data.measuredTurns) + ' turns of local transcript' +
+      (data.subagentTurns > 0 ? ' (+' + formatCount(data.subagentTurns) + ' subagent calls)' : '')
+  );
 
   if (data.windows.some((window) => window.adjusted)) {
     lines.push(
