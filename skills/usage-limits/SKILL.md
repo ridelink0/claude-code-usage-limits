@@ -225,6 +225,31 @@ context grows.
 
 Reach for it whenever the answer to "will this finish" is not obvious.
 
+## Closing with what it cost
+
+The budget line opens the reply; the cost closes it. When a reply completes
+what was asked, or wraps up the session, end it with one plain line:
+
+> Spent this session: 48 turns, 3.1M tokens, about $12.40.
+
+The figures come from the `This session:` part of the budget line, so there is
+nothing to run. They are exact as of the start of this turn, and the Stop hook
+prints the up-to-date figure to the user the moment you finish, so do not go
+and re-measure for the closing line.
+
+Three rules keep it useful rather than noisy:
+
+- **Finished work only.** A progress note mid-task, a clarifying question, or
+  a reply that ends with "shall I go on" is not the moment. The line marks a
+  goal reached or a session wrapped up.
+- **One line, at the end.** It is a footer, not a section, and it never
+  replaces the recap of what was actually done.
+- **Plain text.** No symbols, no formatting tricks. The number is the point.
+
+The user can also ask any time with `/usage-limits:session`, or run
+`node scripts/usage.js --session last` for the full breakdown and
+`--sessions` for the history of recent sessions on this machine.
+
 
 ## 4. Low power
 
@@ -359,9 +384,12 @@ a turn, which is the thing it is trying to save.
 
 | Path | What it is |
 | --- | --- |
-| `scripts/usage.js` | The report. `--json` for raw fields, `--status` for a one-line readout that skips the transcript scan, `--forecast N` for what an N turn job would cost, `--host codex` to read Codex's limits, `--refresh` to ask Codex for a live figure. |
+| `scripts/usage.js` | The report. `--json` for raw fields, `--status` for a one-line readout that skips the transcript scan, `--forecast N` for what an N turn job would cost, `--sessions` for what recent sessions cost, `--session last` (or an id) for one session in full, `--host codex` to read Codex's limits, `--refresh` to ask Codex for a live figure. |
 | `scripts/brief.js` | What the hook runs before each prompt. Not meant to be called by hand. |
 | `scripts/pulse.js` | What runs after tool calls, to re-check the budget during a long turn. Not meant to be called by hand. |
+| `scripts/stop.js` | What runs after each reply: shows the user what the reply and the session have cost. Not meant to be called by hand. |
+| `scripts/sessionend.js` | What runs when the session closes: the closing line, and the session marked closed in the history. Not meant to be called by hand. |
+| `scripts/tally.js` | The running per-session total behind those two, kept in `usage-limits-sessions.json` and read incrementally. |
 | `scripts/host.js` | Works out which agent this is running inside, so one host's percentages are never reported against the other's turns. |
 | `scripts/codex.js` | The Codex reader: the meter and the pace out of `~/.codex/sessions`, plus the live `--refresh` call. |
 | `scripts/install-codex-hook.js` | `status`, `on`, `off`. Installs the Codex-side instruction, which Claude Code does not need. |

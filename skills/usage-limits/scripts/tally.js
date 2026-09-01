@@ -258,17 +258,17 @@ function pricing(now) {
   return {};
 }
 
-// Money to two places. The report's own format goes to three below a dollar,
-// which is right for a per-turn price and wrong for a line someone reads
-// after every reply.
-function money(value) {
-  if (!Number.isFinite(value)) return '-';
-  if (value >= 100) return '$' + Math.round(value);
-  return '$' + value.toFixed(2);
+// Two places, not the report's three-below-a-dollar: this is a total someone
+// reads after every reply, not a per-turn price.
+const money = usage.formatMoney;
+
+function count(value, noun) {
+  const n = value || 0;
+  return n + ' ' + noun + (n === 1 ? '' : 's');
 }
 
 function turnsPhrase(turns, subagentTurns) {
-  return (turns || 0) + ' turns' + (subagentTurns > 0 ? ' (+' + subagentTurns + ' subagent)' : '');
+  return count(turns, 'turn') + (subagentTurns > 0 ? ' (+' + subagentTurns + ' subagent)' : '');
 }
 
 function totalTokens(tokens) {
@@ -292,7 +292,7 @@ function formatTally(session, delta, options) {
 
   const tokens = session.tokens || {};
   let line =
-    'This session: ' + (session.prompts || 0) + ' prompts, ' +
+    'This session: ' + count(session.prompts, 'prompt') + ', ' +
     turnsPhrase(session.turns, session.subagentTurns) + ', ' +
     usage.formatTokens(totalTokens(tokens)) + ' tokens (' +
     usage.formatTokens(tokens.cacheRead || 0) + ' cache read, ' +
@@ -317,7 +317,7 @@ function formatClosed(session, now) {
   const ran = Number.isFinite(session.firstAt) ? usage.formatDuration(Math.max(0, end - session.firstAt)) : null;
   return (
     '[usage-limits] session closed' + (ran ? ' after ' + ran : '') + ': ' +
-    (session.prompts || 0) + ' prompts, ' + turnsPhrase(session.turns, session.subagentTurns) + ', ' +
+    count(session.prompts, 'prompt') + ', ' + turnsPhrase(session.turns, session.subagentTurns) + ', ' +
     usage.formatTokens(totalTokens(session.tokens)) + ' tokens, about ' + money(session.cost || 0) + '.'
   );
 }

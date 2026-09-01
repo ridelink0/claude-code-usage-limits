@@ -301,3 +301,11 @@ test('readState survives a corrupt file', () => {
     box.restore();
   }
 });
+
+test('formatTally and formatClosed use the singular for one of something', () => {
+  const one = sample({ prompts: 1, turns: 1 });
+  const text = tally.formatTally(one, { turns: 1, subagentTurns: 1, tokens: 1000, cost: 0.1 }, {});
+  assert.match(text, /this reply: 1 turn \(\+1 subagent\)/);
+  assert.match(text, /This session: 1 prompt, 1 turn,/);
+  assert.match(tally.formatClosed(one, NOW), /: 1 prompt, 1 turn,/);
+});

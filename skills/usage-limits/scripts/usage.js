@@ -1058,6 +1058,14 @@ function formatUSD(value) {
   return '$' + value.toFixed(3);
 }
 
+// Money to two places. Three below a dollar is right for a per-turn price and
+// wrong for a total someone reads after every reply.
+function formatMoney(value) {
+  if (value === null || !Number.isFinite(value)) return '-';
+  if (value >= 100) return '$' + Math.round(value);
+  return '$' + value.toFixed(2);
+}
+
 function formatTokens(value) {
   if (!Number.isFinite(value)) return '-';
   if (value >= 1e9) return (value / 1e9).toFixed(1) + 'B';
@@ -1331,12 +1339,14 @@ function sessionSpend(events, sessionId) {
   if (!sessionId) return null;
   let cost = 0;
   let turns = 0;
+  let tokens = 0;
   for (const event of events) {
     if (event.sessionId !== sessionId) continue;
     cost += event.cost;
+    tokens += event.tokens || 0;
     turns += 1;
   }
-  return turns ? { turns, cost } : null;
+  return turns ? { turns, cost, tokens } : null;
 }
 
 async function report(now, options) {
@@ -1896,6 +1906,102 @@ function renderForecast(data, turns) {
   return lines.join('\n');
 }
 
+// The session history kept by the Stop hook, one row per session.
+function sessionTokens(session) {
+  const t = (session && session.tokens) || {};
+  return (t.input || 0) + (t.cacheWrite || 0) + (t.cacheRead || 0) + (t.output || 0);
+}
+
+function shortId(sessionId) {
+  return String(sessionId || '').slice(0, 8);
+}
+
+function renderSessions(list, now) {
+  const lines = [];
+  lines.push('Sessions on this machine, newest first');
+  lines.push('');
+  if (!list || !list.length) {
+    lines.push('  No sessions on record yet. The Stop hook writes one after each reply, so');
+    lines.push('  this fills in as soon as a session with the hook installed has run.');
+    return lines.join('\n');
+  }
+  lines.push(
+    '  ' + pad('Id', 10) + pad('When', 12) + pad('Project', 24) + padLeft('Prompts', 7) +
+      padLeft('Turns', 9) + padLeft('Tokens', 9) + padLeft('Cost', 9)
+  );
+  for (const session of list) {
+    const turns =
+      String(session.turns || 0) + (session.subagentTurns > 0 ? '+' + session.subagentTurns : '');
+    lines.push(
+      '  ' + pad(shortId(session.sessionId), 10) +
+        pad(Number.isFinite(session.lastAt) ? formatDuration(now - session.lastAt) + ' ago' : '-', 12) +
+        pad(shortenProject(session.project || '-', 22), 24) +
+        padLeft(session.prompts || 0, 7) +
+        padLeft(turns, 9) +
+        padLeft(formatTokens(sessionTokens(session)), 9) +
+        padLeft(formatMoney(session.cost || 0), 9) +
+        (Number.isFinite(session.endedAt) ? '' : '  open')
+    );
+  }
+  lines.push('');
+  lines.push('  Turns are main-thread calls; +N is what subagents made on top.');
+  return lines.join('\n');
+}
+
+function renderSession(session, now) {
+  const lines = [];
+  lines.push('Session ' + shortId(session.sessionId) + (session.project ? ' (' + session.project + ')' : ''));
+  lines.push('');
+  const started = Number.isFinite(session.firstAt)
+    ? formatClock(session.firstAt) + ', ' + formatDuration(now - session.firstAt) + ' ago, '
+    : '';
+  const ended = Number.isFinite(session.endedAt)
+    ? 'closed ' + formatDuration(now - session.endedAt) + ' ago' + (session.reason ? ' (' + session.reason + ')' : '')
+    : 'still open';
+  lines.push('  Started    ' + started + ended);
+  lines.push('  Prompts    ' + (session.prompts || 0));
+  lines.push(
+    '  Turns      ' + (session.turns || 0) +
+      (session.subagentTurns > 0 ? ', plus ' + session.subagentTurns + ' by subagents' : '')
+  );
+  const t = session.tokens || {};
+  lines.push(
+    '  Tokens     ' + formatTokens(sessionTokens(session)) + ': input ' + formatTokens(t.input || 0) +
+      ', cache write ' + formatTokens(t.cacheWrite || 0) + ', cache read ' + formatTokens(t.cacheRead || 0) +
+      ', output ' + formatTokens(t.output || 0) +
+      (t.reasoning > 0 ? ' (' + formatTokens(t.reasoning) + ' of it reasoning)' : '')
+  );
+  lines.push('  Cost       ' + formatMoney(session.cost || 0));
+  if (Number.isFinite(session.context) && session.context > 0) {
+    lines.push('  Context    ' + formatTokens(session.context) + ' tokens at the last call');
+  }
+  const models = Object.keys(session.models || {}).sort(
+    (a, b) => (session.models[b].cost || 0) - (session.models[a].cost || 0)
+  );
+  models.forEach((id, index) => {
+    const row = session.models[id];
+    lines.push(
+      (index === 0 ? '  Models     ' : '             ') + pad(id, 24) +
+        padLeft((row.turns || 0) + ' turns', 12) + padLeft(formatMoney(row.cost || 0), 10)
+    );
+  });
+  return lines.join('\n');
+}
+
+// "last", an exact id, or an unambiguous prefix of one.
+function pickSession(list, which) {
+  const rows = list || [];
+  if (!rows.length) return null;
+  const want = String(which || 'last');
+  if (want === 'last') {
+    return rows.slice().sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0))[0];
+  }
+  const exact = rows.find((row) => row.sessionId === want);
+  if (exact) return exact;
+  const prefixed = rows.filter((row) => String(row.sessionId || '').startsWith(want));
+  return prefixed.length === 1 ? prefixed[0] : null;
+}
+
 async function main(argv) {
   // Settle the host before anything reads a file, so one run never mixes one
   // agent's percentages with the other's turns.
@@ -1904,6 +2010,29 @@ async function main(argv) {
   // The status line runs on every redraw, so it must not scan transcripts.
   if (argv.indexOf('--status') !== -1) {
     process.stdout.write(statusLine(collect(Date.now())) + '\n');
+    return 0;
+  }
+
+  // The session history is a file the Stop hook keeps, so neither of these
+  // opens a transcript. Required lazily: tally.js depends on this module.
+  const sessionAt = argv.indexOf('--session');
+  if (sessionAt !== -1 || argv.indexOf('--sessions') !== -1) {
+    const tally = require('./tally.js');
+    const list = tally.sessions(tally.readState());
+    const now = Date.now();
+    const json = argv.indexOf('--json') !== -1;
+    if (sessionAt !== -1) {
+      const next = argv[sessionAt + 1];
+      const which = next && next.indexOf('--') !== 0 ? next : 'last';
+      const picked = pickSession(list, which);
+      if (!picked) {
+        process.stderr.write('usage: no session matches "' + which + '". Run --sessions to list them.\n');
+        return 2;
+      }
+      process.stdout.write((json ? JSON.stringify(picked, null, 2) : renderSession(picked, now)) + '\n');
+      return 0;
+    }
+    process.stdout.write((json ? JSON.stringify(list, null, 2) : renderSessions(list, now)) + '\n');
     return 0;
   }
 
@@ -1999,7 +2128,11 @@ module.exports = {
   MIN_PACE_SAMPLE,
   formatDuration,
   formatUSD,
+  formatMoney,
   formatCount,
+  renderSessions,
+  renderSession,
+  pickSession,
   verdictLine,
   render,
   report,

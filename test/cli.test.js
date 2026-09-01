@@ -35,6 +35,8 @@ test('--help lists every mode', async () => {
   assert.strictEqual(value, 0);
   assert.match(output, /--json/);
   assert.match(output, /--status/);
+  assert.match(output, /--sessions/);
+  assert.match(output, /--session last/);
   assert.match(output, /lowpower/);
   assert.match(output, /Nothing is\s+uploaded/);
 });

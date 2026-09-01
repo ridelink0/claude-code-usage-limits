@@ -15,6 +15,7 @@ const path = require('path');
 
 const usage = require('./usage.js');
 const host = require('./host.js');
+const tally = require('./tally.js');
 
 const SECOND = 1000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -426,7 +427,34 @@ function briefText(parts) {
   if (parts.session) {
     sentences.push(
       'This session: ' + parts.session.turns + ' turns, ' +
+        (Number.isFinite(parts.session.tokens) ? usage.formatTokens(parts.session.tokens) + ' tokens, ' : '') +
         usage.formatUSD(parts.session.cost) + '.'
+    );
+  }
+  // From the tally the Stop hook keeps, so these are exact as of the last reply.
+  if (parts.lastReply && Number.isFinite(parts.lastReply.cost)) {
+    sentences.push('Last reply ' + usage.formatMoney(parts.lastReply.cost) + '.');
+  }
+  if (Number.isFinite(parts.context) && parts.context > 0) {
+    // The context is re-sent on every call, so past a point it is the cost of
+    // the session. One clause, once it is large; no advice while it is not.
+    sentences.push(
+      'Context about ' + usage.formatTokens(parts.context) + ' tokens' +
+        (parts.context >= LARGE_CONTEXT_TOKENS
+          ? '; each turn re-reads that, so a fresh session or /compact at the next clean boundary cuts per-turn cost.'
+          : '.')
+    );
+  }
+  // Said once, on a session's first prompt, because the previous session's
+  // total is the one figure nothing else ever shows.
+  if (parts.lastSession && parts.lastSession.turns) {
+    const last = parts.lastSession;
+    sentences.push(
+      'Last session: ' + last.turns + ' turns, ' + usage.formatTokens(last.tokens) + ' tokens, ' +
+        roundMoney(last.cost) +
+        (last.project || last.endedAgo
+          ? ' (' + [last.project, last.endedAgo ? 'ended ' + last.endedAgo + ' ago' : null].filter(Boolean).join(', ') + ')'
+          : '') + '.'
     );
   }
 
@@ -465,7 +493,68 @@ function briefText(parts) {
     'and reset time above belong to the binding window alone; do not read them ' +
     'against another window percentage.';
 
-  return sentences.join(' ') + '\n' + instruction + care;
+  // Finished work closes with what it cost. Not every reply: a progress note
+  // mid-task is not the moment, and once the budget is gone nothing further
+  // runs, so there is no reply to close.
+  const closing =
+    parts.pressure === 'gone'
+      ? ''
+      : ' When this reply completes what was asked, or wraps up the session, end it ' +
+        'with one plain line giving the session total above (turns, tokens and cost). ' +
+        'Skip it on partial progress; the hook prints the exact figure after you stop.';
+
+  return sentences.join(' ') + '\n' + instruction + closing + care;
+}
+
+// Past this the context is the cost of the session, not a detail of it.
+const LARGE_CONTEXT_TOKENS = 150000;
+
+// A previous session's total reads better in whole dollars once it is large.
+function roundMoney(value) {
+  if (!Number.isFinite(value)) return '-';
+  return value >= 10 ? '$' + Math.round(value) : usage.formatMoney(value);
+}
+
+function isTallyEntry(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+// What the Stop hook's tally can add to the line: this session's last reply
+// and context when it is a session the tally has seen, or the previous
+// session's total when it has not, which is how a first prompt gets told what
+// the last session cost.
+function tallyContext(all, sessionId, now) {
+  const none = { lastReply: null, context: null, lastSession: null };
+  if (!all || typeof all !== 'object') return none;
+
+  const mine = sessionId && isTallyEntry(all[sessionId]) ? all[sessionId] : null;
+  if (mine) {
+    return {
+      lastReply: mine.lastReply || null,
+      context: Number.isFinite(mine.context) ? mine.context : null,
+      lastSession: null,
+    };
+  }
+
+  const others = Object.keys(all)
+    .filter((key) => key !== tally.IDS_KEY && isTallyEntry(all[key]))
+    .map((key) => all[key])
+    .sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  const last = others[0];
+  if (!last || !last.turns) return none;
+
+  const ended = Number.isFinite(last.endedAt) ? last.endedAt : last.lastAt;
+  return {
+    lastReply: null,
+    context: null,
+    lastSession: {
+      turns: last.turns,
+      tokens: tally.totalTokens(last.tokens),
+      cost: last.cost,
+      project: last.project || null,
+      endedAgo: Number.isFinite(ended) ? usage.formatDuration(now - ended) : null,
+    },
+  };
 }
 
 async function run(now, hookInput) {
@@ -528,7 +617,12 @@ async function run(now, hookInput) {
   const shortRunway =
     binding && Number.isFinite(binding.headroomMs) &&
     binding.headroomMs <= RUNWAY_MENTION_MS;
+  // Outside the cache on purpose: the tally moves after every reply.
+  const found = tallyContext(tally.readState(), sessionId, now);
   return briefText({
+    lastReply: found.lastReply,
+    context: found.context,
+    lastSession: found.lastSession,
     sessions: active,
     yourTurnsLeft,
     runsOutIn: shortRunway ? usage.formatDuration(binding.headroomMs) : null,
@@ -590,6 +684,8 @@ module.exports = {
   describeWindow,
   summariseOthers,
   briefText,
+  tallyContext,
+  LARGE_CONTEXT_TOKENS,
   settings,
   keepSlots,
   pickCached,

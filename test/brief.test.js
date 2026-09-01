@@ -100,8 +100,8 @@ test('sessionSpend counts only the session it was asked about', () => {
     { sessionId: 'b', cost: 10 },
     { sessionId: 'a', cost: 2 },
   ];
-  assert.deepStrictEqual(brief.sessionSpend(events, 'a'), { turns: 2, cost: 3 });
-  assert.deepStrictEqual(brief.sessionSpend(events, 'b'), { turns: 1, cost: 10 });
+  assert.deepStrictEqual(brief.sessionSpend(events, 'a'), { turns: 2, cost: 3, tokens: 0 });
+  assert.deepStrictEqual(brief.sessionSpend(events, 'b'), { turns: 1, cost: 10, tokens: 0 });
 });
 
 test('sessionSpend says nothing rather than zero when it cannot tell', () => {
