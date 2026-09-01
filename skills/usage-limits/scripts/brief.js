@@ -252,6 +252,7 @@ const CACHED_BINDING_FIELDS = [
   'adjusted',
   'pointsSinceSnapshot',
   'correctionUnreliable',
+  'pointsBeyondSnapshot',
   'resetsAt',
   'verdict',
   'windowStart',
@@ -332,7 +333,10 @@ function briefText(parts) {
   // the binding window is named and its figures are attached to it.
   const bound = [];
   const described = describeWindow(parts.binding);
-  if (described) bound.push(described + (parts.binding.stale ? '' : ' used'));
+  // When spending since the snapshot has outrun what the snapshot said was
+  // left, the percentage is the last real reading, not the current one, and
+  // the headline has to say so or every later prompt repeats a stale number.
+  if (described) bound.push(described + (parts.binding.stale ? '' : (parts.correctionUnreliable ? ' used at the last real reading' : ' used')));
   if (Number.isFinite(parts.turnsLeft)) {
     // Another session spending the same budget means fewer of those turns are
     // yours, so say both numbers rather than the flattering one.
@@ -385,6 +389,16 @@ function briefText(parts) {
       'A window is past its reset and could not be rebuilt from local history, ' +
         'so its reading is unknown rather than current; the snapshot is ' +
         parts.snapshotAge + ' old, so run /usage before trusting the rest.'
+    );
+  }
+  if (parts.correctionUnreliable) {
+    // A reading three hours old that has been spent past its own remainder is
+    // not 82%; it is unknown, with 82% as the floor. Say exactly that.
+    sentences.push(
+      'That percentage is a floor, not a current reading: the last real snapshot is ' +
+        parts.snapshotAge + ' old and about ' + parts.pointsBeyondSnapshot +
+        ' points have been spent since, more than it said was left. Either the window is ' +
+        'already exhausted or the snapshot is wrong; /usage refreshes it.'
     );
   }
   // Work having actually been stopped is the most useful thing that can be said
@@ -537,6 +551,8 @@ async function run(now, hookInput) {
     planChanged: Boolean(view.planChanged),
     critical: view.critical || [],
     pointsSinceSnapshot: (binding && binding.pointsSinceSnapshot) || 0,
+    correctionUnreliable: Boolean(binding && binding.correctionUnreliable),
+    pointsBeyondSnapshot: (binding && binding.pointsBeyondSnapshot) || 0,
     snapshotAge: view.snapshotAge,
     // The turn count that matters for this session is its share of a shared
     // budget, not the whole window's. Escalating on the whole window meant a

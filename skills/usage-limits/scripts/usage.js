@@ -859,6 +859,10 @@ function buildWindow(spec, snapshot, events, now, options) {
       // not the window. Better to leave the reading uncorrected and say the
       // snapshot is old than to assert a budget that is gone.
       if (rawPercent + sinceSnapshot > SATURATION_LIMIT) {
+        // Keep the size of the overshoot: the brief needs it to say how far
+        // past the snapshot the spending has gone, instead of repeating the
+        // snapshot figure for hours as if it were current.
+        window.pointsBeyondSnapshot = Math.round(sinceSnapshot);
         sinceSnapshot = 0;
         window.correctionUnreliable = true;
       } else if (sinceSnapshot >= 1) {
