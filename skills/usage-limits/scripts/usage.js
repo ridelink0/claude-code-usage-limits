@@ -877,6 +877,14 @@ function buildWindow(spec, snapshot, events, now, options) {
     correctionUnreliable: false,
     // The price-per-point this window derived from its own baseline.
     calibration: null,
+    // True when the bucket quoted its limit in dollars, so the price of a
+    // point is known rather than learned.
+    metered: false,
+    // What the account's own list of limits says about this one.
+    severity: null,
+    isActive: false,
+    scoped: false,
+    family: null,
     verdict: 'unknown',
   };
 
@@ -928,16 +936,23 @@ function buildWindow(spec, snapshot, events, now, options) {
       rawPercent > 0 && upTo.cost > 0 && upTo.turns >= MIN_BASELINE_TURNS
         ? { usdPerPercent: upTo.cost / rawPercent, turns: upTo.turns, percent: rawPercent }
         : null;
-    if (selfPriced) window.calibration = selfPriced;
+    // A metered window has nothing to learn: its price per point is stated.
+    if (selfPriced && !extra.metered) window.calibration = selfPriced;
 
     const known = extra.knownCalibration;
     const usable =
       known && Number.isFinite(known.usdPerPercent) && known.usdPerPercent > 0 ? known : null;
-    // Trust the better-sampled of the two, whichever that is.
+    // Trust the better-sampled of the two, whichever that is; a stated price
+    // beats both.
+    const stated =
+      extra.metered && Number.isFinite(extra.usdPerPercent) && extra.usdPerPercent > 0
+        ? { usdPerPercent: extra.usdPerPercent, turns: Infinity }
+        : null;
     const chosen =
-      selfPriced && usable
+      stated ||
+      (selfPriced && usable
         ? (usable.turns > selfPriced.turns ? usable : selfPriced)
-        : selfPriced || usable;
+        : selfPriced || usable);
 
     if (after.cost > 0 && chosen) {
       const pricePerPoint = chosen.usdPerPercent;
@@ -976,14 +991,18 @@ function buildWindow(spec, snapshot, events, now, options) {
   const measured = percent !== null && percent > 0 && spent.cost > 0 && !thin;
   const derived = measured ? spent.cost / percent : null;
   const known = extra.knownCalibration;
-  const priced =
-    derived !== null
+  const metered =
+    Boolean(extra.metered) && Number.isFinite(extra.usdPerPercent) && extra.usdPerPercent > 0;
+  const priced = metered
+    ? extra.usdPerPercent
+    : derived !== null
       ? derived
       : Number.isFinite(extra.usdPerPercent) && extra.usdPerPercent > 0
         ? extra.usdPerPercent
         : known && Number.isFinite(known.usdPerPercent) && known.usdPerPercent > 0
           ? known.usdPerPercent
           : null;
+  window.metered = metered;
 
   if (percent !== null && priced !== null) {
     window.usdPerPercent = priced;
@@ -1080,6 +1099,10 @@ function bindingWindow(windows) {
     const mine = soonest(w);
     const theirs = soonest(best);
     if (mine !== theirs) return mine < theirs ? w : best;
+
+    // Equally urgent by our own measure: the account says which limit it is
+    // enforcing, and that is worth more than a rule of thumb.
+    if (Boolean(w.isActive) !== Boolean(best.isActive)) return w.isActive ? w : best;
 
     // Equally urgent: the shorter window is the one hit first in practice, so
     // the 5-hour limit wins a tie against the weekly one.
@@ -1197,6 +1220,49 @@ function otherLimits(utilization, threshold) {
     });
   }
   return rows.sort((a, b) => b.percentUsed - a.percentUsed);
+}
+
+// Beside the per-window buckets, the snapshot carries `limits`: one entry per
+// limit the account enforces, with a severity, whether it is the active one,
+// and for the per-model weeklies which model it scopes to. It is the account's
+// own description of its limits, and it can name a window the bucket table
+// does not: on a Max plan the Fable weekly sat at 17% while the shared weekly
+// read 11%, and nothing reported the higher of the two.
+const LIMIT_KINDS = { session: 'five_hour', weekly_all: 'seven_day' };
+
+function limitWindows(utilization) {
+  const list = utilization && Array.isArray(utilization.limits) ? utilization.limits : [];
+  const rows = [];
+  for (const limit of list) {
+    if (!limit || typeof limit !== 'object' || typeof limit.percent !== 'number') continue;
+    const resetsAt = limit.resets_at ? Date.parse(limit.resets_at) : null;
+    const base = {
+      kind: limit.kind,
+      percent: limit.percent,
+      severity: typeof limit.severity === 'string' ? limit.severity : null,
+      isActive: Boolean(limit.is_active),
+      resetsAt: Number.isFinite(resetsAt) ? resetsAt : null,
+      family: null,
+    };
+    if (LIMIT_KINDS[limit.kind]) {
+      rows.push(Object.assign(base, { key: LIMIT_KINDS[limit.kind] }));
+      continue;
+    }
+    if (limit.kind === 'weekly_scoped' && limit.scope && limit.scope.model) {
+      const model = limit.scope.model;
+      const name = model.display_name || model.id || 'model';
+      const family = familyOf(name) || familyOf(model.id) || String(name).toLowerCase();
+      rows.push(
+        Object.assign(base, {
+          key: 'seven_day_scoped:' + family,
+          label: 'weekly (' + name + ')',
+          family,
+          spanMs: 7 * DAY,
+        })
+      );
+    }
+  }
+  return rows;
 }
 
 function collect(now) {
@@ -1336,11 +1402,10 @@ function buildWindows(utilization, events, now, fetchedAt, learned, specs, rejec
   // of its two windows in the payload, so it hands its own spans in rather than
   // having them assumed.
   const table = specs && specs.length ? specs : WINDOWS;
-  return table.map((spec) => {
-    const snapshot = utilization[spec.key];
-    // The per-model weekly windows only exist on some plans.
-    if (spec.key !== 'five_hour' && spec.key !== 'seven_day' && !snapshot) return null;
+  const limits = limitWindows(utilization);
+  const limitByKey = new Map(limits.map((limit) => [limit.key, limit]));
 
+  const one = (spec, snapshot, own, limit) => {
     const known = learned ? learned[spec.key] : null;
     const refusal = refused.get(spec.key);
 
@@ -1361,34 +1426,91 @@ function buildWindows(utilization, events, now, fetchedAt, learned, specs, rejec
       }
     }
 
-    const window = buildWindow(spec, anchored, events, now, {
-      fetchedAt,
-      knownCalibration: known,
-      ...(windowStart === undefined ? {} : { windowStart }),
-    });
+    // A bucket that quotes its limit in dollars needs no calibration: a
+    // hundred dollars is a hundred points. Null on the plans seen so far, but
+    // the field is there, and when it fills in it beats any estimate.
+    const dollars =
+      snapshot && Number.isFinite(snapshot.limit_dollars) && snapshot.limit_dollars > 0
+        ? snapshot.limit_dollars / 100
+        : null;
+
+    const window = buildWindow(
+      spec,
+      anchored,
+      own,
+      now,
+      Object.assign(
+        { fetchedAt, knownCalibration: known },
+        windowStart === undefined ? {} : { windowStart },
+        dollars === null ? {} : { metered: true, usdPerPercent: dollars }
+      )
+    );
     if (refusal) {
       window.refusedAt = refusal.at;
       window.refusedResetsAt = refusal.resetsAt;
     }
-    if (!window.stale) {
-      return reconstructUnanchored(spec, window, events, now, known) || window;
-    }
 
-    // Rolled over. Rebuild from local history rather than going blind on it.
-    const rebuilt = reconstructWindow(spec, snapshot, events, now);
-    if (!rebuilt) return window;
-    return buildWindow(
-      spec,
-      { utilization: rebuilt.percentUsed, resets_at: null },
-      events,
-      now,
-      {
-        estimated: true,
-        windowStart: rebuilt.windowStart,
-        usdPerPercent: rebuilt.usdPerPercent,
+    let result = window;
+    if (!window.stale) {
+      result = reconstructUnanchored(spec, window, own, now, known) || window;
+    } else {
+      // Rolled over. Rebuild from local history rather than going blind on it.
+      const rebuilt = reconstructWindow(spec, snapshot, own, now);
+      if (rebuilt) {
+        result = buildWindow(
+          spec,
+          { utilization: rebuilt.percentUsed, resets_at: null },
+          own,
+          now,
+          {
+            estimated: true,
+            windowStart: rebuilt.windowStart,
+            usdPerPercent: rebuilt.usdPerPercent,
+          }
+        );
       }
-    );
-  }).filter(Boolean);
+    }
+    // What the account itself says about this limit rides along.
+    if (limit) {
+      result.severity = limit.severity;
+      result.isActive = limit.isActive;
+    }
+    return result;
+  };
+
+  const windows = table
+    .map((spec) => {
+      let snapshot = utilization[spec.key];
+      const limit = limitByKey.get(spec.key);
+      // The account's own list can carry a window the bucket table does not.
+      if ((!snapshot || typeof snapshot.utilization !== 'number') && limit) {
+        snapshot = {
+          utilization: limit.percent,
+          resets_at: limit.resetsAt ? new Date(limit.resetsAt).toISOString() : null,
+        };
+      }
+      // The per-model weekly windows only exist on some plans.
+      if (spec.key !== 'five_hour' && spec.key !== 'seven_day' && !snapshot) return null;
+      return one(spec, snapshot, events, limit);
+    })
+    .filter(Boolean);
+
+  // A per-model weekly is a limit on one model's spend, so it is priced from
+  // that model's calls alone; the shared windows still see everything.
+  for (const limit of limits) {
+    if (!limit.family) continue;
+    const spec = { key: limit.key, label: limit.label, span: limit.spanMs };
+    const own = events.filter((event) => familyOf(event.model) === limit.family);
+    const snapshot = {
+      utilization: limit.percent,
+      resets_at: limit.resetsAt ? new Date(limit.resetsAt).toISOString() : null,
+    };
+    const window = one(spec, snapshot, own, limit);
+    window.scoped = true;
+    window.family = limit.family;
+    windows.push(window);
+  }
+  return windows;
 }
 
 // What one session has spent, out of everything on record.
@@ -1681,7 +1803,14 @@ function render(data) {
       (money ? padLeft('Left', 10) : '') + padLeft('Turns left', 12)
   );
   for (const window of data.windows) {
-    const marker = data.binding && window.key === data.binding.key ? '   <- binding' : '';
+    const bound = data.binding && window.key === data.binding.key;
+    // The account's own severity, when it says critical, is worth a word.
+    const critical = window.severity === 'critical';
+    const marker = bound
+      ? '   <- binding' + (critical ? ', critical' : '')
+      : critical
+        ? '   critical'
+        : '';
     lines.push(
       '  ' + pad(window.label, 15) +
         padLeft(
@@ -2167,6 +2296,7 @@ module.exports = {
   SATURATION_LIMIT,
   MIN_BASELINE_TURNS,
   buildWindows,
+  limitWindows,
   lastRejections,
   bindingWindow,
   criticalOthers,
