@@ -134,6 +134,20 @@ function liveSessions(all, now, windowMs, exceptId) {
   return count;
 }
 
+// How many sessions are sharing the budget, and how much of it is this one's.
+// One place for both hooks. The pulse once counted only sessions that had
+// spent while the brief also counted those that had merely prompted, and the
+// two lines disagreed about how many sessions there were minutes apart. The
+// spend-derived count is the accurate one when it has caught up; the
+// open-session count is the one that is right immediately. Take whichever is
+// higher, because under-counting is what makes the headroom read as more
+// yours than it is.
+function activeShare(sessions, slots, now, sessionId) {
+  const spent = sessions || [];
+  const active = Math.max(spent.length, liveSessions(slots, now, LIVE_WINDOW_MS, sessionId) + 1);
+  return { active, share: active > 1 ? usage.shareOf(spent, sessionId, active) : 1 };
+}
+
 // Keep the newest few so a machine with many sessions does not grow the file
 // without bound.
 function mergeCache(all, sessionId, entry, keep) {
@@ -614,14 +628,7 @@ async function run(now, hookInput) {
   }
 
   const binding = view.binding;
-  const sessions = view.sessions || [];
-  // The spend-derived count is the accurate one when it has caught up; the
-  // open-session count is the one that is right immediately. Take whichever is
-  // higher rather than the one that happens to be handy, because under-counting
-  // is what makes the headroom read as more yours than it is.
-  const active = Math.max(sessions.length, liveSessions(all, now, LIVE_WINDOW_MS, sessionId) + 1);
-  const share =
-    sessions.length > 1 ? usage.shareOf(sessions, sessionId) : active > 1 ? 1 / active : 1;
+  const { active, share } = activeShare(view.sessions, all, now, sessionId);
   const yourTurnsLeft = Number.isFinite(view.turnsLeft)
     ? Math.max(1, Math.round(view.turnsLeft * share))
     : null;
@@ -704,6 +711,8 @@ module.exports = {
   pickCached,
   mergeCache,
   liveSessions,
+  activeShare,
+  readCache,
   cacheableBinding,
   pressureInputs,
   CACHED_BINDING_FIELDS,

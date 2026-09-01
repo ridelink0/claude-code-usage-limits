@@ -716,3 +716,13 @@ test('nothing is called out when the other windows are comfortable', () => {
   });
   assert.doesNotMatch(text, /stops work for far longer/);
 });
+
+test('activeShare counts sessions that have prompted as well as those that have spent', () => {
+  const slots = { a: { at: NOW - MINUTE }, b: { at: NOW - 2 * MINUTE }, old: { at: NOW - HOUR } };
+  const spent = [{ sessionId: 'a', share: 0.9, turns: 20 }, { sessionId: 'fresh', share: 0.1, turns: 1 }];
+  const found = brief.activeShare(spent, slots, NOW, 'fresh');
+  assert.strictEqual(found.active, 3, 'a and b are live, plus this one');
+  assert.ok(Math.abs(found.share - 1 / 3) < 1e-9, 'a fresh session gets an equal split, not its sliver of past spend');
+  assert.deepStrictEqual(brief.activeShare([], {}, NOW, 'fresh'), { active: 1, share: 1 });
+  assert.deepStrictEqual(brief.activeShare(null, null, NOW, null), { active: 1, share: 1 });
+});

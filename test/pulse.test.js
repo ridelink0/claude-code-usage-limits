@@ -126,3 +126,45 @@ test('the ping can be turned off entirely', async () => {
     else process.env.USAGE_LIMITS_PULSE = before;
   }
 });
+
+test('the ping gives a new session its equal share and counts the same sessions as the brief', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const usage = require('../skills/usage-limits/scripts/usage.js');
+  const brief = require('../skills/usage-limits/scripts/brief.js');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-pulse-'));
+  const previousDir = process.env.CLAUDE_CONFIG_DIR;
+  const previousPulse = process.env.USAGE_LIMITS_PULSE;
+  const realReport = usage.report;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  process.env.USAGE_LIMITS_PULSE = 'always';
+  try {
+    // Two other windows prompted within the last few minutes.
+    fs.writeFileSync(brief.cacheFile(), JSON.stringify({ a: { at: NOW - MINUTE }, b: { at: NOW - 2 * MINUTE } }));
+    // ...and between them have spent almost all of the last quarter hour.
+    usage.report = async () => ({
+      binding: {
+        key: 'five_hour', label: '5-hour', percentUsed: 13, stale: false, verdict: 'burning',
+        turnsLeft: 208, headroomMs: 3 * 60 * MINUTE, windowStart: NOW - 60 * MINUTE, spanMs: 300 * MINUTE,
+      },
+      sessions: [
+        { sessionId: 'a', turns: 30, cost: 14.76, share: 0.85 },
+        { sessionId: 'b', turns: 7, cost: 2.56, share: 0.12 },
+        { sessionId: 'fresh', turns: 2, cost: 0.5, share: 0.03 },
+      ],
+    });
+    const text = await pulse.run(NOW, { session_id: 'fresh' });
+    assert.match(text, /3 sessions sharing it/);
+    assert.match(text, /about 69 turns left/, 'a third of 208, not three per cent of it');
+    assert.match(text, /Still room/);
+  } finally {
+    usage.report = realReport;
+    if (previousDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousDir;
+    if (previousPulse === undefined) delete process.env.USAGE_LIMITS_PULSE;
+    else process.env.USAGE_LIMITS_PULSE = previousPulse;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

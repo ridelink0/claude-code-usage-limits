@@ -129,10 +129,12 @@ async function run(now, hookInput) {
   const binding = data.binding;
   if (!binding) return '';
 
-  const sessions = data.sessions || [];
-  const share = usage.shareOf(sessions, sessionId);
+  // The same count and the same split as the brief, so the two lines never
+  // disagree about how many sessions there are or how much of the budget is
+  // this one's.
+  const { active, share } = brief.activeShare(data.sessions, brief.readCache(), now, sessionId);
   const turnsLeft = Number.isFinite(binding.turnsLeft)
-    ? sessions.length > 1
+    ? active > 1
       ? Math.max(1, Math.round(binding.turnsLeft * share))
       : binding.turnsLeft
     : null;
@@ -156,7 +158,7 @@ async function run(now, hookInput) {
       Number.isFinite(binding.headroomMs) && binding.headroomMs <= runwayMs
         ? usage.formatDuration(binding.headroomMs)
         : null,
-    sessions: sessions.length,
+    sessions: active,
     pressure,
   });
 }

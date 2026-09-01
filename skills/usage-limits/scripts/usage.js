@@ -671,11 +671,25 @@ function activeSessions(events, now, windowMs) {
 
 // The slice of the shared budget this session is actually getting. With
 // another session spending half of it, only half those turns are yours.
-function shareOf(sessions, sessionId) {
-  if (!sessions || sessions.length < 2) return 1;
-  const mine = sessions.find((row) => row.sessionId === sessionId);
-  if (!mine) return 1 / sessions.length;
-  return mine.share > 0 ? mine.share : 1 / sessions.length;
+//
+// Past spend says how the budget has been going, not how it will go. A
+// session that has only just started has almost none of it, and dividing its
+// headroom by that share once turned 208 turns into "about 6 turns left" two
+// tool calls into a session at 13 per cent used. So an equal split is the
+// floor: a measured share can raise it, never lower it. `activeCount` is how
+// many sessions are open, which can exceed how many have spent yet; the split
+// is among all of them.
+function shareOf(sessions, sessionId, activeCount) {
+  const spent = sessions || [];
+  const n = Math.max(spent.length, Number.isFinite(activeCount) ? activeCount : 0);
+  if (n < 2) return 1;
+  const equal = 1 / n;
+  // One session's spend is not a comparison. Until a second one has spent,
+  // being the only one on record says nothing about who owns the budget.
+  if (spent.length < 2) return equal;
+  const mine = spent.find((row) => row.sessionId === sessionId);
+  if (!mine || !(mine.share > 0)) return equal;
+  return Math.max(mine.share, equal);
 }
 
 // What a point of a window costs is a property of the plan, not of the moment,

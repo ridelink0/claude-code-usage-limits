@@ -1700,3 +1700,21 @@ test('eventFrom carries the context the model saw and whether it was a sidechain
   const main = usage.eventFrom(line.replace('"isSidechain":true,"agentId":"abc",', ''), new Set(), 'proj');
   assert.strictEqual(main.sidechain, false);
 });
+
+test('shareOf never starves a session that has only just started', () => {
+  // This session had spent $0.50 in a window where two others had spent $16.50,
+  // so its share of past spend was three per cent, and 208 turns of headroom
+  // became "about 6 turns left" two tool calls into the session.
+  const rows = usage.activeSessions([turn(1, 0.5, 'fresh'), turn(2, 14, 'busy'), turn(3, 2.5, 'other')], NOW);
+  assert.ok(Math.abs(usage.shareOf(rows, 'fresh') - 1 / 3) < 1e-9, 'an equal split is the floor');
+  assert.ok(Math.abs(usage.shareOf(rows, 'busy') - 14 / 17) < 1e-9, 'a session doing most of the spending keeps its share');
+});
+
+test('shareOf splits among every open session when more are open than have spent', () => {
+  const rows = usage.activeSessions([turn(2, 3, 'mine')], NOW);
+  assert.ok(Math.abs(usage.shareOf(rows, 'mine', 3) - 1 / 3) < 1e-9, 'being the only one to have spent yet is not owning the budget');
+  const two = usage.activeSessions([turn(2, 3, 'mine'), turn(3, 1, 'other')], NOW);
+  assert.strictEqual(usage.shareOf(two, 'mine', 3), 0.75, 'a measured share above the split stands');
+  assert.ok(Math.abs(usage.shareOf(two, 'other', 4) - 0.25) < 1e-9);
+  assert.ok(Math.abs(usage.shareOf(two, 'stranger', 4) - 0.25) < 1e-9);
+});
