@@ -303,16 +303,47 @@ function eventFrom(line, seen, project) {
     seen.add(id);
   }
 
+  const parts = tokenParts(entry.message.usage);
   return {
     at,
     model: entry.message.model || '',
     effort: entry.effort || null,
     cost: costOf(entry.message.usage, entry.message.model),
     tokens: tokensOf(entry.message.usage),
-    parts: tokenParts(entry.message.usage),
+    parts,
+    // What the model was shown on this call: everything except what it wrote.
+    // It is re-sent on every later call, so it is the recurring cost of the
+    // session, and the one number that says how bloated the context has got.
+    context: parts.input + parts.cacheRead + parts.cacheWrite,
     project: project || null,
     sessionId: entry.sessionId || null,
+    // A subagent's turns are written under the parent session with these set.
+    sidechain: Boolean(entry.isSidechain || entry.agentId),
   };
+}
+
+// Whether a transcript line is a prompt the user typed. Tool results are also
+// written as user messages, and so are internal notes marked isMeta; neither
+// is something a person asked for.
+function promptFrom(line) {
+  if (line.indexOf('"user"') === -1) return false;
+  let entry;
+  try {
+    entry = JSON.parse(line);
+  } catch (err) {
+    return false;
+  }
+  if (!entry || entry.type !== 'user' || entry.isMeta || !entry.message) return false;
+  const content = entry.message.content;
+  if (typeof content === 'string') return content.length > 0;
+  if (!Array.isArray(content)) return false;
+  let typed = false;
+  for (const block of content) {
+    if (!block) continue;
+    if (block.type === 'tool_result') return false;
+    if (block.type === 'text') typed = true;
+  }
+  return typed;
 }
 
 async function readEvents(since) {
@@ -1943,7 +1974,9 @@ module.exports = {
   costOf,
   tokensOf,
   eventFrom,
+  promptFrom,
   readEvents,
+  readCalibration,
   buildWindow,
   reconstructWindow,
   SATURATION_LIMIT,

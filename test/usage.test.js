@@ -1654,3 +1654,49 @@ test('a better baseline is preferred over a remembered one', () => {
   assert.ok(window.calibration.turns > 2);
   assert.ok(window.adjusted, 'its own richer sample should have been used');
 });
+
+test('promptFrom recognises a prompt the user typed and nothing else', () => {
+  const typed = JSON.stringify({ type: 'user', message: { role: 'user', content: 'do the thing' } });
+  const blocks = JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text: 'and this' }] },
+  });
+  const result = JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] },
+  });
+  const meta = JSON.stringify({ type: 'user', isMeta: true, message: { role: 'user', content: 'internal' } });
+  const assistant = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: 'hi' } });
+  assert.strictEqual(usage.promptFrom(typed), true);
+  assert.strictEqual(usage.promptFrom(blocks), true);
+  assert.strictEqual(usage.promptFrom(result), false);
+  assert.strictEqual(usage.promptFrom(meta), false);
+  assert.strictEqual(usage.promptFrom(assistant), false);
+  assert.strictEqual(usage.promptFrom('not json'), false);
+});
+
+test('eventFrom carries the context the model saw and whether it was a sidechain', () => {
+  const line = JSON.stringify({
+    type: 'assistant',
+    timestamp: '2026-08-23T22:00:00.000Z',
+    requestId: 'req_ctx',
+    isSidechain: true,
+    agentId: 'abc',
+    message: {
+      id: 'msg_ctx',
+      model: 'claude-opus-5',
+      usage: {
+        input_tokens: 200,
+        cache_read_input_tokens: 60000,
+        cache_creation_input_tokens: 9000,
+        output_tokens: 800,
+      },
+    },
+  });
+  const event = usage.eventFrom(line, new Set(), 'proj');
+  assert.strictEqual(event.context, 69200, 'input plus both cache classes, not the output');
+  assert.strictEqual(event.sidechain, true);
+
+  const main = usage.eventFrom(line.replace('"isSidechain":true,"agentId":"abc",', ''), new Set(), 'proj');
+  assert.strictEqual(main.sidechain, false);
+});
