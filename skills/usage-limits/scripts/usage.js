@@ -2079,13 +2079,8 @@ async function main(argv) {
   return 0;
 }
 
-if (require.main === module) {
-  main(process.argv.slice(2)).catch((err) => {
-    process.stderr.write('usage: ' + (err && err.message ? err.message : String(err)) + '\n');
-    process.exitCode = 1;
-  });
-}
-
+// Assigned before main() can run: tally.js requires this module back, and a
+// lazy require from inside main() would otherwise see an empty exports object.
 module.exports = {
   main,
   setHost,
@@ -2153,3 +2148,10 @@ module.exports = {
   formatTokens,
   PLANS,
 };
+
+if (require.main === module) {
+  main(process.argv.slice(2)).catch((err) => {
+    process.stderr.write('usage: ' + (err && err.message ? err.message : String(err)) + '\n');
+    process.exitCode = 1;
+  });
+}

@@ -25,12 +25,16 @@ async function run(now, hookInput) {
   if (!sessionId || !transcript) return '';
 
   const all = tally.readState();
-  const { session, delta } = tally.update(all, sessionId, transcript, now, {
+  const { session, delta, created } = tally.update(all, sessionId, transcript, now, {
     cwd: hookInput.cwd || null,
   });
   tally.writeState(tally.trim(all));
 
-  return JSON.stringify({ systemMessage: tally.formatTally(session, delta, tally.pricing(now)) });
+  // The first time a session is seen, everything read is history rather than
+  // the reply that just finished, so only the total is shown.
+  return JSON.stringify({
+    systemMessage: tally.formatTally(session, created ? null : delta, tally.pricing(now)),
+  });
 }
 
 if (require.main === module) {

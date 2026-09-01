@@ -129,17 +129,21 @@ test('update totals a session once and reports only what is new the next time', 
     assert.strictEqual(first.session.project, 'C--proj');
     assert.strictEqual(first.session.firstAt, NOW + MINUTE);
     assert.strictEqual(first.session.lastAt, NOW + 2 * MINUTE);
+    assert.strictEqual(first.created, true);
+    assert.strictEqual(first.session.lastReply, null, 'history read on first sight is not a reply');
 
     const again = tally.update(all, SESSION, box.transcript, NOW + 4 * MINUTE, {});
     assert.strictEqual(again.session.turns, 2, 'nothing new means nothing added');
     assert.strictEqual(again.delta.turns, 0);
     assert.strictEqual(again.delta.tokens, 0);
+    assert.strictEqual(again.created, false);
 
     fs.appendFileSync(box.transcript, turn(3, NOW + 5 * MINUTE) + '\n');
     const third = tally.update(all, SESSION, box.transcript, NOW + 6 * MINUTE, {});
     assert.strictEqual(third.session.turns, 3);
     assert.strictEqual(third.delta.turns, 1);
     assert.strictEqual(third.delta.tokens, 1300);
+    assert.deepStrictEqual(third.session.lastReply, { turns: 1, subagentTurns: 0, tokens: 1300, cost: third.delta.cost });
   } finally {
     box.restore();
   }

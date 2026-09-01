@@ -64,14 +64,20 @@ test('the stop hook answers with a systemMessage carrying the tally', async () =
   try {
     const out = await stop.run(NOW, { session_id: SESSION, transcript_path: box.transcript, cwd: 'C:/proj' });
     const parsed = JSON.parse(out);
-    assert.match(parsed.systemMessage, /^\[usage-limits\] this reply: 2 turns, 2k tokens/);
-    assert.match(parsed.systemMessage, /This session: .*2 turns/);
+    // First sight of a session: what was read is history, not one reply.
+    assert.match(parsed.systemMessage, /^\[usage-limits\] This session: 0 prompts, 2 turns, 2k tokens/);
+    assert.doesNotMatch(parsed.systemMessage, /this reply/);
     assert.ok(!('decision' in parsed), 'must never decide anything, or it would keep Claude talking');
 
-    // The second stop after nothing new says so instead of repeating the total as new.
-    const again = JSON.parse(await stop.run(NOW + MINUTE, { session_id: SESSION, transcript_path: box.transcript }));
+    // The next reply is reported as one.
+    fs.appendFileSync(box.transcript, turn(3, NOW + MINUTE) + '\n');
+    const next = JSON.parse(await stop.run(NOW + 2 * MINUTE, { session_id: SESSION, transcript_path: box.transcript }));
+    assert.match(next.systemMessage, /^\[usage-limits\] this reply: 1 turn, 1k tokens, \$0\.00\. This session: 0 prompts, 3 turns/);
+
+    // A stop after nothing new says so instead of repeating the total as new.
+    const again = JSON.parse(await stop.run(NOW + 3 * MINUTE, { session_id: SESSION, transcript_path: box.transcript }));
     assert.doesNotMatch(again.systemMessage, /this reply/);
-    assert.match(again.systemMessage, /This session: .*2 turns/);
+    assert.match(again.systemMessage, /This session: .*3 turns/);
   } finally {
     box.restore();
   }
@@ -81,9 +87,15 @@ test('the stop hook keeps its running total on disk', async () => {
   const box = sandbox();
   try {
     await stop.run(NOW, { session_id: SESSION, transcript_path: box.transcript });
-    const state = tally.readState();
+    let state = tally.readState();
     assert.strictEqual(state[SESSION].turns, 2);
-    assert.strictEqual(state[SESSION].lastReply.turns, 2);
+    assert.strictEqual(state[SESSION].lastReply, null, 'the first read is history, not a reply');
+
+    fs.appendFileSync(box.transcript, turn(3, NOW + MINUTE) + '\n');
+    await stop.run(NOW + 2 * MINUTE, { session_id: SESSION, transcript_path: box.transcript });
+    state = tally.readState();
+    assert.strictEqual(state[SESSION].turns, 3);
+    assert.strictEqual(state[SESSION].lastReply.turns, 1);
   } finally {
     box.restore();
   }

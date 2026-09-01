@@ -177,7 +177,10 @@ function update(all, sessionId, transcriptPath, now, options) {
   const project = path.basename(path.dirname(transcriptPath));
 
   let session = all[sessionId];
-  if (!isSession(session)) {
+  // A session seen for the first time may already have a long transcript
+  // behind it, so what this call reads is "so far", not one reply.
+  const created = !isSession(session);
+  if (created) {
     session = emptySession(project, opts.cwd);
     all[sessionId] = session;
   }
@@ -211,8 +214,9 @@ function update(all, sessionId, transcriptPath, now, options) {
   all[IDS_KEY] = [...seen].slice(-KEEP_IDS);
   session.updatedAt = now;
   // Only a reply that spent something replaces the last one, or a quiet stop
-  // would report the previous reply as free.
-  if (delta.turns || delta.subagentTurns) {
+  // would report the previous reply as free. The first read of a session is
+  // not a reply either.
+  if (!created && (delta.turns || delta.subagentTurns)) {
     session.lastReply = {
       turns: delta.turns,
       subagentTurns: delta.subagentTurns,
@@ -220,7 +224,7 @@ function update(all, sessionId, transcriptPath, now, options) {
       cost: delta.cost,
     };
   }
-  return { session, delta };
+  return { session, delta, created };
 }
 
 // Newest sessions first, and the remembered ids carried across.
@@ -259,8 +263,11 @@ function pricing(now) {
 }
 
 // Two places, not the report's three-below-a-dollar: this is a total someone
-// reads after every reply, not a per-turn price.
-const money = usage.formatMoney;
+// reads after every reply, not a per-turn price. Looked up at call time, not
+// load time, because usage.js requires this module back.
+function money(value) {
+  return usage.formatMoney(value);
+}
 
 function count(value, noun) {
   const n = value || 0;

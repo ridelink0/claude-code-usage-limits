@@ -94,8 +94,21 @@ test('tallyContext points a brand new session at the previous one', () => {
     tokens: 14.2e6,
     cost: 54,
     project: 'C--Users-OWNER',
+    open: false,
     endedAgo: '2h',
   });
+});
+
+test('a previous session that never closed is described as still open, not ended', () => {
+  const state = {
+    other: { turns: 16, cost: 11.36, tokens: { input: 0, cacheWrite: 0, cacheRead: 2.8e6, output: 0, reasoning: 0 }, project: 'C--Users-OWNER', lastAt: NOW - 6 * MINUTE, endedAt: null },
+  };
+  const found = brief.tallyContext(state, 'fresh', NOW);
+  assert.strictEqual(found.lastSession.open, true);
+  assert.strictEqual(found.lastSession.endedAgo, '6m');
+  const text = brief.briefText(parts({ lastSession: found.lastSession }));
+  assert.match(text, /Last session: 16 turns, 2\.8M tokens, \$11 \(C--Users-OWNER, still open, last active 6m ago\)\./);
+  assert.doesNotMatch(text, /ended/);
 });
 
 test('tallyContext says nothing at all with no history', () => {

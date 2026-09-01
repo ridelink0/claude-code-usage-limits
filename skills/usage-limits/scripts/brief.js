@@ -453,7 +453,16 @@ function briefText(parts) {
       'Last session: ' + last.turns + ' turns, ' + usage.formatTokens(last.tokens) + ' tokens, ' +
         roundMoney(last.cost) +
         (last.project || last.endedAgo
-          ? ' (' + [last.project, last.endedAgo ? 'ended ' + last.endedAgo + ' ago' : null].filter(Boolean).join(', ') + ')'
+          ? ' (' +
+            [
+              last.project,
+              last.endedAgo
+                ? (last.open ? 'still open, last active ' : 'ended ') + last.endedAgo + ' ago'
+                : null,
+            ]
+              .filter(Boolean)
+              .join(', ') +
+            ')'
           : '') + '.'
     );
   }
@@ -543,7 +552,8 @@ function tallyContext(all, sessionId, now) {
   const last = others[0];
   if (!last || !last.turns) return none;
 
-  const ended = Number.isFinite(last.endedAt) ? last.endedAt : last.lastAt;
+  const open = !Number.isFinite(last.endedAt);
+  const ended = open ? last.lastAt : last.endedAt;
   return {
     lastReply: null,
     context: null,
@@ -552,6 +562,9 @@ function tallyContext(all, sessionId, now) {
       tokens: tally.totalTokens(last.tokens),
       cost: last.cost,
       project: last.project || null,
+      // Another window may still be in it, so say when it was last active
+      // rather than claiming it ended.
+      open,
       endedAgo: Number.isFinite(ended) ? usage.formatDuration(now - ended) : null,
     },
   };
