@@ -361,6 +361,13 @@ function briefText(parts) {
       ? '[usage-limits] binding window is ' + bound.join(', ') + '.'
       : '[usage-limits] no usable window reading.'
   );
+  if (parts.planChanged) {
+    sentences.push(
+      'The plan has changed since these figures were learned, so the reading ' +
+        'above was measured against a different allowance and may predate the ' +
+        'change; run /usage before trusting it.'
+    );
+  }
   if (parts.rebuilt) {
     sentences.push(
       'That figure was rebuilt from local history because the ' +
@@ -478,6 +485,7 @@ async function run(now, hookInput) {
       othersSummary: summariseOthers(data.windows, binding && binding.key),
       sessions: data.sessions,
       staleWindows: data.staleWindows,
+      planChanged: data.planChanged,
       critical: usage.criticalOthers(data.windows, binding && binding.key).map((w) => ({
         label: w.label,
         percentUsed: w.percentUsed,
@@ -526,6 +534,7 @@ async function run(now, hookInput) {
     session: view.session,
     rebuilt: Boolean(binding && binding.estimated),
     staleWindows: view.staleWindows || 0,
+    planChanged: Boolean(view.planChanged),
     critical: view.critical || [],
     pointsSinceSnapshot: (binding && binding.pointsSinceSnapshot) || 0,
     snapshotAge: view.snapshotAge,

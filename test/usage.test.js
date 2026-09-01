@@ -1590,6 +1590,56 @@ test('a thin baseline borrows the remembered price instead of guessing', () => {
   assert.strictEqual(remembering.calibration.turns, 5, 'it still reports what it saw itself');
 });
 
+// A point of a window is a share of an allowance, so changing the plan changes
+// what a point is worth and voids everything learned about the old one. Pro to
+// Max 5x is roughly a fivefold move: a remembered $0.40 point applied to a Max
+// window promises several times the turns that exist. Nothing records when a
+// plan changed - subscriptionCreatedAt is the original signup - so the plan is
+// stamped on the calibration and a mismatched stamp is the proof.
+test('a calibration learned on another plan is dropped, not reused', () => {
+  const onDisk = {
+    five_hour: { usdPerPercent: 0.4, turns: 149, percent: 82, plan: 'pro' },
+    seven_day: { usdPerPercent: 5.1, turns: 1191, percent: 51, plan: 'pro' },
+  };
+  const scoped = usage.calibrationForPlan(onDisk, 'max_5x');
+  assert.deepStrictEqual(scoped.learned, {}, 'nothing learned on Pro survives the move to Max');
+  assert.strictEqual(scoped.planChanged, true, 'and the report can say why the figures went');
+});
+
+test('a calibration from the same plan is kept', () => {
+  const onDisk = { five_hour: { usdPerPercent: 0.4, turns: 149, plan: 'max_5x' } };
+  const scoped = usage.calibrationForPlan(onDisk, 'max_5x');
+  assert.deepStrictEqual(scoped.learned, onDisk);
+  assert.strictEqual(scoped.planChanged, false);
+});
+
+// The first run after this version ships meets entries written before the stamp
+// existed. Their provenance cannot be established, and keeping them would be
+// assuming the answer in the one direction that causes the bug.
+test('an unstamped calibration is unknown rather than assumed current', () => {
+  const scoped = usage.calibrationForPlan(
+    { five_hour: { usdPerPercent: 0.4, turns: 149, percent: 82 } },
+    'max_5x'
+  );
+  assert.deepStrictEqual(scoped.learned, {}, 'unproven provenance is not a licence to price with it');
+  assert.strictEqual(
+    scoped.planChanged,
+    false,
+    'every install upgrading to this version passes through here, so it is not evidence of a change'
+  );
+});
+
+test('with no plan detected nothing is dropped', () => {
+  const onDisk = { five_hour: { usdPerPercent: 0.4, turns: 149 } };
+  assert.deepStrictEqual(usage.calibrationForPlan(onDisk, null).learned, onDisk);
+});
+
+test('what is written back carries the plan it was learned on', () => {
+  const stamped = usage.stampPlan({ five_hour: { usdPerPercent: 0.9, turns: 20 } }, 'max_5x');
+  assert.strictEqual(stamped.five_hour.plan, 'max_5x');
+  assert.strictEqual(stamped.five_hour.usdPerPercent, 0.9, 'the sample itself is untouched');
+});
+
 test('a better baseline is preferred over a remembered one', () => {
   const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
   const snapshot = { utilization: 50, resets_at: new Date(NOW + 4 * HOUR).toISOString() };

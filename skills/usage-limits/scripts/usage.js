@@ -678,6 +678,53 @@ function writeCalibration(all) {
   }
 }
 
+// Everything learned about a budget belongs to the plan it was learned on.
+//
+// A point of a window is a share of an allowance, so changing the allowance
+// changes what a point is worth, and every figure derived from the old one is
+// then wrong by the ratio between the plans. Upgrading Pro to Max 5x is roughly
+// a fivefold move: a calibration saying a point costs $0.40 keeps being applied
+// to a point now worth several times that, and the turn estimates built on it
+// are wrong in the direction that promises room there is not.
+//
+// There is no timestamp anywhere that says when the plan changed.
+// `subscriptionCreatedAt` is the original signup, not the upgrade. So the plan
+// is stamped onto the calibration instead, and a stamp that no longer matches
+// is itself the proof that it moved.
+function calibrationForPlan(all, planId) {
+  const kept = {};
+  let dropped = false;
+  for (const key of Object.keys(all || {})) {
+    const entry = all[key];
+    if (!entry || typeof entry !== 'object') continue;
+    // A stamp that no longer matches is proof the plan moved, and worth saying
+    // so: the reading on disk was measured against the other allowance too.
+    if (entry.plan && planId && entry.plan !== planId) {
+      dropped = true;
+      continue;
+    }
+    // An entry saved before the stamp existed cannot be shown to belong to this
+    // plan. Keeping it would be assuming the answer, and the cost of assuming
+    // wrong is the whole bug this guards: a point priced for Pro applied to a
+    // Max window, promising several times the turns that exist. It is dropped
+    // instead, which costs one relearn and says "unknown" in the meantime.
+    // Unknown is not claimed as a plan change, because it is not evidence of
+    // one; every install upgrading to this version passes through here once.
+    if (!entry.plan && planId) continue;
+    kept[key] = entry;
+  }
+  return { learned: kept, planChanged: dropped };
+}
+
+function stampPlan(all, planId) {
+  if (!planId) return all;
+  const stamped = {};
+  for (const key of Object.keys(all || {})) {
+    stamped[key] = Object.assign({}, all[key], { plan: planId });
+  }
+  return stamped;
+}
+
 // A sample is better when it rests on more turns. Percentages read in whole
 // numbers, so a bigger percentage also divides more precisely.
 function betterCalibration(current, candidate) {
@@ -1280,7 +1327,11 @@ async function report(now, options) {
   }
 
   const onDisk = readCalibration();
-  const learned = Object.assign({}, onDisk);
+  // Anything learned on a different plan is void, and its absence is what makes
+  // the report say so rather than quietly pricing this plan with the last one's
+  // numbers.
+  const calibrated = calibrationForPlan(onDisk, base.planId);
+  const learned = Object.assign({}, calibrated.learned);
 
   // Codex logs the meter next to every request, so the price of a point can be
   // measured outright instead of inferred. A measurement from this session
@@ -1299,7 +1350,11 @@ async function report(now, options) {
     base.snapshotFetchedAt,
     learned,
     base.windowSpecs,
-    rejections
+    // A refusal describes the allowance that refused it. After a plan change
+    // that allowance is gone, so anchoring the new window to it, or warning
+    // that the room "ran out last time", is describing a budget that no longer
+    // exists.
+    calibrated.planChanged ? new Map() : rejections
   );
 
   // Keep the best sample seen so far, so a thin baseline never has to guess.
@@ -1311,11 +1366,11 @@ async function report(now, options) {
   }
   // Compared against what is actually on disk, so a measurement taken during
   // this run is saved too rather than only the ones inferred from a window.
-  let changed = false;
+  let changed = calibrated.planChanged;
   for (const key of Object.keys(updated)) {
     if (updated[key] !== onDisk[key]) changed = true;
   }
-  if (changed) writeCalibration(updated);
+  if (changed) writeCalibration(stampPlan(updated, base.planId));
 
   const recentEvents = events.filter((event) => event.at >= now - HOUR);
   const recent = totals(recentEvents);
@@ -1332,6 +1387,10 @@ async function report(now, options) {
     windows,
     binding,
     otherLimits: otherLimits(base.utilization),
+    // The plan moved since anything was last learned about it, so the cached
+    // percentage was measured against a different allowance and everything
+    // derived from the old one has been dropped.
+    planChanged: calibrated.planChanged,
     // The last time the account actually refused work, so a report taken just
     // after a cutoff says so rather than describing the fresh window as though
     // nothing happened.
@@ -1462,6 +1521,12 @@ function render(data) {
       (data.snapshotAgeMs === null ? 'none on disk' : formatDuration(data.snapshotAgeMs) + ' old')
   );
   lines.push('  Settings   model=' + data.settings.model + '  effort=' + data.settings.effortLevel);
+  if (data.planChanged) {
+    lines.push('  Plan change  this is a different plan from the one the figures below');
+    lines.push('               were learned on, so what a point of a window is worth has');
+    lines.push('               changed with it. The cached reading may predate the change:');
+    lines.push('               run /usage for one measured against this plan.');
+  }
   const credits = data.credits;
   if (credits && credits.unlimited) {
     lines.push('  Credits    unlimited');
@@ -1884,6 +1949,8 @@ module.exports = {
   bindingWindow,
   criticalOthers,
   betterCalibration,
+  calibrationForPlan,
+  stampPlan,
   calibrationFile,
   CRITICAL_PERCENT,
   dominantEffort,
