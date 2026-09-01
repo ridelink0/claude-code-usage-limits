@@ -21,10 +21,11 @@ test('rateFor matches known ids exactly', () => {
   assert.deepStrictEqual(usage.rateFor('claude-opus-5'), { input: 5, output: 25 });
   assert.deepStrictEqual(usage.rateFor('claude-haiku-4-5'), { input: 1, output: 5 });
   assert.deepStrictEqual(usage.rateFor('claude-fable-5'), { input: 10, output: 50 });
+  assert.deepStrictEqual(usage.rateFor('claude-sonnet-5'), { input: 2, output: 10 });
 });
 
 test('rateFor falls back to the family when the id is unknown', () => {
-  assert.deepStrictEqual(usage.rateFor('claude-sonnet-9-9'), { input: 3, output: 15 });
+  assert.deepStrictEqual(usage.rateFor('claude-sonnet-9-9'), { input: 2.5, output: 12.5 });
   assert.deepStrictEqual(usage.rateFor('CLAUDE-OPUS-9'), { input: 5, output: 25 });
   assert.deepStrictEqual(usage.rateFor(''), { input: 5, output: 25 });
   assert.deepStrictEqual(usage.rateFor(undefined), { input: 5, output: 25 });

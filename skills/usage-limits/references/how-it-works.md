@@ -28,6 +28,14 @@ the report includes them when they are present.
 If the key is missing, run `/usage` once inside Claude Code. That is what
 populates it.
 
+The same object carries a `limits` array: one entry per limit the account
+enforces, each with `kind` (`session`, `weekly_all`, `weekly_scoped`),
+`percent`, `severity`, `resets_at`, `is_active`, and for the scoped weeklies
+which model they cover. The report reads it too. A scoped weekly becomes a
+window of its own, labelled `weekly (Fable)` and priced from that model's
+calls alone; `is_active` breaks ties in the binding choice; and a bucket that
+quotes `limit_dollars` is priced from that directly instead of being calibrated.
+
 The plan name comes from `oauthAccount.organizationType` in the same file.
 Current effort and model come from `settings.json` in the config directory.
 
@@ -63,6 +71,13 @@ Assistant turns carry a usage record:
   }
 }
 ```
+
+Subagents write their own transcripts under
+`<project>/<session id>/subagents/agent-*.jsonl`, with `isSidechain: true` and
+the parent's `sessionId`. They are read too: their calls count in the money and
+the tokens, and are kept apart from the turns, because a turn is one main-thread
+call. Lines from a model called `<synthetic>` are interrupts and client-side
+errors, not calls, and are skipped.
 
 Files whose modification time predates the window are skipped. Turns are keyed
 by `message.id` plus `requestId` and counted once, because resuming or forking

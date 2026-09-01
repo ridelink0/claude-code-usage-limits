@@ -47,7 +47,7 @@ Per million tokens, input and output:
 | Model | Input | Output |
 | --- | --- | --- |
 | Opus 5 | $5 | $25 |
-| Sonnet 5 | $3 | $15 |
+| Sonnet 5 | $2 | $10 |
 | Haiku 4.5 | $1 | $5 |
 
 Renaming symbols, writing boilerplate tests, formatting, mechanical

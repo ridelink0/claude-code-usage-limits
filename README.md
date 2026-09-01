@@ -307,7 +307,7 @@ one line into Claude's context:
 
 ```
 [usage-limits] binding window is 5-hour 47% used, about 75 turns of headroom,
-resets in 3h 52m. Other windows: weekly 16%. This session: 229 turns, $64.16.
+resets in 3h 52m. Other windows: weekly 16%. This session: 229 turns, 14.2M tokens, $64.16.
 ```
 
 It names the window that will stop the work first and hangs the figures off
@@ -344,12 +344,67 @@ minute, so it costs about 400ms cold and 120ms warm.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `USAGE_LIMITS_BRIEF` | on | Set to `off` to turn the line off entirely. |
-| `USAGE_LIMITS_NEAR` | 80 | Percent used that always counts as tight. |
-| `USAGE_LIMITS_FLOOR` | 40 | Below this, pace is ignored. |
-| `USAGE_LIMITS_AHEAD` | 15 | Points ahead of pace that count as burning fast. |
+| `USAGE_LIMITS_BRIEF` | on | Set to `off` to turn the before-prompt line off entirely. |
+| `USAGE_LIMITS_NEAR` | 90 | Percent used at which the budget counts as tight. Nothing below it is discouraged. |
+| `USAGE_LIMITS_FEW_TURNS` | 10 | Turns of headroom at or below which the budget counts as tight. |
+| `USAGE_LIMITS_RUNWAY` | 10 | Minutes of runway at the current pace below which the budget counts as tight. |
 | `USAGE_LIMITS_CACHE` | 60 | Seconds the measured half stays good for. |
-| `USAGE_LIMITS_FEW_TURNS` | 20 | Turn count at or below which the budget counts as tight. |
+| `USAGE_LIMITS_FLOOR`, `USAGE_LIMITS_AHEAD` | 40, 15 | Only feed the reported pace figure; they no longer change the wording. |
+| `USAGE_LIMITS_PULSE` | on | `off` silences the mid-turn line; `always` prints it even when there is room. |
+| `USAGE_LIMITS_PULSE_SECONDS` | 120 | How often the mid-turn line can fire. |
+| `USAGE_LIMITS_TALLY` | on | Set to `off` to turn off the after-reply tally, the closing line and the session history. |
+
+## What a session cost
+
+The other half of the question. After every reply, a `Stop` hook shows you one
+line with what that reply cost and what the session has cost so far, tokens
+first because that is what people ask:
+
+```
+[usage-limits] this reply: 6 turns, 210k tokens, $0.95. This session: 9 prompts,
+48 turns, 3.1M tokens (2.9M cache read, 61k output), about $12.40, roughly 31
+points of the 5-hour window. Context is now about 130k tokens.
+```
+
+It goes to you, not into the context, so it costs the model nothing. It reads
+only the bytes of the transcript written since the previous reply, including
+any subagent transcripts under the session's own folder, so it takes a few
+milliseconds however long the session has run. When the session closes, a
+`SessionEnd` hook prints the closing line:
+
+```
+[usage-limits] session closed after 1h 42m: 9 prompts, 48 turns, 3.1M tokens, about $12.40.
+```
+
+Claude is also asked to end finished work with the total in its own words, one
+plain line, and to skip it on partial progress. The before-prompt line carries
+the session's tokens, what the last reply cost, and how large the context has
+become, with one clause of advice once it passes 150k tokens, because the
+context is re-sent on every call and past a point it is the cost of the session.
+
+The history is kept in `usage-limits-sessions.json` beside the other caches:
+
+```
+node skills/usage-limits/scripts/usage.js --sessions
+node skills/usage-limits/scripts/usage.js --session last
+```
+
+```
+  Id        When        Project                 Prompts    Turns   Tokens     Cost
+  4940f126  9m ago      C--Users-OWNER                1       16     2.8M   $11.36  open
+  380e664a  9m ago      C--Users-OWNER               10   112+35    51.0M   $93.11  open
+```
+
+`--session last` (or an id, or a unique prefix of one) shows one session in
+full: the token split, the model mix, the subagent calls and the context size.
+Installed as a plugin, `/usage-limits:session` reads the same thing back.
+Turns are main-thread calls; `+N` is what subagents made on top. Set
+`USAGE_LIMITS_TALLY=off` to turn all of this off.
+
+If you installed the plain skill rather than the plugin, add the two hooks
+beside the first one in `settings.json`: `Stop` running `scripts/stop.js` and
+`SessionEnd` running `scripts/sessionend.js`.
+
 
 ## What would this job cost
 
@@ -528,6 +583,12 @@ Good enough to plan with, not a bill. The honest caveats:
   doubling the limits. If demand-based limits ever return, the numbers here
   follow automatically, because they are calibrated from what your traffic did
   to the meter rather than from an assumption about the clock.
+- Subagent transcripts, written under the session's own folder, are read too.
+  Their calls count in the money and the tokens and are reported apart from
+  the turns, because a turn is one main-thread call.
+- The account's own list of limits is read as well as the per-window buckets,
+  so a per-model weekly such as `weekly (Fable)` shows up as a window of its
+  own, priced from that model's calls alone.
 - The turn cost behind "turns of headroom" is a median over at least five
   turns, so one compaction cannot define your pace.
 - What a point of a window costs is learned once from the best sample seen and
@@ -565,12 +626,15 @@ names, the formulas, and the rest of it.
 agents/openai.yaml                how Codex lists the plugin
 skills/usage-limits/SKILL.md      what the agent reads
 skills/usage-limits/agents/       how Codex lists the skill
-skills/usage-limits/scripts/      usage.js, brief.js, pulse.js, codex.js,
-                                  host.js, lowpower.js, install-codex-hook.js
+skills/usage-limits/scripts/      usage.js, brief.js, pulse.js, stop.js,
+                                  sessionend.js, tally.js, codex.js, host.js,
+                                  lowpower.js, install-codex-hook.js
 skills/usage-limits/references/   the longer notes
-hooks/hooks.json                  runs brief.js before each prompt, and
-                                  pulse.js during long turns
+hooks/hooks.json                  runs brief.js before each prompt, pulse.js
+                                  during long turns, stop.js after each reply
+                                  and sessionend.js when the session closes
 commands/check.md                 the /usage-limits:check command
+commands/session.md               the /usage-limits:session command
 bin/cli.js                        the npx entry point
 tools/sync-version.js             keeps the manifest version in step
 test/                             node --test, no dependencies
@@ -582,8 +646,8 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-248 tests over the pricing, the window arithmetic, plan and credit detection,
-the status line, the before-prompt line, the mid-turn pulse, job forecasting,
+308 tests over the pricing, the window arithmetic, plan and credit detection,
+the status line, the before-prompt line, the mid-turn pulse, the after-reply tally and the session history, job forecasting,
 per-project attribution, the Codex reader and its installer, the CLI,
 packaging, and the settings save/restore.
 
