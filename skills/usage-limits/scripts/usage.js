@@ -185,10 +185,35 @@ function configDir() {
 
 // The CLI keeps its account state in ~/.claude.json, or next to the config
 // directory when CLAUDE_CONFIG_DIR moves it.
-function accountFile() {
+//
+// Both can exist at once, and the one in the config directory is not
+// necessarily the one with the meter in it: a Claude Code migration writes a
+// small ~/.claude/.claude.json holding machine ids and migration flags while
+// the account state, including cachedUsageUtilization, stays in the home
+// directory file. Picking on existence alone found that stub, reported no
+// snapshot, and sent host detection off to Codex - which is how a Claude
+// session ends up quoting another agent's meter entirely. So choose the file
+// that actually carries a snapshot, and only fall back to existence.
+function accountFiles() {
   const scoped = path.join(configDir(), '.claude.json');
-  if (fs.existsSync(scoped)) return scoped;
-  return path.join(os.homedir(), '.claude.json');
+  const home = path.join(os.homedir(), '.claude.json');
+  return scoped === home ? [home] : [scoped, home];
+}
+
+function hasSnapshot(file) {
+  const parsed = readJson(file);
+  return Boolean(parsed && parsed.cachedUsageUtilization);
+}
+
+function accountFile() {
+  const candidates = accountFiles();
+  for (const file of candidates) {
+    if (hasSnapshot(file)) return file;
+  }
+  for (const file of candidates) {
+    if (fs.existsSync(file)) return file;
+  }
+  return candidates[candidates.length - 1];
 }
 
 function readJson(file) {
@@ -1775,6 +1800,25 @@ function statusLine(collected) {
       unreported: snapshot.utilization === 0 && !Number.isFinite(resetsAt),
     });
   }
+
+  // The per-model weeklies are not bucket keys, they are entries in the
+  // account's own `limits` list, so a loop over the bucket table never saw
+  // them. On a plan where the Fable weekly is the limit that actually binds,
+  // that meant the status line quoting the shared weekly at 24% while the
+  // window about to stop the work sat at 76, which is the wrong number in the
+  // most convincing possible place.
+  for (const limit of limitWindows(utilization)) {
+    if (!limit.family) continue;
+    const msToReset = Number.isFinite(limit.resetsAt) ? limit.resetsAt - now : null;
+    parts.push({
+      label: limit.family,
+      percent: limit.percent,
+      msToReset,
+      stale: msToReset !== null && msToReset <= 0,
+      unreported: false,
+    });
+  }
+
   if (!parts.length) return '';
 
   const trusted = parts.filter((part) => !part.stale && !part.unreported);
@@ -2376,6 +2420,7 @@ module.exports = {
   SATURATION_LIMIT,
   MIN_BASELINE_TURNS,
   MIN_BASELINE_PERCENT,
+  accountFile,
   buildWindows,
   limitWindows,
   lastRejections,

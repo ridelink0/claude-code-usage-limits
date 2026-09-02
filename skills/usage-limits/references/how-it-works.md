@@ -118,6 +118,14 @@ really somewhere in 1.5 to 2.5. At low readings the projection can be off by
 a quarter or more in either direction. The report flags this below 5 percent.
 Above about 20 percent it tightens up considerably.
 
+**Two files can claim to be the account state.** The meter lives in
+`~/.claude.json`, but a Claude Code migration also writes a small
+`~/.claude/.claude.json` holding machine ids and no meter at all. Whichever
+one actually carries `cachedUsageUtilization` is the one read. Choosing on
+existence alone found the stub, concluded there was no Claude snapshot, and
+sent host detection off to Codex, which reported that agent's meter inside a
+Claude session.
+
 **One machine only.** Transcripts are local. Usage from another machine, from
 claude.ai, or from a cloud session counts against the same limit but leaves no
 local record. The percentages stay correct; the calibration reads low, which

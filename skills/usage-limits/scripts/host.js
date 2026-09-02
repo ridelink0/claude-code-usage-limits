@@ -38,15 +38,28 @@ function exists(file) {
 
 // Claude Code only writes this once it has talked to the API, so its presence
 // is a stronger signal than the directory existing.
-function claudeHasSnapshot() {
+//
+// Look in both places rather than stopping at whichever exists. A migration
+// leaves a small ~/.claude/.claude.json carrying machine ids and no meter,
+// while the account state stays in the home directory file; stopping at the
+// stub answered "no Claude snapshot" on a machine plainly running Claude Code,
+// and detection then fell through to Codex and reported its meter instead.
+function claudeSnapshotFile() {
   const scoped = path.join(claudeConfigDir(), '.claude.json');
-  const file = exists(scoped) ? scoped : path.join(os.homedir(), '.claude.json');
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Boolean(parsed && parsed.cachedUsageUtilization);
-  } catch (err) {
-    return false;
+  const home = path.join(os.homedir(), '.claude.json');
+  for (const file of scoped === home ? [home] : [scoped, home]) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (parsed && parsed.cachedUsageUtilization) return file;
+    } catch (err) {
+      // Missing or unreadable is just "not this one".
+    }
   }
+  return null;
+}
+
+function claudeHasSnapshot() {
+  return claudeSnapshotFile() !== null;
 }
 
 function codexHasSessions() {
@@ -91,6 +104,7 @@ module.exports = {
   codexHome,
   claudeConfigDir,
   claudeHasSnapshot,
+  claudeSnapshotFile,
   codexHasSessions,
   exists,
 };

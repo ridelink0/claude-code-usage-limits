@@ -1642,6 +1642,37 @@ test('criticalOthers ignores comfortable and unreadable windows', () => {
   assert.strictEqual(usage.CRITICAL_PERCENT, 85);
 });
 
+// The reported failure: the status line looped over the bucket table only, so
+// a per-model weekly - which lives in the account's `limits` list, not as a
+// bucket key - never appeared. On a plan where the Fable weekly binds, the
+// line quoted the shared weekly at 24% while the window about to stop the work
+// sat at 76.
+test('the status line includes a per-model weekly, not just the bucket windows', () => {
+  const resets = new Date(NOW + 4 * 24 * HOUR).toISOString();
+  const collected = {
+    now: NOW,
+    utilization: {
+      five_hour: { utilization: 1, resets_at: new Date(NOW + HOUR).toISOString() },
+      seven_day: { utilization: 24, resets_at: resets },
+      limits: [
+        { kind: 'session', percent: 1, resets_at: new Date(NOW + HOUR).toISOString() },
+        { kind: 'weekly_all', percent: 24, resets_at: resets },
+        {
+          kind: 'weekly_scoped',
+          percent: 76,
+          resets_at: resets,
+          is_active: true,
+          scope: { model: { id: null, display_name: 'Fable' } },
+        },
+      ],
+    },
+  };
+
+  const line = usage.statusLine(collected);
+  assert.match(line, /fable 76%/, 'the window that actually binds has to be on the line');
+  assert.match(line, /wk 24%/, 'and the shared weekly stays');
+});
+
 test('betterCalibration keeps whichever sample rests on more turns', () => {
   const thin = { usdPerPercent: 0.9, turns: 3, percent: 30 };
   const solid = { usdPerPercent: 0.54, turns: 50, percent: 68 };
