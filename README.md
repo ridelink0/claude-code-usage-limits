@@ -583,6 +583,10 @@ overwrite the saved originals.
 The file change applies to new sessions. For a session already running,
 `/effort low` does the same thing immediately.
 
+`--effort max` is refused: `settings.json` does not accept `max`, so saving it
+would store a value the next session silently ignores. `max` lives in
+`/effort` and `CLAUDE_CODE_EFFORT_LEVEL` only.
+
 That covers the setting. The larger saving is behavioural, and the skill file
 spells it out: batch tool calls, read line ranges instead of whole files, skip
 subagents when the context already exists, stop retrying a fix that is not

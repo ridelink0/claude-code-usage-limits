@@ -272,6 +272,45 @@ to `low` is the largest per-turn saving available without changing model or
 scope. The file change applies to new sessions; for the session already
 running, `/effort low` takes effect immediately.
 
+### Choosing the level
+
+Do not guess which effort or model the budget calls for; the report can say:
+
+```
+node scripts/usage.js --recommend        # against the headroom in general
+node scripts/usage.js --recommend 15     # against a 15 turn job
+```
+
+It weighs the binding window, the measured cost of a turn, and how much of
+the output is actually reasoning, then names the posture (roomy, tight,
+critical, or reset-first) and the exact commands. When there is room it says
+to keep everything as it is, out loud, so cheapness never becomes a habit.
+Add `--json` for the decision as fields.
+
+The three levers it recommends across belong to different hands, and keeping
+that straight is the whole trick:
+
+| Lever | Whose hand | When it acts |
+| --- | --- | --- |
+| `/effort`, `/model` | the user's only | this session, immediately |
+| `lowpower.js on` (writes settings.json) | yours, right now | new sessions, at launch |
+| subagent model and effort | yours, freely | that dispatch, immediately |
+
+The running session's own model and effort cannot be changed by any script or
+hook: settings.json is read at launch and hook output has no model field. So
+when the recommendation says `/effort low`, put that in front of the user as
+one short line and keep working; do not wait on it. What can be done without
+asking anyone is the other two rows: write the next session's settings with
+`lowpower.js`, and send self-contained mechanical bulk to a subagent on a
+cheaper model at low effort, which is a change of model that needs nobody's
+permission. The cold start still costs (see `references/tactics.md` on
+subagents), so delegate work that is big and mechanical, not quick questions.
+
+One catch to know about: `settings.json` does not accept `max`, so a saved
+effort level tops out at `xhigh`. `max` only survives through `/effort` or the
+`CLAUDE_CODE_EFFORT_LEVEL` environment variable, and `lowpower.js` refuses to
+write it rather than save a value the next session would silently ignore.
+
 Do not take that on trust: the report measures it. Under the model table it
 says how much of the output was reasoning and what that cost, for example
 
@@ -394,5 +433,6 @@ a turn, which is the thing it is trying to save.
 | `scripts/codex.js` | The Codex reader: the meter and the pace out of `~/.codex/sessions`, plus the live `--refresh` call. |
 | `scripts/install-codex-hook.js` | `status`, `on`, `off`. Installs the Codex-side instruction, which Claude Code does not need. |
 | `scripts/lowpower.js` | `status`, `on`, `off`. Restores what it replaced. Claude Code only. |
+| `scripts/recommend.js` | The chooser behind `usage.js --recommend`: posture, then the effort and model commands for each lever. Not meant to be called by hand. |
 | `references/tactics.md` | Every lever that lowers cost, and why it works. |
 | `references/how-it-works.md` | Where the numbers come from and where they are soft. |

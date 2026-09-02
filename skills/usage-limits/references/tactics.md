@@ -56,6 +56,13 @@ Switch at a task boundary rather than mid-task, because a model switch
 invalidates the prompt cache and the rebuild can cost more than the saving on
 a short remaining task.
 
+The switch needs no boundary at all when the work is delegated: a subagent
+can be dispatched on a cheaper model at low effort mid-session, and that is
+the one model change the agent can make without anyone's hand on `/model`.
+It pays the cold start from lever 7, so it is for self-contained bulky work,
+not quick questions. `node scripts/usage.js --recommend` prices whether the
+budget calls for it.
+
 ### 3. Read less, and read it once
 
 - Line ranges instead of whole files. Grep with a result limit instead of
