@@ -812,13 +812,24 @@ function stampPlan(all, planId) {
   return stamped;
 }
 
-// A sample is better when it rests on more turns. Percentages read in whole
-// numbers, so a bigger percentage also divides more precisely.
+// A sample is better when it rests on more of the meter. Percentages read in
+// whole numbers, so a reading at 1% prices a point against a bracket that is
+// mostly rounding, while one at 60% divides by a number that means something.
+// Turn count only breaks the tie: it says how much local spend sat behind the
+// reading, not how precise the denominator was, and preferring it outright is
+// how a 44-turn baseline read at 1% once beat every honest sample after it.
 function betterCalibration(current, candidate) {
   if (!candidate || !Number.isFinite(candidate.usdPerPercent) || candidate.usdPerPercent <= 0) {
     return current || null;
   }
   if (!current || !Number.isFinite(current.turns)) return candidate;
+  if (
+    Number.isFinite(candidate.percent) &&
+    Number.isFinite(current.percent) &&
+    candidate.percent !== current.percent
+  ) {
+    return candidate.percent > current.percent ? candidate : current;
+  }
   return candidate.turns > current.turns ? candidate : current;
 }
 
@@ -933,16 +944,23 @@ function buildWindow(spec, snapshot, events, now, options) {
     // holding. The learned price covers it: what a point costs is a property
     // of the plan, not of this reading.
     const selfPriced =
-      rawPercent > 0 && upTo.cost > 0 && upTo.turns >= MIN_BASELINE_TURNS
+      rawPercent >= MIN_BASELINE_PERCENT && upTo.cost > 0 && upTo.turns >= MIN_BASELINE_TURNS
         ? { usdPerPercent: upTo.cost / rawPercent, turns: upTo.turns, percent: rawPercent }
         : null;
     // A metered window has nothing to learn: its price per point is stated.
     if (selfPriced && !extra.metered) window.calibration = selfPriced;
 
     const known = extra.knownCalibration;
+    // A remembered price read off a near-empty meter is the same rounding
+    // bracket in disguise, so it is no more usable than measuring one now.
     const usable =
-      known && Number.isFinite(known.usdPerPercent) && known.usdPerPercent > 0 ? known : null;
-    // Trust the better-sampled of the two, whichever that is; a stated price
+      known &&
+      Number.isFinite(known.usdPerPercent) &&
+      known.usdPerPercent > 0 &&
+      !(Number.isFinite(known.percent) && known.percent < MIN_BASELINE_PERCENT)
+        ? known
+        : null;
+    // Trust the better-measured of the two, whichever that is; a stated price
     // beats both.
     const stated =
       extra.metered && Number.isFinite(extra.usdPerPercent) && extra.usdPerPercent > 0
@@ -950,9 +968,7 @@ function buildWindow(spec, snapshot, events, now, options) {
         : null;
     const chosen =
       stated ||
-      (selfPriced && usable
-        ? (usable.turns > selfPriced.turns ? usable : selfPriced)
-        : selfPriced || usable);
+      (selfPriced && usable ? betterCalibration(usable, selfPriced) : selfPriced || usable);
 
     if (after.cost > 0 && chosen) {
       const pricePerPoint = chosen.usdPerPercent;
@@ -988,7 +1004,12 @@ function buildWindow(spec, snapshot, events, now, options) {
   // so when the two disagree that badly it is the local history that is
   // incomplete, not the meter.
   const thin = spent.turns < MIN_BASELINE_TURNS && percent >= UNEXPLAINED_PERCENT;
-  const measured = percent !== null && percent > 0 && spent.cost > 0 && !thin;
+  // The same rounding bracket again, in the optimistic direction this time: a
+  // window reading 1% divided a full hour of spend by one and priced the
+  // remaining 99 points at thousands of dollars. Below the floor the learned
+  // price takes over through the fallback chain.
+  const measured =
+    percent !== null && percent >= MIN_BASELINE_PERCENT && spent.cost > 0 && !thin;
   const derived = measured ? spent.cost / percent : null;
   const known = extra.knownCalibration;
   const metered =
@@ -1004,11 +1025,14 @@ function buildWindow(spec, snapshot, events, now, options) {
           : null;
   window.metered = metered;
 
+  // The API reports whole numbers, so a low reading is a wide bracket. A fact
+  // about the reading, not the pricing, so it is set whether or not a price
+  // per point could be found.
+  window.coarse = percent !== null && percent < MIN_BASELINE_PERCENT;
+
   if (percent !== null && priced !== null) {
     window.usdPerPercent = priced;
     window.remainingUSD = window.usdPerPercent * window.percentLeft;
-    // The API reports whole numbers, so a low reading is a wide bracket.
-    window.coarse = percent < 5;
 
     const perTurn = typicalTurnCost(recentEvents, inWindow, events, MIN_PACE_SAMPLE);
     window.percentPerTurn = perTurn === null ? null : perTurn / window.usdPerPercent;
@@ -1313,6 +1337,15 @@ const SATURATION_LIMIT = 105;
 // Fewer turns than this before the snapshot and a point cannot be priced.
 const MIN_BASELINE_TURNS = 5;
 
+// A reading below this cannot price a point either. The API reports whole
+// numbers, so at 1% the denominator is mostly rounding: the true figure is
+// anywhere in a bracket as wide as the reading itself, and a point priced
+// against it converts later spend into several times the points it really
+// moved. A snapshot taken just after a reset is the common case - one sat at
+// 1% while the local spend divided by it asserted 97% of a window that was
+// truly at 35.
+const MIN_BASELINE_PERCENT = 5;
+
 // Past this much of a window, a handful of local turns is not what spent it,
 // so their total is not a fair price for a point.
 const UNEXPLAINED_PERCENT = 20;
@@ -1327,6 +1360,10 @@ function reconstructWindow(spec, snapshot, events, now) {
   const pastStart = resetsAt - spec.span;
   const past = totals(events.filter((e) => e.at >= pastStart && e.at <= resetsAt));
   if (past.cost <= 0) return null;
+
+  // The same rounding bracket that poisons the live correction poisons a
+  // rebuild: a closed window that read 1% prices a point off almost nothing.
+  if (snapshot.utilization < MIN_BASELINE_PERCENT) return null;
 
   const usdPerPercent = past.cost / snapshot.utilization;
 
@@ -2312,6 +2349,7 @@ module.exports = {
   reconstructWindow,
   SATURATION_LIMIT,
   MIN_BASELINE_TURNS,
+  MIN_BASELINE_PERCENT,
   buildWindows,
   limitWindows,
   lastRejections,

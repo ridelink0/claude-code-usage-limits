@@ -1371,6 +1371,81 @@ test('a baseline too thin to price a point is not used', () => {
   assert.strictEqual(window.percentUsed, 49);
 });
 
+test('a near-empty reading cannot price a point, so spend after it is left alone', () => {
+  // The reported failure: a snapshot at 1% taken just after a reset priced a
+  // point off a rounding bracket, and a window truly at 35% was asserted at
+  // 97, climbing all afternoon while the real figure crawled.
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 1, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+  const fetchedAt = NOW - 44 * 60 * 1000;
+  const sample = events([
+    { offset: -58 * 60 * 1000, cost: 0.05 },
+    { offset: -56 * 60 * 1000, cost: 0.05 },
+    { offset: -54 * 60 * 1000, cost: 0.05 },
+    { offset: -52 * 60 * 1000, cost: 0.05 },
+    { offset: -50 * 60 * 1000, cost: 0.05 },
+    { offset: -48 * 60 * 1000, cost: 0.05 },
+    { offset: -5 * 60 * 1000, cost: 28 },
+  ]);
+  const window = usage.buildWindow(spec, snapshot, sample, NOW, { fetchedAt });
+  assert.strictEqual(window.adjusted, false, 'no correction beats one that is three times too big');
+  assert.strictEqual(window.percentUsed, 1);
+  assert.strictEqual(usage.MIN_BASELINE_PERCENT, 5);
+});
+
+test('the same near-empty reading corrects fine off a remembered real price', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 1, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+  const fetchedAt = NOW - 44 * 60 * 1000;
+  const sample = events([
+    { offset: -58 * 60 * 1000, cost: 0.05 },
+    { offset: -56 * 60 * 1000, cost: 0.05 },
+    { offset: -54 * 60 * 1000, cost: 0.05 },
+    { offset: -52 * 60 * 1000, cost: 0.05 },
+    { offset: -50 * 60 * 1000, cost: 0.05 },
+    { offset: -48 * 60 * 1000, cost: 0.05 },
+    { offset: -5 * 60 * 1000, cost: 28 },
+  ]);
+  const window = usage.buildWindow(spec, snapshot, sample, NOW, {
+    fetchedAt,
+    knownCalibration: { usdPerPercent: 0.85, turns: 60, percent: 40 },
+  });
+  assert.strictEqual(window.adjusted, true);
+  assert.ok(
+    window.percentUsed >= 30 && window.percentUsed <= 40,
+    'got ' + window.percentUsed + ', expected near 34'
+  );
+});
+
+test('a remembered price read off a near-empty meter is refused too', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 1, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
+  const sample = events([{ offset: -5 * 60 * 1000, cost: 28 }]);
+  const window = usage.buildWindow(spec, snapshot, sample, NOW, {
+    fetchedAt: NOW - 44 * 60 * 1000,
+    knownCalibration: { usdPerPercent: 0.29, turns: 44, percent: 1 },
+  });
+  assert.strictEqual(window.adjusted, false, 'the same rounding bracket in disguise');
+  assert.strictEqual(window.percentUsed, 1);
+});
+
+test('betterCalibration prefers meter movement over turn count', () => {
+  const coarse = { usdPerPercent: 0.29, turns: 80, percent: 1 };
+  const wide = { usdPerPercent: 0.85, turns: 10, percent: 60 };
+  assert.strictEqual(usage.betterCalibration(coarse, wide), wide);
+  assert.strictEqual(usage.betterCalibration(wide, coarse), wide);
+});
+
+test('a rebuild refuses a closed window that read almost nothing', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 2, resets_at: new Date(NOW - 10 * 60 * 1000).toISOString() };
+  const sample = events([
+    { offset: -3 * HOUR, cost: 0.4 },
+    { offset: -5 * 60 * 1000, cost: 12 },
+  ]);
+  assert.strictEqual(usage.reconstructWindow(spec, snapshot, sample, NOW), null);
+});
+
 test('no snapshot timestamp means no adjustment rather than a guess', () => {
   const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
   const snapshot = { utilization: 49, resets_at: new Date(NOW + 4 * HOUR).toISOString() };
