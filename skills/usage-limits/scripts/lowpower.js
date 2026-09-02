@@ -81,6 +81,15 @@ function planApply(settings, options, existingState) {
   if (EFFORT_LEVELS.indexOf(effort) === -1) {
     throw new Error('unknown effort "' + effort + '", expected one of ' + EFFORT_LEVELS.join(', '));
   }
+  // Claude Code refuses 'max' in settings.json; it only survives through
+  // /effort or CLAUDE_CODE_EFFORT_LEVEL. Writing it here would save a value
+  // the next session silently ignores, which is worse than an error.
+  if (effort === 'max') {
+    throw new Error(
+      "settings.json does not accept 'max'. Use --effort xhigh here, and /effort max " +
+        'or CLAUDE_CODE_EFFORT_LEVEL=max for the sessions that need it.'
+    );
+  }
   wanted.effortLevel = effort;
   if (options.model) wanted.model = options.model;
 

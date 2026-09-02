@@ -2261,6 +2261,23 @@ async function main(argv) {
     }
     return 0;
   }
+  const recommendAt = argv.indexOf('--recommend');
+  if (recommendAt !== -1) {
+    // The turn count is optional: with one the verdict is about that job,
+    // without one it is about the headroom in general.
+    const next = argv[recommendAt + 1];
+    const turns = next && next.indexOf('--') !== 0 ? Number(next) : null;
+    const recommend = require('./recommend.js');
+    if (wantsJson) {
+      process.stdout.write(
+        JSON.stringify(recommend.decide(recommend.fromReport(data, turns)), null, 2) + '\n'
+      );
+    } else {
+      process.stdout.write(recommend.renderRecommend(data, turns) + '\n');
+    }
+    return 0;
+  }
+
   if (wantsJson) {
     process.stdout.write(JSON.stringify(data, null, 2) + '\n');
   } else {

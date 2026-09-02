@@ -430,6 +430,44 @@ times one that answers from context. The upper end is the honest one for a long
 run, since turns get dearer as the context grows.
 
 
+## Which effort and model should this run at
+
+```
+node skills/usage-limits/scripts/usage.js --recommend        # against the headroom
+node skills/usage-limits/scripts/usage.js --recommend 15     # against a 15 turn job
+```
+
+```
+Recommendation for 15 turns
+
+  Posture   tight - a 15 turn job fits, but only just (5-hour window, 12% left, resets in 1h 40m)
+  Effort    xhigh -> medium; one notch covers the mechanical stretches; keep judgement calls at full effort
+            this session: /effort medium   (only the user can run it)
+            new sessions: node scripts/lowpower.js on --effort medium
+  Model     keep opus for the judgement; the saving is in where the mechanical bulk runs
+            dispatch self-contained mechanical work to a subagent on sonnet at low effort, and keep the judgement here
+```
+
+It weighs the binding window, the measured cost of a turn, and how much of the
+output is actually reasoning, then names a posture - roomy, tight, critical, or
+reset-first - and the exact commands. When there is room it says to keep
+everything as it is, out loud, because turning effort down when the budget is
+not tight buys nothing and costs quality. When reasoning is only a sliver of
+the output it says so too, and leaves effort alone: the reasoning share is the
+ceiling on what lowering effort can save. `--json` returns the decision as an
+object.
+
+The three levers it recommends across belong to different hands. The running
+session's effort and model are the user's alone (`/effort`, `/model`, applied
+immediately); new sessions belong to `lowpower.js`, which writes `settings.json`
+for the next launch; and delegated work belongs to the agent itself, which can
+dispatch a subagent on any model at any effort, mid-session, with no one asked.
+No script or hook can change the model or effort of a session already running -
+`settings.json` is read at launch and hook output has no model field - which is
+why the recommendation separates "this session" from "new sessions" instead of
+pretending one command covers both.
+
+
 ## Plans
 
 It reads which plan you are on and adjusts what it tells you, because the

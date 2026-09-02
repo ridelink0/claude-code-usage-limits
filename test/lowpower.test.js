@@ -69,6 +69,10 @@ test('planApply rejects an effort level that does not exist', () => {
   assert.throws(() => lowpower.planApply({}, { effort: 'turbo' }, null), /unknown effort/);
 });
 
+test("planApply refuses 'max', which settings.json does not accept", () => {
+  assert.throws(() => lowpower.planApply({}, { effort: 'max' }, null), /does not accept 'max'/);
+});
+
 test('planRestore puts back exactly what was saved', () => {
   const settings = { effortLevel: 'xhigh', model: 'opus', theme: 'dark' };
   const applied = lowpower.planApply(settings, { model: 'haiku' }, null);

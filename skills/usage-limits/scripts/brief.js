@@ -502,7 +502,9 @@ function briefText(parts) {
           'save at clean boundaries as you go, and keep a short running note of ' +
           'what is done, what is next, and which files are mid-change, so that ' +
           'stopping at any moment loses nothing. Say in one line what may not ' +
-          'land before the reset, then keep working.'
+          'land before the reset, then keep working. If part of what remains is ' +
+          'mechanical, node scripts/usage.js --recommend (from the skill directory) ' +
+          'names the effort and model it should run at.'
         : 'Open your reply with one short line stating this and confirming the ' +
           'request fits, then get on with the work. Keep it to a single line. ' +
           'There is room, so use it: work at full quality, take on the whole ' +

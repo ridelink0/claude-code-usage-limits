@@ -11,6 +11,7 @@ const HELP = `claude-usage-limits - how much agent usage is left, and whether th
   claude-usage-limits --json              the same numbers, machine readable
   claude-usage-limits --status            one short line, for a status line
   claude-usage-limits --forecast 15       what a 15 turn job would cost
+  claude-usage-limits --recommend [15]    which effort and model this budget calls for
   claude-usage-limits --sessions          what recent sessions cost
   claude-usage-limits --session last      one session in full, or give its id
 
