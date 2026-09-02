@@ -130,7 +130,17 @@ calculation.
 **List prices are a proxy.** The rate table is first-party API pricing. How a
 subscription plan actually meters usage is not published, and the weighting
 almost certainly is not exactly this. It is close enough for ratios, which is
-all it is used for.
+all it is used for. No published or community source shows the meter weighting
+models differently from their dollar prices, so calibrating dollars against
+your own meter remains the best method anyone outside Anthropic has.
+
+**The snapshot is slow by design.** The percentages come from Claude Code's
+own cache of the account meter, which refreshes on its own schedule - roughly
+hourly in practice, because the endpoint behind it rate-limits aggressive
+polling. Between refreshes every figure here is the last real reading plus
+arithmetic. That is why an old snapshot is reported as a floor with its age
+attached rather than dressed up as a current percentage, and why `/usage` is
+the one way to force a fresh reading.
 
 **A reset time can be in the past.** The cache refreshes when Claude Code
 talks to the API, so an idle spell leaves it behind. A window whose `resets_at`
@@ -167,6 +177,13 @@ immediately. Re-run the report if the shape of the work changes.
 
 The rate table in `scripts/usage.js` is a plain object at the top of the file.
 When new models ship, add a row.
+
+A bracketed suffix on a model id (`claude-sonnet-5[1m]`) is stripped before
+the lookup: it marks a context-window variant of the same model, not a new
+one. Cache reads price at a tenth of the input rate unless a row carries a
+`cacheRead` figure of its own - Fable and Mythos 5.1 price reads outright at
+$0.25 per million, far under the tenth rule, and reads are the dominant input
+in exactly the long sessions where the difference matters.
 
 Until someone does, a model this table has not seen is priced at the average of
 the family its name contains: an unreleased `claude-opus-5-2` is charged at the

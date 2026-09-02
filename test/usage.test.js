@@ -24,6 +24,26 @@ test('rateFor matches known ids exactly', () => {
   assert.deepStrictEqual(usage.rateFor('claude-sonnet-5'), { input: 2, output: 10 });
 });
 
+test('rateFor strips a bracketed variant suffix and prices the model it names', () => {
+  // "fable[1m]" and friends are context-window toggles on the same model, not
+  // new models; falling to the family average priced sonnet 5 at the 4.6 blend.
+  assert.deepStrictEqual(usage.rateFor('claude-sonnet-5[1m]'), usage.rateFor('claude-sonnet-5'));
+  assert.deepStrictEqual(usage.rateFor('claude-fable-5[1m]'), { input: 10, output: 50 });
+  assert.strictEqual(usage.isKnownModel('claude-sonnet-5[1m]'), true);
+  assert.strictEqual(usage.isKnownModel('fable[1m]'), false, 'a bare alias is still a guess');
+});
+
+test('cache reads use the per-model rate when one is stated', () => {
+  // The tenth-of-input rule holds everywhere except Fable/Mythos 5.1, which
+  // price reads at $0.25 per million outright. In a long session reads are
+  // the dominant input, so the tenth rule overstated that spend fourfold.
+  const record = { cache_read_input_tokens: 1e6 };
+  near(usage.costOf(record, 'claude-fable-5-1'), 0.25, 1e-9);
+  near(usage.costOf(record, 'claude-mythos-5-1'), 0.25, 1e-9);
+  near(usage.costOf(record, 'claude-fable-5'), 1.0, 1e-9);
+  near(usage.costOf(record, 'claude-opus-5'), 0.5, 1e-9);
+});
+
 test('rateFor falls back to the family when the id is unknown', () => {
   assert.deepStrictEqual(usage.rateFor('claude-sonnet-9-9'), { input: 2.5, output: 12.5 });
   assert.deepStrictEqual(usage.rateFor('CLAUDE-OPUS-9'), { input: 5, output: 25 });

@@ -47,8 +47,12 @@ const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-// USD per million tokens, first-party API rates.
+// USD per million tokens, first-party API rates. `cacheRead` is an absolute
+// $/MTok override for the few models that price reads outright instead of at
+// a tenth of input; everything else uses the CACHE_READ multiplier below.
 const RATES = {
+  'claude-fable-5-1': { input: 10, output: 50, cacheRead: 0.25 },
+  'claude-mythos-5-1': { input: 10, output: 50, cacheRead: 0.25 },
   'claude-fable-5': { input: 10, output: 50 },
   'claude-mythos-5': { input: 10, output: 50 },
   'claude-opus-5': { input: 5, output: 25 },
@@ -91,9 +95,21 @@ function familyAverage(family, table) {
   return { input: input / members.length, output: output / members.length };
 }
 
+// Claude Code aliases and some transcript records carry a bracketed variant
+// suffix - "fable[1m]" is the 1M-context toggle on the same model, not a
+// different one. Left in place it misses the exact rate lookup and lands on
+// the family average, which is wrong whenever a family's members price
+// differently (sonnet 5 at $2 against sonnet 4.6 at $3).
+function normalizeModel(model) {
+  return String(model || '')
+    .toLowerCase()
+    .replace(/\[[^\]]*\]\s*$/, '')
+    .trim();
+}
+
 // Whether the price came from the table or from an assumption.
 function isKnownModel(model) {
-  return Object.prototype.hasOwnProperty.call(RATES, String(model || '').toLowerCase());
+  return Object.prototype.hasOwnProperty.call(RATES, normalizeModel(model));
 }
 
 // Cache traffic is priced as a multiple of the input rate.
@@ -184,7 +200,7 @@ function readJson(file) {
 }
 
 function rateFor(model) {
-  const id = String(model || '').toLowerCase();
+  const id = normalizeModel(model);
   if (RATES[id]) return RATES[id];
   return familyAverage(familyOf(id)) || FALLBACK_RATE;
 }
@@ -199,16 +215,26 @@ function costOf(usage, model) {
 
   let writeUnits = write5m * CACHE_WRITE_5M + write1h * CACHE_WRITE_1H;
   if (writeUnits === 0) {
-    // Older records only carry the undifferentiated total.
+    // Older records only carry the undifferentiated total. Five minutes is
+    // the default TTL, so that is the assumption; an old-format one-hour
+    // session is under-priced by it, but assuming 2x would overcharge the
+    // common case to be right about the rare one.
     writeUnits = (usage.cache_creation_input_tokens || 0) * CACHE_WRITE_5M;
   }
 
-  const inputUnits =
-    (usage.input_tokens || 0) +
-    (usage.cache_read_input_tokens || 0) * CACHE_READ +
-    writeUnits;
+  // Reads price at a tenth of the input rate unless the model prices them
+  // outright. The distinction matters most exactly where reads dominate: a
+  // long session re-reads its whole context every turn, and pricing Fable
+  // 5.1's $0.25 reads by the tenth rule would overstate that spend fourfold.
+  const readTokens = usage.cache_read_input_tokens || 0;
+  const readCost = Number.isFinite(rate.cacheRead)
+    ? readTokens * rate.cacheRead
+    : readTokens * CACHE_READ * rate.input;
 
-  return (inputUnits * rate.input + (usage.output_tokens || 0) * rate.output) / 1e6;
+  const inputUnits = (usage.input_tokens || 0) + writeUnits;
+  return (
+    (inputUnits * rate.input + readCost + (usage.output_tokens || 0) * rate.output) / 1e6
+  );
 }
 
 function tokensOf(usage) {
