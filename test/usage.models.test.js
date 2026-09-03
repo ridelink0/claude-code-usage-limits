@@ -161,3 +161,16 @@ test('the report prints the headroom table, and never a turn count it does not h
   const codex = usage.render(Object.assign({}, data, { money: false, host: 'codex' }));
   assert.strictEqual(codex.indexOf('Model headroom'), -1);
 });
+
+// A window past its reset describes the allowance its stale reading came from,
+// not the one running now. Dividing that by a turn price turned it into a
+// confident five hundred turns nobody had.
+test('modelHeadroom projects nothing against a window that has rolled over', () => {
+  const stale = [{ key: 'seven_day', label: 'weekly', family: null, remainingUSD: 100, applies: true, stale: true }];
+  const row = usage.modelHeadroom(stale, events(), null, null).find((r) => r.family === 'opus');
+  assert.strictEqual(row.turnsLeft, null);
+  assert.ok(row.usdPerTurn > 0, 'what a turn costs is still measured');
+
+  const fresh = stale.map((w) => Object.assign({}, w, { stale: false }));
+  assert.strictEqual(usage.modelHeadroom(fresh, events(), null, null).find((r) => r.family === 'opus').turnsLeft, 500);
+});

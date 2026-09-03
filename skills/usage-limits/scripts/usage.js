@@ -876,9 +876,15 @@ function modelHeadroom(windows, events, families, remembered) {
     // the Opus turns are doing, and the error is in the direction that promises
     // room, which is the direction that gets a session cut off mid-edit. The
     // row still says what the model has cost; it does not project from it.
+    //
+    // Nor against a window that has already rolled over. Its remaining money
+    // describes the allowance the stale reading was taken from, not the one
+    // running now, and dividing by a turn price turns that into a confident
+    // count of turns nobody has: a weekly past its reset offered five hundred.
     const turnsLeft =
       !perCall &&
       window &&
+      !window.stale &&
       Number.isFinite(window.remainingUSD) &&
       Number.isFinite(usdPerTurn) &&
       usdPerTurn > 0
