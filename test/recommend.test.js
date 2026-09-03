@@ -197,3 +197,30 @@ test('renderRecommend prints the commands when the budget is tight', () => {
   assert.match(text, /lowpower\.js on --effort medium/);
   assert.match(text, /resets in 1h 30m/);
 });
+
+// The ladder is an assumption. The record is a measurement, and where there is
+// one it decides instead.
+test('delegateModel sends the bulk to the cheapest model this account has measured', () => {
+  const headroom = [
+    { family: 'opus', usdPerTurn: 0.211, ownWindow: false, turnsLeft: 1200 },
+    { family: 'sonnet', usdPerTurn: 0.012, ownWindow: false, turnsLeft: null },
+    { family: 'haiku', usdPerTurn: 0.018, ownWindow: false, turnsLeft: null },
+  ];
+  assert.strictEqual(recommend.delegateModel('opus', headroom), 'sonnet', 'cheapest measured, not one tier down');
+  // Without a record the ladder still answers.
+  assert.strictEqual(recommend.delegateModel('opus', null), 'sonnet');
+  assert.strictEqual(recommend.delegateModel('sonnet', null), 'haiku');
+  // A model whose own weekly is spent is not somewhere to send work.
+  const spent = [
+    { family: 'opus', usdPerTurn: 0.211, ownWindow: false, turnsLeft: 1200 },
+    { family: 'fable', usdPerTurn: 0.01, ownWindow: true, turnsLeft: 0 },
+  ];
+  assert.strictEqual(recommend.delegateModel('opus', spent), 'sonnet', 'falls back rather than sending work at a wall');
+  // Nothing measured is cheaper than what is already running: delegating buys
+  // nothing, so do not pretend it does.
+  const dearer = [
+    { family: 'haiku', usdPerTurn: 0.02, ownWindow: false, turnsLeft: null },
+    { family: 'opus', usdPerTurn: 0.9, ownWindow: false, turnsLeft: 10 },
+  ];
+  assert.strictEqual(recommend.delegateModel('haiku', dearer), 'haiku');
+});

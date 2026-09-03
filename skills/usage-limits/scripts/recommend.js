@@ -32,13 +32,54 @@ const TIGHT_TURNS = 25;
 
 const HOUR = 60 * 60 * 1000;
 
-// Where the mechanical bulk should go when it is delegated. One tier down
-// from whatever is doing the judgement; haiku is already the floor.
-function delegateModel(model) {
+// Where the mechanical bulk should go when it is delegated.
+//
+// The ladder below is an assumption: one tier down from whatever is doing the
+// judgement, haiku being the floor. It is a reasonable assumption and it is
+// still the fallback, but this account has measured the answer - what a call to
+// each model has really cost here - and a measurement beats a ladder. On one
+// machine the ladder said sonnet while the record said sonnet calls had cost
+// $0.012 against Opus turns at $0.211, which is the same advice with a number
+// behind it, and would have said haiku had haiku been the cheaper one.
+function ladderModel(model) {
   const name = String(model || '').toLowerCase();
   if (name.indexOf('haiku') !== -1) return 'haiku';
   if (name.indexOf('sonnet') !== -1) return 'haiku';
   return 'sonnet';
+}
+
+// Whose family a model setting names, without requiring usage.js back: that
+// would make these two modules a cycle.
+function familyName(model) {
+  const name = String(model || '').toLowerCase();
+  for (const family of ['fable', 'mythos', 'opus', 'sonnet', 'haiku']) {
+    if (name.indexOf(family) !== -1) return family === 'mythos' ? 'fable' : family;
+  }
+  return null;
+}
+
+function delegateModel(model, headroom) {
+  const mine = familyName(model);
+  const measured = (headroom || []).filter(
+    (row) =>
+      row &&
+      row.family &&
+      row.family !== mine &&
+      Number.isFinite(row.usdPerTurn) &&
+      row.usdPerTurn > 0 &&
+      // A model whose own weekly is spent is not somewhere to send work.
+      !(row.ownWindow && row.turnsLeft === 0)
+  );
+  if (!measured.length) return ladderModel(model);
+
+  const cheapest = measured.reduce((best, row) => (row.usdPerTurn < best.usdPerTurn ? row : best));
+  // Never up the ladder. If everything measured is dearer than what is already
+  // running, delegating buys nothing and the assumption is the better answer.
+  const here = (headroom || []).find((row) => row && row.family === mine);
+  if (here && Number.isFinite(here.usdPerTurn) && cheapest.usdPerTurn >= here.usdPerTurn) {
+    return ladderModel(model);
+  }
+  return cheapest.family;
 }
 
 // The effort actually in force. settings.json says 'default' when nothing is
@@ -163,10 +204,17 @@ function decide(inputs) {
   // then it lands in settings.json for the next session: switching the running
   // session's model mid-task invalidates the prompt cache, so the change
   // belongs at a session boundary.
-  base.model.delegate = delegateModel(modelNow);
+  base.model.delegate = delegateModel(modelNow, inputs.headroom);
+  const mine = (inputs.headroom || []).find((row) => row && row.family === familyName(modelNow));
+  const there = (inputs.headroom || []).find((row) => row && row.family === base.model.delegate);
+  // With both prices measured, say the saving rather than asserting one.
+  const saving =
+    mine && there && Number.isFinite(mine.usdPerTurn) && Number.isFinite(there.usdPerTurn) && there.usdPerTurn > 0
+      ? ', measured here at ' + Math.round(mine.usdPerTurn / there.usdPerTurn) + 'x cheaper'
+      : '';
   base.model.why =
     'keep ' + (modelNow === 'default' ? 'the current model' : modelNow) +
-    ' for the judgement; the saving is in where the mechanical bulk runs';
+    ' for the judgement; the saving is in where the mechanical bulk runs' + saving;
   if (base.posture === 'critical' && base.model.delegate !== 'haiku') {
     base.model.nextSession = 'sonnet';
   }
@@ -213,6 +261,7 @@ function decide(inputs) {
 function fromReport(data, turns) {
   return {
     binding: (data && data.binding) || null,
+    headroom: (data && data.modelHeadroom) || null,
     rates: (data && data.rates) || null,
     settings: (data && data.settings) || {},
     recentEffort: data && data.recent ? data.recent.effort : null,
@@ -285,6 +334,8 @@ function renderRecommend(data, turns) {
 module.exports = {
   decide,
   fromReport,
+  familyName,
+  ladderModel,
   renderRecommend,
   delegateModel,
   currentEffort,
