@@ -117,12 +117,64 @@ const CACHE_WRITE_5M = 1.25;
 const CACHE_WRITE_1H = 2;
 const CACHE_READ = 0.1;
 
+// `family` marks a window that caps one model family rather than the account
+// as a whole. It is what tells the rest of the file that a window cannot stop
+// work which does not use that family.
 const WINDOWS = [
   { key: 'five_hour', label: '5-hour', span: 5 * HOUR },
   { key: 'seven_day', label: 'weekly', span: 7 * DAY },
-  { key: 'seven_day_opus', label: 'weekly (Opus)', span: 7 * DAY },
-  { key: 'seven_day_sonnet', label: 'weekly (Sonnet)', span: 7 * DAY },
+  { key: 'seven_day_opus', label: 'weekly (Opus)', span: 7 * DAY, family: 'opus' },
+  { key: 'seven_day_sonnet', label: 'weekly (Sonnet)', span: 7 * DAY, family: 'sonnet' },
 ];
+
+// Which model families this agent can actually spend into.
+//
+// A per-model weekly caps one family's spend and nothing else, so it can only
+// ever stop work that uses that family. Reported without that qualification it
+// becomes the loudest number in the brief for a limit the session cannot move:
+// a session running Opus was told to weigh a Fable weekly at 88%, and no
+// amount of work it did would have moved it a single point.
+//
+// The configured model is the floor. A session's own turns are added on top,
+// because subagents and a mid-session /model both spend into families the
+// setting never mentions. Other sessions' turns are deliberately not counted:
+// what another window is burning is not this one's constraint.
+//
+// An empty set means the model could not be worked out at all, and nothing is
+// suppressed on the strength of a guess.
+function familiesInUse(events, sessionId, models) {
+  const families = new Set();
+  const hints = Array.isArray(models) ? models : [models];
+  for (const hint of hints) {
+    const family = familyOf(normalizeModel(hint));
+    if (family) families.add(family);
+  }
+  if (sessionId) {
+    for (const event of events || []) {
+      if (!event || event.sessionId !== sessionId) continue;
+      const family = familyOf(event.model);
+      if (family) families.add(family);
+    }
+  }
+  return families;
+}
+
+// Whether a window is one this agent can spend into. Windows that cap the whole
+// account always are; a per-model one only when that model is in use.
+function appliesTo(window, families) {
+  if (!window || !window.family) return true;
+  if (!families || !families.size) return true;
+  return families.has(window.family);
+}
+
+// Stamps the answer onto each window so every reader - the binding choice, the
+// critical warning, the report table - makes the same call from the same field.
+function markApplicable(windows, families) {
+  for (const window of windows || []) {
+    if (window) window.applies = appliesTo(window, families);
+  }
+  return windows;
+}
 
 // organizationType gives the family; the rate limit tier is what separates
 // Max 5x from Max 20x. Both come out of oauthAccount.
@@ -946,7 +998,14 @@ function buildWindow(spec, snapshot, events, now, options) {
     severity: null,
     isActive: false,
     scoped: false,
-    family: null,
+    // The model family this window caps, when it caps one. Set from the spec
+    // here for the bucket-table weeklies, and again by the caller for the
+    // per-model limits that only exist in the account's own `limits` list.
+    family: spec.family || null,
+    // Whether this session's models spend into it. Filled in by
+    // markApplicable once the models in use are known; assume they do until
+    // then, so a reader that never marks them behaves exactly as before.
+    applies: true,
     verdict: 'unknown',
   };
 
@@ -1149,6 +1208,10 @@ function criticalOthers(windows, bindingKey, threshold) {
       w &&
       w.key !== bindingKey &&
       !w.stale &&
+      // A full window that this session cannot spend into is not a warning, it
+      // is someone else's news. Told to weigh it, the only thing an agent can
+      // do about it is less work, against a limit its work never touches.
+      w.applies !== false &&
       w.percentUsed !== null &&
       w.percentUsed >= limit
   );
@@ -1156,7 +1219,13 @@ function criticalOthers(windows, bindingKey, threshold) {
 
 // The window that will stop the work first.
 function bindingWindow(windows) {
-  const known = windows.filter((w) => w.percentUsed !== null);
+  // A per-model weekly for a model that is not running cannot be the window
+  // that stops the work, however full it is - and the account's own is_active
+  // flag says nothing about which model this session happens to be using, so
+  // it must not promote one either. Kept as a fallback in the impossible case
+  // that every window is a model's, so this never returns nothing.
+  const relevant = windows.filter((w) => w && w.applies !== false);
+  const known = (relevant.length ? relevant : windows).filter((w) => w.percentUsed !== null);
   // Prefer windows we can still trust; fall back only if every one is stale.
   const fresh = known.filter((w) => !w.stale);
   const live = fresh.length ? fresh : known;
@@ -1669,6 +1738,15 @@ async function report(now, options) {
     calibrated.planChanged ? new Map() : rejections
   );
 
+  // Which of those windows this agent can actually spend into. Everything that
+  // ranks or warns about a window reads the answer off the window itself.
+  const families = familiesInUse(
+    events,
+    options && options.sessionId,
+    [base.settings && base.settings.model, process.env.ANTHROPIC_MODEL]
+  );
+  markApplicable(windows, families);
+
   // Keep the best sample seen so far, so a thin baseline never has to guess.
   const updated = Object.assign({}, learned);
   for (const window of windows) {
@@ -1780,12 +1858,20 @@ function statusLine(collected) {
   if (!utilization) return '';
 
   const now = collected.now || Date.now();
+  // No transcripts here on purpose, so the only thing that says which model is
+  // running is the setting. That is enough to keep a weekly for a model this
+  // agent is not using out of a line that is meant to read as "your room".
+  const families = familiesInUse(null, null, [
+    collected.settings && collected.settings.model,
+    process.env.ANTHROPIC_MODEL,
+  ]);
   const parts = [];
   for (const spec of collected.windowSpecs && collected.windowSpecs.length
     ? collected.windowSpecs
     : WINDOWS) {
     const snapshot = utilization[spec.key];
     if (!snapshot || typeof snapshot.utilization !== 'number') continue;
+    if (!appliesTo(spec, families)) continue;
     const resetsAt = snapshot.resets_at ? Date.parse(snapshot.resets_at) : null;
     const msToReset = Number.isFinite(resetsAt) ? resetsAt - now : null;
     parts.push({
@@ -1809,6 +1895,10 @@ function statusLine(collected) {
   // most convincing possible place.
   for (const limit of limitWindows(utilization)) {
     if (!limit.family) continue;
+    // But a weekly on a model that is not running is not room this agent has,
+    // and it is not room it can lose either. In a line this short it would sit
+    // beside the real figures reading as the one about to bite.
+    if (!appliesTo(limit, families)) continue;
     const msToReset = Number.isFinite(limit.resetsAt) ? limit.resetsAt - now : null;
     parts.push({
       label: limit.family,
@@ -1913,11 +2003,18 @@ function render(data) {
     const bound = data.binding && window.key === data.binding.key;
     // The account's own severity, when it says critical, is worth a word.
     const critical = window.severity === 'critical';
+    // A per-model weekly for a model that is not running still belongs in the
+    // table - it is real, and switching to that model would make it bite - but
+    // it is not this agent's room, and a bare percentage next to the others
+    // reads as though it were. The row says which it is.
+    const idle = window.applies === false;
     const marker = bound
       ? '   <- binding' + (critical ? ', critical' : '')
-      : critical
-        ? '   critical'
-        : '';
+      : idle
+        ? '   not in use'
+        : critical
+          ? '   critical'
+          : '';
     lines.push(
       '  ' + pad(window.label, 15) +
         padLeft(
@@ -1932,6 +2029,13 @@ function render(data) {
         (money ? padLeft(formatUSD(window.remainingUSD), 10) : '') +
         padLeft(window.turnsLeft === null ? '-' : '~' + formatCount(window.turnsLeft), 12) +
         marker
+    );
+  }
+  if (data.windows.some((window) => window.applies === false)) {
+    lines.push(
+      '    not in use  caps one model, and this agent is running ' +
+        (data.settings && data.settings.model ? data.settings.model : 'another one') +
+        ', so nothing here spends into it'
     );
   }
   lines.push('');
@@ -2408,6 +2512,9 @@ module.exports = {
   rateFor,
   familyOf,
   familyAverage,
+  familiesInUse,
+  appliesTo,
+  markApplicable,
   isKnownModel,
   costOf,
   tokensOf,

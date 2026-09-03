@@ -331,7 +331,12 @@ function describeWindow(window) {
   if (!window) return null;
   if (window.stale) return window.label + ' rolling over';
   const about = window.estimated || window.adjusted ? ' about ' : ' ';
-  return window.label + about + window.percentUsed + '%';
+  // A per-model weekly for a model this session is not running is listed, but
+  // never bare: 88% beside the other percentages is read as 88% of the budget
+  // in hand, and the reply that follows sizes the work down for a limit not one
+  // turn here can move.
+  const idle = window.applies === false ? " (not this session's model)" : '';
+  return window.label + about + window.percentUsed + '%' + idle;
 }
 
 // Everything except the window that will actually stop the work.

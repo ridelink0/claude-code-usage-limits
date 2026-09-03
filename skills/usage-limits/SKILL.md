@@ -202,6 +202,13 @@ when a window that is not binding sits near its wall, say so and weigh it. The
 hook flags those. Running the weekly out to save a few turns of the 5-hour
 window is a bad trade even though the 5-hour is what runs out first.
 
+The exception is a weekly that caps one model. `weekly (Fable)` at 88 per cent
+is not your wall while you are working on Opus - nothing you do moves it, and
+doing less work will not un-spend it. The report marks those `not in use` and
+the hook leaves them out of what it asks you to weigh. Do not weigh them back
+in. They matter again the moment you switch to that model, and that is when
+they come back.
+
 One thing to get right: **quote the binding window, not the roomiest one.**
 Two windows run at once and they are rarely in the same place. The turns of
 headroom and the reset time belong to whichever runs out first. Putting the

@@ -631,6 +631,11 @@ Good enough to plan with, not a bill. The honest caveats:
 - The account's own list of limits is read as well as the per-window buckets,
   so a per-model weekly such as `weekly (Fable)` shows up as a window of its
   own, priced from that model's calls alone.
+- A per-model weekly only counts against you while you are running that model.
+  One at 88 per cent is not your wall if you are working on Opus: nothing you
+  do moves it. Those windows are listed and marked `not in use`, and they are
+  never picked as the binding window, never raised as a warning, and kept out
+  of the status line. Start using that model and they come straight back.
 - The turn cost behind "turns of headroom" is a median over at least five
   turns, so one compaction cannot define your pace.
 - What a point of a window costs is learned once from the best sample seen and

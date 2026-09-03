@@ -726,3 +726,21 @@ test('activeShare counts sessions that have prompted as well as those that have 
   assert.deepStrictEqual(brief.activeShare([], {}, NOW, 'fresh'), { active: 1, share: 1 });
   assert.deepStrictEqual(brief.activeShare(null, null, NOW, null), { active: 1, share: 1 });
 });
+
+// A per-model weekly caps one model's spend. Naming it in the line without
+// saying whose it is put 88% next to the other percentages, where it read as
+// 88% of the budget in hand and sized the reply down against a limit not one
+// turn of this session could move.
+test('a window this session cannot spend into is named as one', () => {
+  const fable = {
+    key: 'seven_day_scoped:fable', label: 'weekly (Fable)', percentUsed: 88,
+    stale: false, applies: false,
+  };
+  assert.strictEqual(brief.describeWindow(fable), "weekly (Fable) 88% (not this session's model)");
+  const five = { key: 'five_hour', label: '5-hour', percentUsed: 9, stale: false, applies: true };
+  assert.strictEqual(brief.describeWindow(five), '5-hour 9%');
+  assert.strictEqual(
+    brief.summariseOthers([five, fable], 'five_hour'),
+    "weekly (Fable) 88% (not this session's model)"
+  );
+});

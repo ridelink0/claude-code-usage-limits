@@ -157,3 +157,121 @@ test('render marks a window the account calls critical', () => {
   assert.ok(row, 'the window has a row');
   assert.match(row, /<- binding, critical$/);
 });
+
+// A per-model weekly caps one model family's spend and nothing else, so it can
+// only ever stop work that uses that family. Reported without that
+// qualification it became the loudest number in the brief for a limit the
+// session could not move: a session running Opus was told to weigh a Fable
+// weekly sitting at 88%.
+
+test('familiesInUse takes the configured model, and adds what the session actually ran', () => {
+  assert.deepStrictEqual([...usage.familiesInUse([], null, 'opus[1m]')], ['opus']);
+  assert.deepStrictEqual([...usage.familiesInUse([], null, ['claude-fable-5-1'])], ['fable']);
+  // Subagents on another model spend into that model's weekly too.
+  const ours = [event('claude-opus-5', 1), event('claude-haiku-4-5-20251001', 0.1)];
+  assert.deepStrictEqual([...usage.familiesInUse(ours, 's', 'opus')].sort(), ['haiku', 'opus']);
+  // What another session is burning is not this one's constraint.
+  const theirs = [Object.assign(event('claude-fable-5', 1), { sessionId: 'other' })];
+  assert.deepStrictEqual([...usage.familiesInUse(theirs, 's', 'opus')], ['opus']);
+  // Nothing recognisable: suppress nothing on the strength of a guess.
+  assert.strictEqual(usage.familiesInUse([], null, 'default').size, 0);
+  assert.strictEqual(usage.familiesInUse(null, null, [null, undefined]).size, 0);
+});
+
+test('a per-model weekly only applies to an agent running that model', () => {
+  const built = () => usage.buildWindows(snapshot(), mixed(), NOW, NOW - MINUTE, {}, null, new Map());
+  const onOpus = usage.markApplicable(built(), usage.familiesInUse([], null, 'opus'));
+  assert.strictEqual(onOpus.find((w) => w.key === 'seven_day_scoped:fable').applies, false);
+  for (const key of ['five_hour', 'seven_day']) {
+    const window = onOpus.find((w) => w.key === key);
+    assert.strictEqual(window.applies, true, key + ' caps the account, not one model');
+  }
+  // Switch to that model and it is a live limit again.
+  const onFable = usage.markApplicable(built(), usage.familiesInUse([], null, 'claude-fable-5'));
+  assert.strictEqual(onFable.find((w) => w.key === 'seven_day_scoped:fable').applies, true);
+  // And with no idea what is running, nothing is suppressed.
+  const unknown = usage.markApplicable(built(), usage.familiesInUse([], null, 'default'));
+  assert.strictEqual(unknown.find((w) => w.key === 'seven_day_scoped:fable').applies, true);
+});
+
+test('the bucket-table per-model weeklies are scoped to their model too', () => {
+  const withOpus = snapshot({ seven_day_opus: { utilization: 94, resets_at: iso(NOW + 5 * DAY) } });
+  const windows = usage.markApplicable(
+    usage.buildWindows(withOpus, mixed(), NOW, NOW - MINUTE, {}, null, new Map()),
+    usage.familiesInUse([], null, 'sonnet')
+  );
+  assert.strictEqual(windows.find((w) => w.key === 'seven_day_opus').applies, false);
+  assert.strictEqual(windows.find((w) => w.key === 'seven_day').applies, true);
+});
+
+test('bindingWindow never picks a window this agent cannot spend into', () => {
+  const five = { key: 'five_hour', label: '5-hour', percentUsed: 9, stale: false, spanMs: 5 * HOUR, headroomMs: 4 * HOUR, isActive: false, applies: true };
+  const fable = { key: 'seven_day_scoped:fable', label: 'weekly (Fable)', percentUsed: 88, stale: false, spanMs: 7 * DAY, headroomMs: MINUTE, isActive: true, applies: false };
+  assert.strictEqual(usage.bindingWindow([five, fable]).key, 'five_hour');
+  // The account calling it the active limit does not make it this model's.
+  assert.strictEqual(
+    usage.bindingWindow([five, Object.assign({}, fable, { applies: true })]).key,
+    'seven_day_scoped:fable'
+  );
+  // A window that was never marked behaves exactly as it did before.
+  const bare = { key: 'seven_day', label: 'weekly', percentUsed: 99, stale: false, spanMs: 7 * DAY, headroomMs: MINUTE, isActive: false };
+  assert.strictEqual(usage.bindingWindow([five, bare]).key, 'seven_day');
+  // And one is still returned when, impossibly, every window belongs to a model.
+  assert.strictEqual(usage.bindingWindow([fable]).key, 'seven_day_scoped:fable');
+});
+
+test('criticalOthers leaves out a full window that this agent cannot move', () => {
+  const fable = { key: 'seven_day_scoped:fable', label: 'weekly (Fable)', percentUsed: 88, stale: false, applies: false };
+  const week = { key: 'seven_day', label: 'weekly', percentUsed: 91, stale: false, applies: true };
+  assert.deepStrictEqual(
+    usage.criticalOthers([fable, week], 'five_hour', 85).map((w) => w.key),
+    ['seven_day']
+  );
+  assert.deepStrictEqual(
+    usage.criticalOthers([Object.assign({}, fable, { applies: true }), week], 'five_hour', 85).map((w) => w.key),
+    ['seven_day_scoped:fable', 'seven_day']
+  );
+});
+
+test('the status line leaves out a per-model weekly for a model that is not running', () => {
+  const saved = process.env.ANTHROPIC_MODEL;
+  delete process.env.ANTHROPIC_MODEL;
+  try {
+    const collected = { now: NOW, utilization: snapshot(), settings: { model: 'opus', effortLevel: 'high' } };
+    assert.strictEqual(usage.statusLine(collected).indexOf('fable'), -1);
+    assert.match(usage.statusLine(collected), /5h 28%/);
+    const onFable = Object.assign({}, collected, { settings: { model: 'claude-fable-5', effortLevel: 'high' } });
+    assert.match(usage.statusLine(onFable), /fable 17%/);
+    // No usable setting, nothing suppressed.
+    const unknown = Object.assign({}, collected, { settings: { model: 'default', effortLevel: 'high' } });
+    assert.match(usage.statusLine(unknown), /fable 17%/);
+  } finally {
+    if (saved === undefined) delete process.env.ANTHROPIC_MODEL;
+    else process.env.ANTHROPIC_MODEL = saved;
+  }
+});
+
+test('render says which windows this agent is not spending into', () => {
+  const five = {
+    key: 'five_hour', label: '5-hour', percentUsed: 9, stale: false, msToReset: HOUR,
+    remainingUSD: 100, turnsLeft: 200, verdict: 'idle', headroomMs: null, applies: true,
+  };
+  const fable = {
+    key: 'seven_day_scoped:fable', label: 'weekly (Fable)', percentUsed: 88, stale: false,
+    msToReset: 5 * DAY, remainingUSD: 56, turnsLeft: 115, severity: 'critical',
+    verdict: 'idle', applies: false,
+  };
+  const text = usage.render({
+    host: 'claude', money: true, plan: 'Claude Max 5x', snapshotAgeMs: MINUTE, now: NOW,
+    settings: { model: 'opus[1m]', effortLevel: 'xhigh' }, credits: null,
+    windows: [five, fable], binding: five, otherLimits: [], models: [], projects: [], sessions: [],
+    recent: { turns: 0 }, measuredTurns: 0,
+  });
+  const row = text.split('\n').find((line) => line.indexOf('weekly (Fable)') === 2);
+  assert.ok(row, 'the window still has a row');
+  assert.match(row, /not in use$/);
+  assert.ok(
+    text.indexOf('caps one model, and this agent is running opus[1m]') !== -1,
+    'and the table says what "not in use" means'
+  );
+});

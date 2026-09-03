@@ -36,6 +36,17 @@ window of its own, labelled `weekly (Fable)` and priced from that model's
 calls alone; `is_active` breaks ties in the binding choice; and a bucket that
 quotes `limit_dollars` is priced from that directly instead of being calibrated.
 
+A per-model weekly caps one model family and nothing else, so it can only stop
+work that uses that family. Which families are in use is taken from the model
+in `settings.json` (and `ANTHROPIC_MODEL`), plus every model this session has
+actually run, subagents included. A window for a family that is not in use is
+still listed - it is real, and switching to that model would make it bite - but
+it is never chosen as the binding window, never raised as a warning, and is
+left out of the status line, which is meant to read as the room you have. It is
+marked `not in use` in the report and "(not this session's model)" in the
+before-prompt line. If the model cannot be worked out at all, nothing is
+suppressed.
+
 The plan name comes from `oauthAccount.organizationType` in the same file.
 Current effort and model come from `settings.json` in the config directory.
 
