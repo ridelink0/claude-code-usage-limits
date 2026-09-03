@@ -753,8 +753,8 @@ function creditsFrom(utilization) {
 // Turn cost is not a single number, it is a spread: a turn that reads three
 // files costs many times one that answers from context. A median alone
 // under-promises on the expensive half, so carry a high end too.
-function costPercentiles(events) {
-  const costs = mainThread(events)
+function callPercentiles(events) {
+  const costs = (events || [])
     .map((event) => event.cost)
     .filter((cost) => Number.isFinite(cost) && cost > 0)
     .sort((a, b) => a - b);
@@ -762,6 +762,118 @@ function costPercentiles(events) {
 
   const at = (fraction) => costs[Math.min(costs.length - 1, Math.floor(fraction * costs.length))];
   return { median: at(0.5), high: at(0.8), sample: costs.length };
+}
+
+function costPercentiles(events) {
+  return callPercentiles(mainThread(events));
+}
+
+// What a turn of each model family has actually cost on this machine.
+//
+// The account's snapshot has no model dimension at all. It says a window is at
+// 88 per cent and never says whose turns put it there, so the report could say
+// how much room was left and not what that room would buy. Every transcript
+// line carries its model, which is the half the snapshot is missing.
+//
+// Cost is measured over main-thread turns, because a turn of headroom means a
+// main-thread turn everywhere else in this file. A family that has only ever
+// run as a subagent has none to measure - Sonnet on this machine had 114 calls
+// and not one turn - and pricing it at nothing would hand back an unlimited
+// budget, so it is priced per call instead and the row says so.
+function modelSpend(events) {
+  const byFamily = new Map();
+  for (const event of events || []) {
+    const family = familyOf(event.model);
+    if (!family) continue;
+    if (!byFamily.has(family)) byFamily.set(family, []);
+    byFamily.get(family).push(event);
+  }
+
+  const rows = [];
+  for (const [family, own] of byFamily) {
+    const spent = totals(own);
+    const main = costPercentiles(own);
+    const rates = main || callPercentiles(own);
+    rows.push({
+      family,
+      calls: own.length,
+      turns: spent.turns,
+      usd: spent.cost,
+      tokens: spent.tokens,
+      usdPerTurn: rates ? rates.median : null,
+      sample: rates ? rates.sample : 0,
+      // True when the figure prices a subagent call rather than a turn.
+      perCall: !main,
+    });
+  }
+  return rows.sort((a, b) => b.usd - a.usd);
+}
+
+// Which window a family's spend lands in: its own weekly where the account
+// gives it one, and the shared weekly otherwise.
+function windowForFamily(windows, family) {
+  const own = (windows || []).find((w) => w && w.family === family);
+  if (own) return own;
+  return (windows || []).find((w) => w && w.key === 'seven_day') || null;
+}
+
+// Too few turns to price one. The figure is divided into the whole remaining
+// budget, so an error in it is multiplied up rather than averaged away.
+const MIN_MODEL_SAMPLE = 5;
+
+// What the room that is left buys, counted in turns of each model.
+//
+// Families that share the weekly window are alternatives, not additions: each
+// row says what the same remaining room would buy if it all went on that model.
+// A family with a weekly of its own is the exception, and it is the case worth
+// knowing about, because it is the one where changing model changes which wall
+// the work is walking towards.
+function modelHeadroom(windows, events, families, remembered) {
+  return modelSpend(events).map((row) => {
+    const window = windowForFamily(windows, row.family);
+    const learned = remembered && remembered[row.family];
+    // A handful of turns prices a turn badly. What was measured when there was
+    // a proper sample is better evidence than what this week happens to hold.
+    const thin = row.sample < MIN_MODEL_SAMPLE;
+    const canRemember =
+      thin && Boolean(learned) && Number.isFinite(learned.usdPerTurn) && learned.usdPerTurn > 0 &&
+      // A remembered per-call price is not a turn price either, whatever it is
+      // worth for delegation. See below.
+      !learned.perCall;
+    const usdPerTurn = canRemember ? learned.usdPerTurn : row.usdPerTurn;
+    const perCall = canRemember ? Boolean(learned.perCall) : row.perCall;
+    // No turn count for a model that has never taken a turn.
+    //
+    // A family that has only ever run as a subagent has errands to price, not
+    // turns: 114 Sonnet calls here averaged under two cents because they were
+    // one-shot lookups, and dividing the remaining budget by that promised
+    // twenty-two thousand Sonnet turns. Those turns would not be doing the work
+    // the Opus turns are doing, and the error is in the direction that promises
+    // room, which is the direction that gets a session cut off mid-edit. The
+    // row still says what the model has cost; it does not project from it.
+    const turnsLeft =
+      !perCall &&
+      window &&
+      Number.isFinite(window.remainingUSD) &&
+      Number.isFinite(usdPerTurn) &&
+      usdPerTurn > 0
+        ? Math.max(0, Math.floor(window.remainingUSD / usdPerTurn))
+        : null;
+    return Object.assign({}, row, {
+      windowKey: window ? window.key : null,
+      windowLabel: window ? window.label : null,
+      // True when this family has a weekly of its own rather than sharing.
+      ownWindow: Boolean(window && window.family),
+      // False when the window is one this agent cannot spend into anyway.
+      windowApplies: !window || window.applies !== false,
+      inUse: !families || !families.size || families.has(row.family),
+      usdPerTurn,
+      perCall,
+      // True when the price came off the record rather than this week's turns.
+      remembered: Boolean(canRemember),
+      turnsLeft,
+    });
+  });
 }
 
 // What a job of this many turns would take out of one window.
@@ -866,6 +978,70 @@ function writeCalibration(all) {
   } catch (err) {
     // Losing it costs accuracy on the next thin baseline, nothing more.
   }
+}
+
+// What each model has cost, kept so the next session does not have to have
+// spent anything to know.
+//
+// The transcripts only answer for as long as they are on disk and as far back
+// as the scan reaches, which is eight days. A session that opens on a model it
+// has not used this week would otherwise have no price for it at all, and what
+// Sonnet would buy is worth answering before the first Sonnet turn rather than
+// after. One entry per family, so it cannot grow.
+//
+// It is stamped with the plan and read back through the same guard as the
+// window calibration. What a turn costs is a fact about the model; what it buys
+// is a fact about the allowance, and that moves when the plan does.
+function modelRecordFile() {
+  const dir = isCodex() ? codex.homeDir() : configDir();
+  return path.join(dir, 'usage-limits-models.json');
+}
+
+function readModelRecord() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(modelRecordFile(), 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function writeModelRecord(all) {
+  try {
+    fs.mkdirSync(path.dirname(modelRecordFile()), { recursive: true });
+    fs.writeFileSync(modelRecordFile(), JSON.stringify(all), 'utf8');
+  } catch (err) {
+    // The record is a convenience for a thin week, not a source of truth.
+  }
+}
+
+// The measurement to keep. Deliberately the freshest adequate one rather than
+// the largest: what a turn costs drifts as a session's context grows, so an old
+// figure with a big sample behind it is not the better answer, only the better
+// attested one.
+function modelSamples(headroom, previous) {
+  const kept = Object.assign({}, previous || {});
+  let changed = false;
+  for (const row of headroom || []) {
+    if (row.remembered) continue;
+    if (!Number.isFinite(row.usdPerTurn) || row.usdPerTurn <= 0) continue;
+    if (row.sample < MIN_MODEL_SAMPLE) continue;
+    // Rounded before comparing, so a fraction of a cent of drift does not
+    // rewrite the file on every prompt.
+    const usdPerTurn = Math.round(row.usdPerTurn * 1e6) / 1e6;
+    const before = kept[row.family];
+    if (
+      before &&
+      before.usdPerTurn === usdPerTurn &&
+      before.perCall === Boolean(row.perCall) &&
+      before.sample === row.sample
+    ) {
+      continue;
+    }
+    kept[row.family] = { usdPerTurn, sample: row.sample, perCall: Boolean(row.perCall) };
+    changed = true;
+  }
+  return { models: kept, changed };
 }
 
 // Everything learned about a budget belongs to the plan it was learned on.
@@ -1747,6 +1923,19 @@ async function report(now, options) {
   );
   markApplicable(windows, families);
 
+  // What the room left buys in turns of each model, and the record that lets a
+  // later session answer that for a model it has not run yet. Scoped to a week
+  // because every window a family draws on here is a weekly one.
+  const remembered = calibrationForPlan(readModelRecord(), base.planId).learned;
+  const headroom = modelHeadroom(
+    windows,
+    events.filter((event) => event.at >= now - 7 * DAY),
+    families,
+    remembered
+  );
+  const sampled = modelSamples(headroom, remembered);
+  if (sampled.changed) writeModelRecord(stampPlan(sampled.models, base.planId));
+
   // Keep the best sample seen so far, so a thin baseline never has to guess.
   const updated = Object.assign({}, learned);
   for (const window of windows) {
@@ -1792,6 +1981,7 @@ async function report(now, options) {
     rates: costPercentiles(recentEvents.length >= 5 ? recentEvents : scoped),
     resumeAt: binding ? binding.resetsAt : null,
     models: scopedModels,
+    modelHeadroom: headroom,
     projects: byProject(scoped),
     tokens: scopedTotals.parts,
     reasoning: reasoningSpend(scopedModels, scopedTotals.parts),
@@ -2039,6 +2229,46 @@ function render(data) {
     );
   }
   lines.push('');
+
+  // How much room is left is only half the question. The other half is what
+  // that room buys, and the answer is different for every model: the same
+  // weekly holds a few hundred Fable turns or several thousand Sonnet ones.
+  // The account's own figures cannot say this - they have no model in them.
+  const headroom = money ? (data.modelHeadroom || []) : [];
+  if (headroom.some((row) => row.turnsLeft !== null)) {
+    lines.push('  Model headroom, what the room left buys in turns of each model');
+    lines.push(
+      '  ' + pad('  Model', 12) + pad('Window', 17) + padLeft('Turns', 7) +
+        padLeft('Spent', 9) + padLeft('Per turn', 10) + padLeft('Turns left', 12)
+    );
+    for (const row of headroom) {
+      lines.push(
+        '  ' + pad('  ' + row.family, 12) +
+          pad(row.windowLabel || '-', 17) +
+          padLeft(formatCount(row.sample), 7) +
+          padLeft(formatUSD(row.usd), 9) +
+          padLeft(formatUSD(row.usdPerTurn) + (row.perCall ? '*' : ''), 10) +
+          padLeft(row.turnsLeft === null ? '-' : '~' + formatCount(row.turnsLeft), 12) +
+          (row.inUse ? '   <- running' : '')
+      );
+    }
+    if (headroom.some((row) => row.perCall)) {
+      lines.push('    * a subagent call, not a turn: this model has taken no turns of its own,');
+      lines.push('      so there is nothing here to project a turn count from. The price is');
+      lines.push('      still what delegating to it has cost.');
+    }
+    if (headroom.some((row) => row.remembered)) {
+      lines.push('    A row with too few turns this week is priced from the record of what');
+      lines.push('    that model cost when there were enough.');
+    }
+    // The two tables price the same window differently on purpose, and someone
+    // is going to notice, so say why before it gets read as a bug.
+    lines.push('    Turns left in the table above is a blend of every model on record;');
+    lines.push("    these are each model's own measured cost per turn, and rows sharing a");
+    lines.push('    window are alternatives rather than additions: the same room, spent on');
+    lines.push('    a different model.');
+    lines.push('');
+  }
 
   // A bucket with no span cannot be priced or projected, but saying nothing
   // about one that is nearly full would be the worse failure.
@@ -2515,6 +2745,15 @@ module.exports = {
   familiesInUse,
   appliesTo,
   markApplicable,
+  callPercentiles,
+  modelSpend,
+  windowForFamily,
+  modelHeadroom,
+  modelSamples,
+  modelRecordFile,
+  readModelRecord,
+  writeModelRecord,
+  MIN_MODEL_SAMPLE,
   isKnownModel,
   costOf,
   tokensOf,
