@@ -69,6 +69,11 @@ const RATES = {
 // An unrecognised family falls back to Opus rates on purpose: over-estimating
 // cost understates headroom, and that is the safe direction for a budget.
 const FAMILIES = ['fable', 'mythos', 'opus', 'sonnet', 'haiku'];
+
+// Settings that name a strategy rather than a model. `opusplan` plans on Opus
+// and executes on Sonnet, so it spends into both families and neither of them
+// is what a substring match would find on its own.
+const MODEL_ALIASES = { opusplan: ['opus', 'sonnet'] };
 const FALLBACK_RATE = { input: 5, output: 25 };
 
 function familyOf(model) {
@@ -146,9 +151,23 @@ function familiesInUse(events, sessionId, models) {
   const families = new Set();
   const hints = Array.isArray(models) ? models : [models];
   for (const hint of hints) {
-    const family = familyOf(normalizeModel(hint));
+    const name = normalizeModel(hint);
+    // Some settings name more than one model. `opusplan` plans on Opus and
+    // executes on Sonnet, so a session set to it spends into both, and reading
+    // only the first would suppress a Sonnet weekly while Sonnet is running.
+    const alias = MODEL_ALIASES[name];
+    if (alias) {
+      for (const family of alias) families.add(family);
+      continue;
+    }
+    const family = familyOf(name);
     if (family) families.add(family);
   }
+  // This session's own turns only. What another window is burning is not this
+  // one's constraint, and counting it is how a weekly for a model this agent
+  // never runs gets weighed against work that cannot move it. With no session
+  // to scan - the CLI report - the configured model is the whole answer, and
+  // when that says nothing usable, nothing is suppressed.
   if (sessionId) {
     for (const event of events || []) {
       if (!event || event.sessionId !== sessionId) continue;
@@ -164,6 +183,12 @@ function familiesInUse(events, sessionId, models) {
 function appliesTo(window, families) {
   if (!window || !window.family) return true;
   if (!families || !families.size) return true;
+  // Only ever suppress on a family this file recognises on both sides. A
+  // scoped weekly names its model by display name, and one for a model
+  // released after this table was written falls back to that raw name - which
+  // familyOf() will never return for the setting either, so the window would
+  // be suppressed permanently, including while it is the thing being spent.
+  if (FAMILIES.indexOf(window.family) === -1) return true;
   return families.has(window.family);
 }
 
@@ -1400,8 +1425,13 @@ function bindingWindow(windows) {
   // flag says nothing about which model this session happens to be using, so
   // it must not promote one either. Kept as a fallback in the impossible case
   // that every window is a model's, so this never returns nothing.
-  const relevant = windows.filter((w) => w && w.applies !== false);
-  const known = (relevant.length ? relevant : windows).filter((w) => w.percentUsed !== null);
+  // Ordered this way round on purpose: the fallback has to fire when there is
+  // no readable window left after suppression, not merely no window. Testing
+  // the unfiltered list first returned nothing at all where a suppressed
+  // per-model weekly was the only window carrying a reading.
+  const readable = windows.filter((w) => w && w.percentUsed !== null);
+  const relevant = readable.filter((w) => w.applies !== false);
+  const known = relevant.length ? relevant : readable;
   // Prefer windows we can still trust; fall back only if every one is stale.
   const fresh = known.filter((w) => !w.stale);
   const live = fresh.length ? fresh : known;
@@ -1977,7 +2007,10 @@ async function report(now, options) {
     credits: base.codexCredits || creditsFrom(base.utilization),
     sessions: activeSessions(events, now, CONCURRENT_WINDOW_MS),
     session: sessionSpend(events, options && options.sessionId),
-    staleWindows: windows.filter((w) => w.stale).length,
+    // A per-model weekly for a model that is not running could be a week past
+    // its reset without that saying anything about the numbers this agent is
+    // working from, and it should not put "run /usage" on every prompt.
+    staleWindows: windows.filter((w) => w.stale && w.applies !== false).length,
     rates: costPercentiles(recentEvents.length >= 5 ? recentEvents : scoped),
     resumeAt: binding ? binding.resetsAt : null,
     models: scopedModels,
@@ -2061,13 +2094,17 @@ function statusLine(collected) {
     : WINDOWS) {
     const snapshot = utilization[spec.key];
     if (!snapshot || typeof snapshot.utilization !== 'number') continue;
-    if (!appliesTo(spec, families)) continue;
     const resetsAt = snapshot.resets_at ? Date.parse(snapshot.resets_at) : null;
     const msToReset = Number.isFinite(resetsAt) ? resetsAt - now : null;
     parts.push({
       label: SHORT_LABELS[spec.key] || spec.label,
       percent: snapshot.utilization,
       msToReset,
+      // A per-model weekly for a model that is not running is shown - hiding a
+      // limit outright is the one failure worse than over-reporting one, and
+      // the only thing telling this line which model is running is the
+      // setting, which can be behind. It just does not raise the alarm.
+      idle: !appliesTo(spec, families),
       stale: msToReset !== null && msToReset <= 0,
       // Zero with no reset time is not an empty window, it is a bucket that is
       // not reporting: a real window at 0% has just reset and says when it will
@@ -2085,15 +2122,12 @@ function statusLine(collected) {
   // most convincing possible place.
   for (const limit of limitWindows(utilization)) {
     if (!limit.family) continue;
-    // But a weekly on a model that is not running is not room this agent has,
-    // and it is not room it can lose either. In a line this short it would sit
-    // beside the real figures reading as the one about to bite.
-    if (!appliesTo(limit, families)) continue;
     const msToReset = Number.isFinite(limit.resetsAt) ? limit.resetsAt - now : null;
     parts.push({
       label: limit.family,
       percent: limit.percent,
       msToReset,
+      idle: !appliesTo(limit, families),
       stale: msToReset !== null && msToReset <= 0,
       unreported: false,
     });
@@ -2101,7 +2135,11 @@ function statusLine(collected) {
 
   if (!parts.length) return '';
 
-  const trusted = parts.filter((part) => !part.stale && !part.unreported);
+  // Shown, but never the alarm. Hiding a limit outright is the one failure
+  // worse than over-reporting one, and the only thing telling this line which
+  // model is running is the setting, which can be behind a /model. So an idle
+  // per-model weekly stays on the line and is left out of the worst-of.
+  const trusted = parts.filter((part) => !part.stale && !part.unreported && !part.idle);
   const worst = trusted.length
     ? trusted.reduce((a, b) => (b.percent > a.percent ? b : a))
     : null;
@@ -2201,7 +2239,7 @@ function render(data) {
     const marker = bound
       ? '   <- binding' + (critical ? ', critical' : '')
       : idle
-        ? '   not in use'
+        ? '   not in use' + (critical ? ', critical for that model' : '')
         : critical
           ? '   critical'
           : '';
@@ -2222,9 +2260,16 @@ function render(data) {
     );
   }
   if (data.windows.some((window) => window.applies === false)) {
+    // Named from what is actually running rather than from the setting, which
+    // can say 'default', or name a strategy like 'opusplan', or be behind a
+    // /model - and the legend would then assert a model nothing was decided
+    // from.
+    const running = (data.modelHeadroom || [])
+      .filter((row) => row.inUse)
+      .map((row) => row.family);
     lines.push(
       '    not in use  caps one model, and this agent is running ' +
-        (data.settings && data.settings.model ? data.settings.model : 'another one') +
+        (running.length ? running.join(' and ') : 'another model') +
         ', so nothing here spends into it'
     );
   }
@@ -2475,6 +2520,9 @@ function renderForecast(data, turns) {
   }
 
   const rows = data.windows
+    // A limit this agent cannot spend into is not what a job fails to fit in,
+    // so it is never offered as a reason to cut the work down.
+    .filter((window) => window.applies !== false)
     .map((window) => forecastWindow(window, turns, data.rates))
     .filter(Boolean);
 
@@ -2694,7 +2742,10 @@ async function main(argv) {
     const turns = Number(argv[forecastAt + 1]);
     if (wantsJson) {
       const rows = data.windows
-        .map((window) => forecastWindow(window, turns, data.rates))
+        // A limit this agent cannot spend into is not what a job fails to fit in,
+    // so it is never offered as a reason to cut the work down.
+    .filter((window) => window.applies !== false)
+    .map((window) => forecastWindow(window, turns, data.rates))
         .filter(Boolean);
       process.stdout.write(JSON.stringify({ turns, rates: data.rates, windows: rows }, null, 2) + '\n');
     } else {

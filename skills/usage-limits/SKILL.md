@@ -209,6 +209,15 @@ the hook leaves them out of what it asks you to weigh. Do not weigh them back
 in. They matter again the moment you switch to that model, and that is when
 they come back.
 
+That cuts both ways, and the second half is the useful one: when the window
+that binds is a per-model weekly, the same work on another model draws on a
+different window. The report's **Model headroom** table says what the room left
+buys in turns of each model, priced from what that model has really cost here.
+Moving mechanical bulk onto a model with room is not doing less work - it is
+the same work against a wall that is further away, which is the one economy
+worth making. A model with no turn count in that table has only ever run as a
+subagent; its errands are not turns, so there is nothing to project from.
+
 One thing to get right: **quote the binding window, not the roomiest one.**
 Two windows run at once and they are rarely in the same place. The turns of
 headroom and the reset time belong to whichever runs out first. Putting the

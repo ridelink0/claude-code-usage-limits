@@ -633,9 +633,22 @@ Good enough to plan with, not a bill. The honest caveats:
   own, priced from that model's calls alone.
 - A per-model weekly only counts against you while you are running that model.
   One at 88 per cent is not your wall if you are working on Opus: nothing you
-  do moves it. Those windows are listed and marked `not in use`, and they are
-  never picked as the binding window, never raised as a warning, and kept out
-  of the status line. Start using that model and they come straight back.
+  do moves it. Those windows are still listed, marked `not in use`, but they
+  are never picked as the binding window, never raised as a warning, never a
+  reason a forecast says the job does not fit, and never what puts `LOW` on the
+  status line. Start using that model and they come straight back. Nothing is
+  suppressed unless both sides are recognised: an unknown model in the setting,
+  or a weekly scoped to a model this table has never heard of, is treated as
+  live, because hiding a limit that can stop the work is worse than showing one
+  that cannot.
+- The report also says what the room left buys in turns of each model, priced
+  from that model's own measured cost per turn, against the window its spend
+  lands in. Rows sharing a window are alternatives rather than additions. A
+  model that has only ever run as a subagent gets no projected turn count at
+  all - its errands are not turns - though what delegating to it has cost is
+  still reported. What each model cost is remembered in
+  `usage-limits-models.json`, one entry per family, so a session that opens on
+  a model it has not run this week still knows its price.
 - The turn cost behind "turns of headroom" is a median over at least five
   turns, so one compaction cannot define your pace.
 - What a point of a window costs is learned once from the best sample seen and

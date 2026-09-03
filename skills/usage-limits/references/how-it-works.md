@@ -39,13 +39,63 @@ quotes `limit_dollars` is priced from that directly instead of being calibrated.
 A per-model weekly caps one model family and nothing else, so it can only stop
 work that uses that family. Which families are in use is taken from the model
 in `settings.json` (and `ANTHROPIC_MODEL`), plus every model this session has
-actually run, subagents included. A window for a family that is not in use is
-still listed - it is real, and switching to that model would make it bite - but
-it is never chosen as the binding window, never raised as a warning, and is
-left out of the status line, which is meant to read as the room you have. It is
-marked `not in use` in the report and "(not this session's model)" in the
-before-prompt line. If the model cannot be worked out at all, nothing is
-suppressed.
+actually run, subagents included. Another session's models are not counted:
+what another window is burning is not this one's constraint. A setting that
+names a strategy rather than a model resolves to every model it runs, so
+`opusplan` counts as both Opus and Sonnet.
+
+A window for a family that is not in use is still listed everywhere it was
+listed before - it is real, and switching to that model would make it bite -
+but it is never chosen as the binding window, never raised as a warning, never
+a reason a forecast says the job does not fit, and never what puts `LOW` on the
+status line. It is marked `not in use` in the report and "(not this session's
+model)" in the before-prompt line.
+
+Nothing is suppressed unless both sides are recognised. If the model in use
+cannot be worked out, or the weekly is scoped to a model this table has never
+heard of, the window is treated as live. Hiding a limit that can stop the work
+is the one failure worse than over-reporting one.
+
+The status line is the exception worth knowing about: it reads no transcripts
+by design, so the only thing it can know about the running model is the
+setting. It therefore shows every per-model weekly and simply does not let an
+idle one raise `LOW`.
+
+## Model headroom
+
+How much room is left is half the question; what that room buys is the other
+half, and the answer differs by model. The snapshot cannot say: it has no model
+dimension at all. Every transcript line carries its model, so each family is
+joined to the window its spend lands in - its own weekly where the account
+gives it one, the shared weekly otherwise - and priced from its own turns.
+
+Rows that share a window are alternatives, not additions. They describe the
+same remaining room spent on different models.
+
+No turn count is projected for a model that has never taken a turn of its own.
+A family that has only ever run as a subagent has errands to price, not turns:
+114 Sonnet calls on one machine averaged under two cents because they were
+one-shot lookups, and dividing the remaining budget by that promised twenty-two
+thousand Sonnet turns. The row still reports what delegating to that model has
+cost, because that is measured; it does not project from it.
+
+What a turn of each model cost is kept in `usage-limits-models.json` in the
+config directory, one entry per family so it cannot grow, stamped with the plan
+and read back through the same guard as the window calibration. It exists so a
+session that opens on a model it has not run this week still knows what that
+model costs. It is deliberately not written into `usage-limits-calibration.json`:
+that file means one thing, the plan's blended price of a point, and three
+callers read it on that basis.
+
+There is no per-turn log. Every model figure comes from the transcripts, which
+already hold it; an append-only ledger would grow without bound and record
+nothing new.
+
+Nothing here claims the meter weights a dollar of one model differently from a
+dollar of another. No published or observed source shows that, and the two
+prices per point this plugin learns - one for a shared weekly, one for a scoped
+one - are percentages of two differently sized allowances, which says nothing
+about weighting either way.
 
 The plan name comes from `oauthAccount.organizationType` in the same file.
 Current effort and model come from `settings.json` in the config directory.

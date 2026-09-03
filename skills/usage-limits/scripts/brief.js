@@ -261,6 +261,7 @@ function pressure(window, now, config, turnsLeft) {
 const CACHED_BINDING_FIELDS = [
   'key',
   'label',
+  'applies',
   'percentUsed',
   'stale',
   'estimated',
@@ -327,6 +328,12 @@ function readHookInput() {
 // Kept as a re-export so there is exactly one implementation.
 const sessionSpend = usage.sessionSpend;
 
+// One is not a plural. The line is read by an agent that then repeats it to
+// the user, so "about 1 points" is a small error that gets copied out loud.
+function count(value, word) {
+  return value + ' ' + word + (Math.abs(value) === 1 ? '' : 's');
+}
+
 function describeWindow(window) {
   if (!window) return null;
   if (window.stale) return window.label + ' rolling over';
@@ -365,7 +372,7 @@ function briefText(parts) {
         ? ' (' + parts.sessions + ' sessions active, roughly ' + parts.yourTurnsLeft +
           ' of them yours)'
         : '';
-    bound.push('about ' + parts.turnsLeft + ' turns of headroom' + shared);
+    bound.push('about ' + count(parts.turnsLeft, 'turn') + ' of headroom' + shared);
     // A turn count is a poor sense of urgency when several agents are spending
     // at once: two hundred turns sounds like plenty and can be gone in ten
     // minutes. The runway is the figure that does not flatter.
@@ -399,7 +406,7 @@ function briefText(parts) {
     );
   } else if (parts.pointsSinceSnapshot) {
     sentences.push(
-      'That includes about ' + parts.pointsSinceSnapshot + ' points spent since the ' +
+      'That includes about ' + count(parts.pointsSinceSnapshot, 'point') + ' spent since the ' +
         'snapshot was taken ' + parts.snapshotAge + ' ago, which it does not know about yet.'
     );
   } else if (parts.staleWindows) {
@@ -416,8 +423,8 @@ function briefText(parts) {
     // not 82%; it is unknown, with 82% as the floor. Say exactly that.
     sentences.push(
       'That percentage is a floor, not a current reading: the last real snapshot is ' +
-        parts.snapshotAge + ' old and about ' + parts.pointsBeyondSnapshot +
-        ' points have been spent since, more than it said was left. Either the window is ' +
+        parts.snapshotAge + ' old and about ' + count(parts.pointsBeyondSnapshot, 'point') +
+        ' have been spent since, more than it said was left. Either the window is ' +
         'already exhausted or the snapshot is wrong; /usage refreshes it.'
     );
   }

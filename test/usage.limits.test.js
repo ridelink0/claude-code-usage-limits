@@ -238,8 +238,16 @@ test('the status line leaves out a per-model weekly for a model that is not runn
   delete process.env.ANTHROPIC_MODEL;
   try {
     const collected = { now: NOW, utilization: snapshot(), settings: { model: 'opus', effortLevel: 'high' } };
-    assert.strictEqual(usage.statusLine(collected).indexOf('fable'), -1);
+    // Shown, because hiding a limit outright is worse than over-reporting one
+    // and the setting is all this line has to go on. It just never raises LOW.
+    assert.match(usage.statusLine(collected), /fable 17%/);
     assert.match(usage.statusLine(collected), /5h 28%/);
+    const nearlyGone = snapshot();
+    nearlyGone.limits = nearlyGone.limits.map((l) => (l.kind === 'weekly_scoped' ? Object.assign({}, l, { percent: 97 }) : l));
+    const loud = Object.assign({}, collected, { utilization: nearlyGone });
+    assert.strictEqual(usage.statusLine(loud).indexOf('LOW'), -1, 'not this agent to lose');
+    const onIt = Object.assign({}, loud, { settings: { model: 'claude-fable-5', effortLevel: 'high' } });
+    assert.strictEqual(usage.statusLine(onIt).indexOf('LOW'), 0, 'but it is once that model is running');
     const onFable = Object.assign({}, collected, { settings: { model: 'claude-fable-5', effortLevel: 'high' } });
     assert.match(usage.statusLine(onFable), /fable 17%/);
     // No usable setting, nothing suppressed.
@@ -265,13 +273,62 @@ test('render says which windows this agent is not spending into', () => {
     host: 'claude', money: true, plan: 'Claude Max 5x', snapshotAgeMs: MINUTE, now: NOW,
     settings: { model: 'opus[1m]', effortLevel: 'xhigh' }, credits: null,
     windows: [five, fable], binding: five, otherLimits: [], models: [], projects: [], sessions: [],
+    modelHeadroom: [{ family: 'opus', inUse: true }, { family: 'fable', inUse: false }],
     recent: { turns: 0 }, measuredTurns: 0,
   });
   const row = text.split('\n').find((line) => line.indexOf('weekly (Fable)') === 2);
   assert.ok(row, 'the window still has a row');
-  assert.match(row, /not in use$/);
+  // The account's own severity is not swallowed by the marker: that model's
+  // weekly really is critical, it is simply not this agent's wall.
+  assert.match(row, /not in use, critical for that model$/);
   assert.ok(
-    text.indexOf('caps one model, and this agent is running opus[1m]') !== -1,
-    'and the table says what "not in use" means'
+    text.indexOf('caps one model, and this agent is running opus') !== -1,
+    'and the table says what "not in use" means, naming what is actually running'
   );
+});
+
+test('familiesInUse counts subagent turns, and only this session', () => {
+  const mine = [
+    Object.assign(event('claude-opus-5', 1), { sidechain: false }),
+    // A subagent dispatched onto another model spends into that model's weekly
+    // as surely as a main-thread turn does.
+    Object.assign(event('claude-fable-5', 1), { sidechain: true }),
+  ];
+  assert.deepStrictEqual([...usage.familiesInUse(mine, 's', 'opus')].sort(), ['fable', 'opus']);
+
+  // With no session to scan - the CLI report - the configured model is the
+  // whole answer. Counting every session on disk would put another window's
+  // Fable turns back into this agent's families.
+  const theirs = [Object.assign(event('claude-fable-5', 1), { sessionId: 'other' })];
+  assert.deepStrictEqual([...usage.familiesInUse(theirs, null, 'opus')], ['opus']);
+  assert.deepStrictEqual([...usage.familiesInUse(theirs, 's', 'opus')], ['opus']);
+});
+
+// opusplan plans on Opus and executes on Sonnet. Read as one model it would
+// suppress a Sonnet weekly while Sonnet was the thing spending it.
+test('a setting that names a strategy rather than a model resolves to every model it runs', () => {
+  assert.deepStrictEqual([...usage.familiesInUse([], null, 'opusplan')].sort(), ['opus', 'sonnet']);
+  const week = { key: 'seven_day_sonnet', family: 'sonnet', percentUsed: 96, stale: false };
+  usage.markApplicable([week], usage.familiesInUse([], null, 'opusplan'));
+  assert.strictEqual(week.applies, true);
+});
+
+// A scoped weekly names its model by display name. One released after this
+// table was written falls back to that raw name, which familyOf() will never
+// return for the setting either, so it would be suppressed for ever - while it
+// was the very thing being spent.
+test('a per-model weekly for a model this table does not know is never suppressed', () => {
+  const unknown = { key: 'seven_day_scoped:cirrus', family: 'cirrus', percentUsed: 99, stale: false };
+  usage.markApplicable([unknown], usage.familiesInUse([], null, 'opus'));
+  assert.strictEqual(unknown.applies, true);
+  assert.strictEqual(usage.appliesTo({ family: 'fable' }, new Set(['opus'])), false, 'a known one still is');
+});
+
+test('bindingWindow still names a window when the only reading left is a suppressed one', () => {
+  const five = { key: 'five_hour', label: '5-hour', percentUsed: null, stale: false, spanMs: 5 * HOUR, applies: true };
+  const fable = {
+    key: 'seven_day_scoped:fable', label: 'weekly (Fable)', percentUsed: 88, stale: false,
+    spanMs: 7 * DAY, headroomMs: MINUTE, applies: false,
+  };
+  assert.strictEqual(usage.bindingWindow([five, fable]).key, 'seven_day_scoped:fable');
 });
