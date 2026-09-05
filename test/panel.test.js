@@ -1,0 +1,281 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const net = require('node:net');
+const { spawnSync } = require('node:child_process');
+
+const panel = require('../skills/usage-limits/scripts/panel.js');
+const view = require('../skills/usage-limits/scripts/view.js');
+const bars = require('../skills/usage-limits/scripts/bars.js');
+
+const script = path.join(__dirname, '..', 'skills', 'usage-limits', 'scripts', 'panel.js');
+const HOUR = 60 * 60 * 1000;
+const NOW = Date.parse('2026-09-05T12:00:00.000Z');
+
+function account(now) {
+  return {
+    oauthAccount: { accountUuid: 'acc', organizationType: 'claude_max' },
+    cachedUsageUtilization: {
+      fetchedAtMs: now - 1000,
+      accountUuid: 'acc',
+      utilization: {
+        five_hour: { utilization: 42, resets_at: new Date(now + HOUR).toISOString() },
+        seven_day: { utilization: 7, resets_at: new Date(now + 24 * HOUR).toISOString() },
+        limits: [
+          {
+            kind: 'weekly_scoped',
+            percent: 3,
+            resets_at: new Date(now + 24 * HOUR).toISOString(),
+            scope: { model: { id: null, display_name: 'Fable' } },
+            is_active: false,
+          },
+        ],
+      },
+    },
+  };
+}
+
+function tempConfig(model) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-panel-'));
+  fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify(account(Date.now())));
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ model: model || 'claude-opus-5' }));
+  return dir;
+}
+
+function run(dir, args, env) {
+  return spawnSync(process.execPath, [script].concat(args || []), {
+    encoding: 'utf8',
+    timeout: 20000,
+    env: Object.assign({ NO_COLOR: '1', COLUMNS: '60' }, process.env, { CLAUDE_CONFIG_DIR: dir }, env || {}),
+  });
+}
+
+function closedPort() {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+const NODE = '/usr/bin/node';
+const PANEL = '/home/me/panel.js';
+
+test('openCommand knows how to split each terminal', () => {
+  const tmux = panel.openCommand({ TMUX: '/tmp/x' }, PANEL, NODE, 'linux');
+  assert.strictEqual(tmux.program, 'tmux');
+  assert.deepStrictEqual(tmux.args, ['split-window', '-h', '-d', '-l', '32%', '"/usr/bin/node" "/home/me/panel.js"']);
+
+  const wez = panel.openCommand({ WEZTERM_PANE: '1' }, PANEL, NODE, 'darwin');
+  assert.strictEqual(wez.program, 'wezterm');
+  assert.deepStrictEqual(wez.args, ['cli', 'split-pane', '--right', '--percent', '32', '--', NODE, PANEL]);
+
+  const kitty = panel.openCommand({ KITTY_WINDOW_ID: '1' }, PANEL, NODE, 'linux');
+  assert.strictEqual(kitty.program, 'kitten');
+  assert.ok(kitty.args.indexOf('--location=vsplit') !== -1);
+
+  const zellij = panel.openCommand({ ZELLIJ: '0' }, PANEL, NODE, 'linux');
+  assert.strictEqual(zellij.program, 'zellij');
+  assert.deepStrictEqual(zellij.args.slice(0, 4), ['action', 'new-pane', '-d', 'right']);
+
+  const wt = panel.openCommand({ WT_SESSION: 'abc' }, 'C:\\p\\panel.js', 'C:\\node.exe', 'win32');
+  assert.strictEqual(wt.shell, true);
+  assert.strictEqual(
+    wt.command,
+    'start "" wt.exe -w 0 sp -V --size 0.32 --title "Claude usage" --suppressApplicationTitle "C:\\node.exe" "C:\\p\\panel.js"'
+  );
+
+  const plainWindows = panel.openCommand({}, 'C:\\p\\panel.js', 'C:\\node.exe', 'win32');
+  assert.strictEqual(plainWindows.shell, true);
+  assert.match(plainWindows.command, /^start "Claude usage" /);
+
+  const iterm = panel.openCommand({ TERM_PROGRAM: 'iTerm.app' }, PANEL, NODE, 'darwin');
+  assert.strictEqual(iterm.program, 'osascript');
+  assert.match(iterm.args[1], /split vertically/);
+
+  assert.strictEqual(panel.openCommand({}, PANEL, NODE, 'linux'), null);
+  assert.strictEqual(panel.openCommand({ TERM_PROGRAM: 'Apple_Terminal' }, PANEL, NODE, 'darwin'), null);
+  // A multiplexer wins over the outer terminal.
+  assert.strictEqual(panel.openCommand({ TMUX: '1', WT_SESSION: 'x' }, PANEL, NODE, 'win32').program, 'tmux');
+});
+
+test('parseArgs reads every flag', () => {
+  const args = panel.parseArgs(['--once', '--no-fetch', '--poll', '45', '--width=30', '--ascii', '--json']);
+  assert.strictEqual(args.once, true);
+  assert.strictEqual(args.fetch, false);
+  assert.strictEqual(args.poll, 45);
+  assert.strictEqual(args.width, 30);
+  assert.strictEqual(args.ascii, true);
+  assert.strictEqual(args.json, true);
+  assert.strictEqual(panel.parseArgs([]).fetch, true);
+  assert.strictEqual(panel.parseArgs(['--open']).open, true);
+});
+
+test('render draws a titled section per window with the reset underneath', () => {
+  const built = view.build({
+    now: NOW,
+    utilization: account(NOW).cachedUsageUtilization.utilization,
+    fetchedAtMs: NOW - 1000,
+    source: 'api',
+    model: 'claude-fable-5-1[1m]',
+    effort: 'xhigh',
+  });
+  built.sessions = 2;
+  built.fetch = true;
+  const lines = panel.render(built, { columns: 40, mode: 'none', tick: 0, now: NOW, clock: '24h' });
+  const text = lines.join('\n');
+  assert.match(lines[0], /^✻ Claude usage$/);
+  assert.match(lines[1], /^Fable 5\.1 1M · xhigh · idle$/);
+  assert.match(text, /Current session\n█+░+ 42%\nresets in 1h at /);
+  assert.match(text, /Current week \(all models\)\n█+░+ 7%\nresets in 1d 0h at /);
+  assert.match(text, /Current week \(Fable\)\n█+░+ 3%/);
+  assert.match(text, /2 sessions sharing this budget/);
+  assert.match(text, /live, updated 1s ago/);
+  assert.match(text, /q quit · r refresh/);
+  for (const line of lines) assert.ok(bars.visibleWidth(line) <= 40, 'fits: ' + line);
+});
+
+test('render hides the Fable week for another model and fits a narrow pane', () => {
+  const built = view.build({
+    now: NOW,
+    utilization: account(NOW).cachedUsageUtilization.utilization,
+    fetchedAtMs: NOW - 1000,
+    source: 'api',
+    model: 'claude-opus-5',
+  });
+  const lines = panel.render(built, { columns: 24, mode: 'none', tick: 0, now: NOW });
+  const text = lines.join('\n');
+  assert.strictEqual(text.indexOf('Fable'), -1);
+  assert.match(text, /Current session/);
+  for (const line of lines) assert.ok(bars.visibleWidth(line) <= 24, 'fits: ' + line);
+});
+
+test('render fits a short pane by dropping breathing room, then the footer', () => {
+  const built = view.build({
+    now: NOW,
+    utilization: account(NOW).cachedUsageUtilization.utilization,
+    fetchedAtMs: NOW,
+    source: 'api',
+    model: 'claude-opus-5',
+  });
+  const tall = panel.render(built, { columns: 40, mode: 'none', now: NOW });
+  const medium = panel.render(built, { columns: 40, mode: 'none', now: NOW, rows: tall.length - 2 });
+  assert.ok(medium.length <= tall.length - 2);
+  assert.ok(medium.indexOf('') === -1, 'spacers dropped first');
+  const tiny = panel.render(built, { columns: 40, mode: 'none', now: NOW, rows: 5 });
+  assert.strictEqual(tiny.length, 5);
+  assert.match(tiny[0], /Claude usage/);
+});
+
+test('render paints the working state, the ultracode rainbow and the note colours', () => {
+  const working = view.build({
+    now: NOW,
+    utilization: account(NOW).cachedUsageUtilization.utilization,
+    fetchedAtMs: NOW,
+    source: 'api',
+    model: 'claude-opus-5',
+    working: true,
+    effort: 'xhigh',
+  });
+  const spun = panel.render(working, { columns: 40, mode: 'truecolor', tick: 2, now: NOW });
+  assert.strictEqual(bars.stripAnsi(spun[0]).charAt(0), '✳');
+  assert.ok(spun[0].indexOf('38;2;235;159;127') !== -1, 'the title shimmers in the claude colour');
+  assert.match(bars.stripAnsi(spun[1]), /working$/);
+
+  const ultra = view.build({ now: NOW, utilization: account(NOW).cachedUsageUtilization.utilization, fetchedAtMs: NOW, source: 'api', model: 'claude-opus-5', working: true, effort: 'xhigh', ultracode: true });
+  const rainbow = bars.THEME.rainbow.concat(bars.THEME.rainbowShimmer).map((rgb) => '38;2;' + rgb.join(';') + 'm');
+  const painted = panel.render(ultra, { columns: 40, mode: 'truecolor', tick: 3, now: NOW });
+  assert.ok(rainbow.some((code) => painted[0].indexOf(code) !== -1), 'rainbow title');
+  assert.match(bars.stripAnsi(painted[1]), /ultracode/);
+
+  const offline = view.build({ now: NOW, utilization: account(NOW).cachedUsageUtilization.utilization, fetchedAtMs: NOW - 3 * 60000, source: 'api', model: 'claude-opus-5', outcome: { ok: false, kind: 'offline' } });
+  offline.outcome = { ok: false, kind: 'offline' };
+  const warned = panel.render(offline, { columns: 60, mode: 'truecolor', tick: 0, now: NOW }).join('\n');
+  assert.ok(warned.indexOf('\x1b[38;2;255;193;7moffline, showing the reading from 3m ago') !== -1, 'offline is a warning');
+
+  const signedOut = view.build({ now: NOW, outcome: { ok: false, kind: 'unauthorized' } });
+  signedOut.outcome = { ok: false, kind: 'unauthorized' };
+  const red = panel.render(signedOut, { columns: 60, mode: 'truecolor', tick: 0, now: NOW }).join('\n');
+  assert.ok(red.indexOf('\x1b[38;2;255;107;128msign in to Claude Code again') !== -1, 'a login problem is an error');
+});
+
+test('fit cuts a painted line without leaving colour running', () => {
+  const painted = bars.paint('abcdefghij', [1, 2, 3], 'truecolor');
+  const cut = panel.fit(painted, 4);
+  assert.strictEqual(bars.stripAnsi(cut), 'abcd');
+  assert.ok(cut.endsWith('\x1b[0m'));
+  assert.strictEqual(panel.fit('short', 10), 'short');
+});
+
+test('--once prints a frame from the reading on disk and exits', () => {
+  const dir = tempConfig('claude-fable-5-1');
+  const result = run(dir, ['--once', '--no-fetch']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Claude usage/);
+  assert.match(result.stdout, /Current session/);
+  assert.match(result.stdout, /42%/);
+  assert.match(result.stdout, /Current week \(Fable\)/);
+  assert.match(result.stdout, /network off/);
+  assert.strictEqual(result.stdout.indexOf('q quit'), -1, 'no key hints in a one-off frame');
+});
+
+test('--json prints the frame as fields and never the token', () => {
+  const dir = tempConfig('claude-opus-5');
+  fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'secret-token-xyz' } }));
+  const result = run(dir, ['--json', '--no-fetch']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.strictEqual(parsed.rows[0].key, 'five_hour');
+  assert.strictEqual(parsed.rows[0].percent, 42);
+  assert.strictEqual(parsed.fable, null);
+  assert.strictEqual(parsed.hidden.length, 1);
+  assert.strictEqual(result.stdout.indexOf('secret-token-xyz'), -1);
+});
+
+test('with the network unreachable the frame says offline and keeps the reading', async () => {
+  const dir = tempConfig('claude-opus-5');
+  fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'tok' } }));
+  const port = await closedPort();
+  const result = run(dir, ['--once'], { USAGE_LIMITS_USAGE_URL: 'http://127.0.0.1:' + port + '/api/oauth/usage' });
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.match(result.stdout, /offline, showing the reading from/);
+  assert.match(result.stdout, /42%/);
+});
+
+test('USAGE_LIMITS_FETCH=off is the same as --no-fetch', async () => {
+  const dir = tempConfig('claude-opus-5');
+  fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'tok' } }));
+  const port = await closedPort();
+  const result = run(dir, ['--once'], { USAGE_LIMITS_FETCH: 'off', USAGE_LIMITS_USAGE_URL: 'http://127.0.0.1:' + port + '/x' });
+  assert.strictEqual(result.stdout.indexOf('offline'), -1);
+  assert.match(result.stdout, /network off/);
+});
+
+test('under Codex the panel refuses rather than showing the wrong meter', () => {
+  const dir = tempConfig('claude-opus-5');
+  const result = run(dir, ['--once', '--host', 'codex']);
+  assert.strictEqual(result.status, 2);
+  assert.match(result.stderr, /Codex/);
+});
+
+test('--help prints the flags', () => {
+  const dir = tempConfig('claude-opus-5');
+  const result = run(dir, ['--help']);
+  assert.strictEqual(result.status, 0);
+  assert.match(result.stdout, /--open/);
+  assert.match(result.stdout, /--no-fetch/);
+});
+
+test('pollBase is quick while working, slow while idle, and never under the floor', () => {
+  assert.strictEqual(panel.pollBase({ working: true }, {}, {}), panel.POLL_WORKING_MS);
+  assert.strictEqual(panel.pollBase({ working: false }, {}, {}), panel.POLL_IDLE_MS);
+  assert.strictEqual(panel.pollBase({ working: false }, { poll: 45 }, {}), 45000);
+  assert.strictEqual(panel.pollBase({ working: true }, { poll: 1 }, {}), 15000);
+  assert.strictEqual(panel.pollBase({ working: true }, {}, { USAGE_LIMITS_POLL: '50' }), 50000);
+});
