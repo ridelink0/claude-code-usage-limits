@@ -33,6 +33,9 @@ const WORKING_GAP_MS = 4000;
 // A previous status line gets this long, then we go on without it.
 const CHAIN_TIMEOUT_MS = 2000;
 const STDIN_WAIT_MS = 500;
+// Claude Code draws the status line inside its own margins, a few columns
+// narrower than COLUMNS, and clips what does not fit.
+const STATUSLINE_MARGIN = 4;
 
 const SHORT = { five_hour: 'session', seven_day: 'week', spend_limit: 'spend' };
 // When even that is too wide.
@@ -315,7 +318,7 @@ async function main(argv) {
       env,
     });
     const text = line(built, {
-      columns: Number(env.COLUMNS) || 80,
+      columns: Math.max(20, (Number(env.COLUMNS) || 80) - STATUSLINE_MARGIN),
       // Claude Code captures the output, so stdout is never a TTY here, and
       // ANSI is supported all the same.
       mode: bars.colourMode(env, true),
