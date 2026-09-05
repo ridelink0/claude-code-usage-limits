@@ -39,9 +39,10 @@ you just asked for is going to finish, and answering that needs the request and
 the budget in the same place. That place is the model's context, which is where
 this puts them.
 
-So: if you want to watch your usage, install a status line. This ships one too.
-If you want the thing spending the budget to know it is spending the budget,
-that is what this is for.
+So: if you want to watch your usage, install a status line. This ships one
+too, and a live panel that sits beside the chat, both drawn in Claude Code's
+own colours from Claude Code's own numbers. If you want the thing spending the
+budget to know it is spending the budget, that is what this is for.
 
 ## What it prints
 
@@ -275,30 +276,107 @@ trusted publishing over OIDC, so there is no publish token stored in the repo
 or in CI. `npm version` also syncs the version in the plugin manifest, so the
 marketplace and the npm package never disagree about which release is current.
 
+## Right next to the chat
+
+```
+npx claude-usage-limits panel --open
+```
+
+That opens a narrow pane to the right of the one Claude Code is running in
+(Windows Terminal, tmux, WezTerm, kitty, zellij and iTerm2 are all understood)
+and draws the limits in it, live:
+
+```
+✻ Claude usage
+Fable 5.1 · xhigh · working
+
+Current session
+███████░░░░░░░░░░░░░░░░░░░░░ 24%
+resets in 4h 12m at 6:40 PM
+
+Current week (all models)
+█░░░░░░░░░░░░░░░░░░░░░░░░░░░ 4%
+resets in 1d 5h at Sun 7:00 PM
+
+Current week (Fable)
+█░░░░░░░░░░░░░░░░░░░░░░░░░░░ 3%
+resets in 1d 5h at Sun 7:00 PM
+
+live, updated 12s ago
+q quit · r refresh
+```
+
+Three things about it are deliberate.
+
+**It is drawn the way Claude Code draws things.** The colours are Claude
+Code's own theme, read out of the CLI rather than approximated: the bar is the
+one `/usage` paints, the title is the Claude orange, the spinner is Claude's
+spinner with Claude's frames. A bar turns yellow at 80 percent and red at 90,
+each window judged on its own. While Claude is working the title shimmers and
+the spinner turns; while it waits, they stop. Under ultracode both go rainbow,
+which is what Claude Code does with its max effort tag.
+
+**The numbers are the ones Claude Code uses.** Every reading is the same GET
+that `/usage` makes, with the login Claude Code already holds, plus the
+rate-limit headers on Claude's own API responses whenever the status line
+below is installed. Whichever is newer wins, and the footer says how old it
+is. The week for one model (the Fable line above) only appears while that
+model is the one running, because it cannot stop work on any other. The
+reading is kept in `usage-limits-live.json`, and the report, the hooks and the
+status line all prefer it whenever it is newer than Claude Code's own cache,
+which can sit hours behind.
+
+**It keeps drawing when things go wrong.** Offline, it shows the last reading
+and says how old it is, and tries again at a widening interval. Signed out, it
+says so in red and keeps checking, because Claude Code refreshes the login on
+its own next call. Told to slow down by the endpoint, it waits exactly as long
+as it was told. Too narrow a pane loses the breathing room, then the footer,
+never the bars. Nothing in it refreshes or rotates the token, and the token is
+never written anywhere by this plugin.
+
+`panel` alone runs it in the current pane, `--once` prints one frame, `--json`
+prints the fields, `--no-fetch` (or `USAGE_LIMITS_FETCH=off`) keeps it
+entirely offline on the reading already on disk, and `--poll N` sets the
+seconds between readings (30 while Claude works and 120 while it waits
+otherwise). Installed as a plugin, `/usage-limits:panel` opens it from inside
+the chat.
+
+Not on the desktop app or claude.ai, which show the limits themselves. This is
+for the terminal and the VS Code extension, where the only way to see them is
+to ask with `/usage`.
+
 ## Status line
 
-For a permanent readout instead of asking, point Claude Code's status line at
-the same script. In `settings.json`:
-
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "node ~/.claude/skills/usage-limits/scripts/usage.js --status"
-  }
-}
-```
-
-It prints one line and prefixes `LOW` once a window passes 90 percent:
+The same bars, one line under the prompt:
 
 ```
-5h 62% 1h 40m  wk 75% 2d 4h
+✻ Fable 5.1 · xhigh  session ████░░░░░░ 42%  week █░░░░░░░░░ 7%  fable █░░░░░░░░░ 3%
 ```
 
-`--status` reads only the cached percentages and never opens a transcript, so
-it runs in about a tenth of a second and is safe on every redraw. Use the full
-path rather than `~` if your shell does not expand it, and point it at the
-plugin copy instead if that is how you installed it.
+```
+npx claude-usage-limits statusline on
+npx claude-usage-limits statusline off
+```
+
+`on` points Claude Code's `statusLine` setting at a small launcher in the
+config directory that finds wherever the plugin is currently installed, so a
+plugin update does not leave the status line pointing at a folder that has
+gone. A status line that was already there is kept and printed above ours;
+`--no-chain` replaces it instead, and `off` restores exactly what was there,
+including nothing. `--refresh N` re-runs it every N seconds as well as on every
+change, which keeps the spinner turning between responses at the cost of a
+Node process every N seconds. The change applies to new sessions.
+
+The line is also where the panel learns what Claude is doing. Claude Code
+hands the status line the model in use, the effort level, and the rate limits
+from its own response headers, and the line records them for the panel, which
+never sees that JSON. It reads no transcripts and makes no network calls, so it
+costs about a tenth of a second on every redraw. It shrinks to fit narrow
+windows, honours `NO_COLOR` and Claude Code's `prefersReducedMotion`, and
+prints nothing rather than an error if anything goes wrong.
+
+The older one-line form is still there as `usage.js --status`, which prints
+`5h 62% 1h 40m  wk 75% 2d 4h` and prefixes `LOW` past 90 percent.
 
 ## It tells you where you stand, every time
 
@@ -353,6 +431,13 @@ minute, so it costs about 400ms cold and 120ms warm.
 | `USAGE_LIMITS_PULSE` | on | `off` silences the mid-turn line; `always` prints it even when there is room. |
 | `USAGE_LIMITS_PULSE_SECONDS` | 120 | How often the mid-turn line can fire. |
 | `USAGE_LIMITS_TALLY` | on | Set to `off` to turn off the after-reply tally, the closing line and the session history. |
+| `USAGE_LIMITS_FETCH` | on | `off` keeps the panel off the network; it shows the reading already on disk. |
+| `USAGE_LIMITS_POLL` | 30 / 120 | Seconds between the panel's readings, working / idle. Never under 15. |
+| `USAGE_LIMITS_MOTION` | on | `off` stops the spinner, the shimmer and the rainbow. Claude Code's `prefersReducedMotion` setting does the same. |
+| `USAGE_LIMITS_STATUSLINE` | on | `off` blanks the status line while still recording the feed the panel reads. |
+| `USAGE_LIMITS_CLOCK` | from settings | `12h` or `24h` for reset times; otherwise follows Claude Code's `timeFormat`. |
+| `USAGE_LIMITS_COLOUR` | detected | `256` or `none` to override colour detection. `NO_COLOR` and `FORCE_COLOR` are honoured. |
+| `USAGE_LIMITS_ASCII` | off | `1` draws the bars and the spinner with plain characters. |
 
 ## What a session cost
 
@@ -600,8 +685,13 @@ Node 18 or newer, and a Claude Code recent enough to write
 `cachedUsageUtilization` into `~/.claude.json`. If the report says it found no
 snapshot, run `/usage` once inside Claude Code and it will be there.
 
-Nothing is uploaded. No API key, token, or credential is read. Everything comes
-from files already on the machine.
+Nothing is uploaded. The report, the hooks and the status line read only files
+already on the machine and never touch a credential. The panel is the one
+exception, and it is the same call Claude Code makes for `/usage`: it reads
+the login token Claude Code keeps and sends it to Anthropic's usage endpoint,
+nowhere else. The token is never written to disk by this plugin, never
+printed, and never refreshed or rotated. `USAGE_LIMITS_FETCH=off` keeps the
+panel entirely offline.
 
 ## How accurate is it
 
@@ -688,13 +778,17 @@ skills/usage-limits/SKILL.md      what the agent reads
 skills/usage-limits/agents/       how Codex lists the skill
 skills/usage-limits/scripts/      usage.js, brief.js, pulse.js, stop.js,
                                   sessionend.js, tally.js, codex.js, host.js,
-                                  lowpower.js, install-codex-hook.js
+                                  lowpower.js, install-codex-hook.js,
+                                  panel.js, feed.js, statusline.js, live.js,
+                                  view.js, bars.js, activity.js
 skills/usage-limits/references/   the longer notes
 hooks/hooks.json                  runs brief.js before each prompt, pulse.js
                                   during long turns, stop.js after each reply
                                   and sessionend.js when the session closes
 commands/check.md                 the /usage-limits:check command
 commands/session.md               the /usage-limits:session command
+commands/panel.md                 the /usage-limits:panel command
+commands/statusline.md            the /usage-limits:statusline command
 bin/cli.js                        the npx entry point
 tools/sync-version.js             keeps the manifest version in step
 test/                             node --test, no dependencies

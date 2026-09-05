@@ -106,3 +106,30 @@ test('everything the bin needs is in the published file list', () => {
     assert.ok(pkg.files.includes(needed), needed + ' must be published');
   }
 });
+
+test('--help lists the panel and the status line installer', async () => {
+  const { output } = await capture(() => cli.run(['--help']));
+  assert.match(output, /panel --open/);
+  assert.match(output, /statusline on/);
+  assert.match(output, /statusline off/);
+});
+
+test('statusline status runs through the cli against the config dir', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-cli-statusline-'));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  try {
+    const { value, output } = await capture(() => cli.run(['statusline', 'status']));
+    assert.strictEqual(value, 0);
+    assert.match(output, /status line: off/);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  }
+});
+
+test('panel --help runs through the cli', async () => {
+  const { value, output } = await capture(() => cli.run(['panel', '--help']));
+  assert.strictEqual(value, 0);
+  assert.match(output, /--open/);
+});

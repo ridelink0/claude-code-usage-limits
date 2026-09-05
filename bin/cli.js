@@ -18,6 +18,14 @@ const HELP = `claude-usage-limits - how much agent usage is left, and whether th
   claude-usage-limits --host codex        read Codex's limits instead
   claude-usage-limits --host codex --refresh   ask Codex for a live reading
 
+  claude-usage-limits panel               live bars beside the chat; q quits
+  claude-usage-limits panel --open        open it in a split pane to the right
+  claude-usage-limits panel --once        one frame, for a pipe or a screenshot
+
+  claude-usage-limits statusline status   is the status line installed
+  claude-usage-limits statusline on       bars under the Claude Code prompt
+  claude-usage-limits statusline off      put back what was there
+
   claude-usage-limits lowpower status     show the current effort setting
   claude-usage-limits lowpower on         lower effortLevel, remembering the old value
   claude-usage-limits lowpower on --effort medium --model sonnet
@@ -30,7 +38,9 @@ const HELP = `claude-usage-limits - how much agent usage is left, and whether th
 Reads the usage figures the agent already keeps on disk, plus its own session
 history, to report the remaining headroom as turns of work. Works with Claude
 Code and with Codex; the host is detected, or state it with --host. Nothing is
-uploaded and no credentials are read.
+uploaded. The report and the hooks read no credentials; the panel takes the
+same reading Claude Code takes for /usage, with the login Claude Code already
+holds, and sends it nowhere else (USAGE_LIMITS_FETCH=off keeps it offline).
 
   https://github.com/ridelink0/claude-code-usage-limits
 `;
@@ -56,6 +66,16 @@ function run(argv) {
   if (args[0] === 'codex-hook') {
     const installer = require('../skills/usage-limits/scripts/install-codex-hook.js');
     return Promise.resolve(installer.main(args.slice(1)));
+  }
+
+  if (args[0] === 'panel') {
+    const panel = require('../skills/usage-limits/scripts/panel.js');
+    return Promise.resolve(panel.main(args.slice(1)));
+  }
+
+  if (args[0] === 'statusline') {
+    const statusline = require('../skills/usage-limits/scripts/statusline.js');
+    return Promise.resolve(statusline.main(args.slice(1)));
   }
 
   const usage = require('../skills/usage-limits/scripts/usage.js');

@@ -267,3 +267,44 @@ be wrong about a budget.
 
 Rows priced this way are marked with an asterisk in the report, so an assumed
 rate never quietly passes for a published one.
+
+## The live reading, and which reading wins
+
+Claude Code takes its own `/usage` figures with one GET to
+`https://api.anthropic.com/api/oauth/usage`, sending the login token it holds
+as a bearer token with the `anthropic-beta: oauth-2025-04-20` header and a
+five second timeout. `scripts/live.js` makes exactly that call, reads the
+token from `.credentials.json` beside the config directory (or the
+`Claude Code-credentials` keychain entry on macOS), and writes the answer to
+`usage-limits-live.json` with the account it belongs to. The token is used for
+that one request and nothing else: never written, never printed, never
+refreshed. If it has expired the endpoint says 401, the panel says "sign in to
+Claude Code again", and Claude Code fixes it on its own next call.
+
+`collect()` then has two snapshots of the same account, Claude Code's
+`cachedUsageUtilization` and the live file, and takes whichever is newer. The
+choice is `preferLive()`: the live file loses when it is older, when it names a
+different account, or when its timestamp is more than a minute in the future.
+`snapshotSource` in the report says which one was used. Everything downstream -
+the budget line, the pulse, the status line, the forecast, the recommendation -
+goes through `collect()`, so they all see the newer reading.
+
+The status line has a third source that is fresher than either: Claude Code
+hands it `rate_limits` built from the `anthropic-ratelimit-unified-*` headers
+on its own API responses, for the session and the shared week. `feed.js`
+records those per session in `usage-limits-feed.json`, along with the model
+and effort in use, and `view.js` takes the newest of headers, live reading and
+cache for each window. The per-model weeks are only in the endpoint's answer,
+so they come from the live file or the cache.
+
+Which per-model week to show is decided by the model in use, never by the
+account's `is_active` flag: that flag marks the limit currently binding, not
+whether the model is running. The status line's `model.id` is certain, the
+`model` setting is the fallback, and with neither nothing is hidden.
+
+Whether Claude is working comes from the hooks: the prompt hook marks the
+session working (and whether the prompt said `ultracode`), every tool call
+keeps it so, and the Stop and SessionEnd hooks mark it idle. Marks live in
+`usage-limits-activity.json`, one per session, and a session silent for fifteen
+minutes counts as idle whatever it last said, because a crash never sends
+Stop.

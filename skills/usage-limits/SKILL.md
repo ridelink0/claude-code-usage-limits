@@ -435,6 +435,13 @@ Do not run the report on every prompt. Once at the start of a long piece of
 work, and again if the job grows or something starts looping. The report costs
 a turn, which is the thing it is trying to save.
 
+The panel (`scripts/panel.js --open`, or `/usage-limits:panel`) and the status
+line (`scripts/statusline.js on`) are for the person watching, not for you.
+Nothing in them changes what you should do, and they draw from the same
+reading the budget line already gave you, so do not open or install them
+unless asked. When asked, run the command, say in one line what it did, and
+stop.
+
 ## Files
 
 | Path | What it is |
@@ -451,4 +458,9 @@ a turn, which is the thing it is trying to save.
 | `scripts/lowpower.js` | `status`, `on`, `off`. Restores what it replaced. Claude Code only. |
 | `scripts/recommend.js` | The chooser behind `usage.js --recommend`: posture, then the effort and model commands for each lever. Not meant to be called by hand. |
 | `references/tactics.md` | Every lever that lowers cost, and why it works. |
+| `scripts/panel.js` | The live panel beside the chat: `--open` puts it in a split pane to the right, `--once` prints one frame, `--json` the fields. For the person, not for you; open it only when asked. |
+| `scripts/statusline.js` | `status`, `on`, `off`. Puts the bars under the prompt and restores what was there. |
+| `scripts/feed.js` | The status line command Claude Code runs. Not meant to be called by hand. |
+| `scripts/live.js` | The usage reading itself, taken the way Claude Code takes it for `/usage`, kept in `usage-limits-live.json` where `collect()` prefers it when newer than the cache. |
+| `scripts/view.js`, `scripts/bars.js`, `scripts/activity.js` | The display model, the drawing in Claude's colours, and the working/idle marks the hooks leave for the panel. Not meant to be called by hand. |
 | `references/how-it-works.md` | Where the numbers come from and where they are soft. |
