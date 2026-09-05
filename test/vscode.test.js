@@ -139,12 +139,15 @@ test('the extension activates, paints the status bar and renders the view', asyn
     record.providers['claudeUsageLimits.underChat'].resolveWebviewView(view);
     assert.match(view.webview.html, /Content-Security-Policy/);
     assert.match(view.webview.html, /Claude usage/);
-    assert.match(view.webview.html, /rgb\(177,185,249\)/, 'rate_limit_fill');
+    assert.match(view.webview.html, /rgb\(80,83,112\)/, 'rate_limit_empty paints the track');
+    assert.match(view.webview.html, /rgb\(215,119,87\)/, 'the claude colour paints the title');
     assert.strictEqual(view.webview.options.enableScripts, true);
     view.receive({ type: 'ready' });
     assert.strictEqual(posted[0].type, 'view');
     assert.strictEqual(posted[0].view.rows[0].level, 'warning');
     assert.strictEqual(posted[0].view.rows[0].percentText, '85%');
+    assert.strictEqual(posted[0].view.rows[0].colour, 'rgb(255,193,7)', 'a warning row is painted yellow');
+    assert.strictEqual(posted[0].view.rows[1].colour, 'rgb(177,185,249)', 'a calm row is rate_limit_fill');
 
     const prepared = extension.prepare(
       {

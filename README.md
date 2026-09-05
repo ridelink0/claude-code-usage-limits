@@ -302,11 +302,15 @@ Current week (Fable)
 █░░░░░░░░░░░░░░░░░░░░░░░░░░░ 3%
 resets in 1d 5h at Sun 7:00 PM
 
+Sessions · 1 working, 1 idle
+✳ Fable 5.1  usage-limits  working
+· Opus 5  ridelink  idle 4m ago
+
 live, updated 12s ago
 q quit · r refresh
 ```
 
-Three things about it are deliberate.
+Four things about it are deliberate.
 
 **It is drawn the way Claude Code draws things.** The colours are Claude
 Code's own theme, read out of the CLI rather than approximated: the bar is the
@@ -334,6 +338,14 @@ as it was told. Too narrow a pane loses the breathing room, then the footer,
 never the bars. Nothing in it refreshes or rotates the token, and the token is
 never written anywhere by this plugin.
 
+**It knows about the other Claudes.** Two windows share one limit, so the
+panel lists every session this machine has heard from in the last quarter of
+an hour: what it runs, where, and whether it is working right now, each with
+its own spinner. The hooks are what say so (a prompt marks a session working,
+every tool call keeps it so, the Stop hook marks it idle), so the list is live
+without anyone polling anything. The status line adds `+1 working` when
+another session is spending.
+
 `panel` alone runs it in the current pane, `--once` prints one frame, `--json`
 prints the fields, `--no-fetch` (or `USAGE_LIMITS_FETCH=off`) keeps it
 entirely offline on the reading already on disk, and `--poll N` sets the
@@ -350,7 +362,7 @@ to ask with `/usage`.
 The same bars, one line under the prompt:
 
 ```
-✻ Fable 5.1 · xhigh  session ████░░░░░░ 42%  week █░░░░░░░░░ 7%  fable █░░░░░░░░░ 3%
+✻ Fable 5.1 · xhigh  session ████░░░░░░ 42%  week █░░░░░░░░░ 7%  fable █░░░░░░░░░ 3%  +1 working
 ```
 
 ```
@@ -627,6 +639,27 @@ Two smaller differences. There is no money column: Codex meters a share of an
 allowance and never quotes a price, so the percentages stand alone. And
 `lowpower` is Claude Code only, because it writes Claude's `settings.json`.
 
+## VS Code
+
+The Claude Code extension for VS Code shows the limits only when you ask with
+`/usage`, and it does not render a custom status line. So there is an
+extension of its own in [vscode/](vscode/): the same bars as a view that sits
+directly under the Claude Code chat in the secondary side bar (it contributes
+into the Claude Code extension's own view container, so there is no gap and
+nothing to arrange), a status bar item with the percentages that turns yellow
+and red at the same thresholds, the Sessions list, and the same animations in
+CSS. It carries the plugin's scripts inside it, so it has no dependencies and
+reads the same files and takes the same reading as the terminal panel.
+
+```
+cd vscode && npm run package
+code --install-extension claude-usage-limits-<version>.vsix
+```
+
+The `.vsix` is attached to each GitHub release. It is not on the Marketplace
+yet; that needs a publisher account, and the steps are in
+[vscode/README.md](vscode/README.md).
+
 ## Where it works
 
 Every surface of Claude Code on a machine shares one config directory, so
@@ -635,7 +668,7 @@ this reads all of them and does not care which one you are in:
 | Surface | Works | Notes |
 | --- | --- | --- |
 | Terminal (`claude`) | yes | |
-| VS Code extension | yes | |
+| VS Code extension | yes | The VS Code extension above puts the bars under the chat and in the status bar. |
 | JetBrains extension | yes | |
 | Desktop app | yes | |
 | Headless (`claude -p`) | yes | Scripts run fine, but there are no slash commands, so `lowpower.js` is the only way to change effort. |
@@ -791,6 +824,8 @@ commands/panel.md                 the /usage-limits:panel command
 commands/statusline.md            the /usage-limits:statusline command
 bin/cli.js                        the npx entry point
 tools/sync-version.js             keeps the manifest version in step
+vscode/                           the VS Code extension; build.js copies the
+                                  scripts into vscode/lib and makes the vsix
 test/                             node --test, no dependencies
 ```
 

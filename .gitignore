@@ -9,3 +9,4 @@ vscode/lib/
 vscode/node_modules/
 vscode/LICENSE
 *.vsix
+.claude/
