@@ -52,6 +52,10 @@ test('summarise says whether anything is working and whether it is ultracode', (
     activity.mark('idle', 'b', null, NOW + 9000);
     seen = activity.summarise(activity.read(), NOW + 10000);
     assert.strictEqual(seen.working, false);
+
+    // A mark with no session id is nobody: it must not make the machine look busy.
+    activity.mark('working', null, null, NOW + 11000);
+    assert.strictEqual(activity.summarise(activity.read(), NOW + 12000).working, false);
   }));
 
 test('a session that went quiet is not working, whatever it last said', () =>

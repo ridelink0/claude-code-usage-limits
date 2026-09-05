@@ -85,6 +85,9 @@ function summarise(all, now) {
   let working = null;
   let newest = null;
   for (const key of Object.keys(all || {})) {
+    // A mark with no session id cannot be attributed, so it is nobody's: the
+    // summary and the sessions list must agree about who is working.
+    if (key === '_') continue;
     const entry = all[key];
     if (!entry || !Number.isFinite(entry.at)) continue;
     if (at - entry.at > STALE_MS) continue;

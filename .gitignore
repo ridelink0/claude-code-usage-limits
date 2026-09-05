@@ -4,3 +4,8 @@ node_modules/
 Thumbs.db
 *.usage-limits-tmp
 *.usage-limits-backup
+
+vscode/lib/
+vscode/node_modules/
+vscode/LICENSE
+*.vsix

@@ -1,0 +1,99 @@
+{
+  "name": "claude-usage-limits",
+  "displayName": "Claude Usage Limits",
+  "description": "Your Claude Code session, weekly and per-model limits as live bars under the Claude Code chat and in the status bar, drawn in Claude's own colours from Claude's own numbers.",
+  "version": "1.10.0",
+  "publisher": "ridelink",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ridelink0/claude-code-usage-limits"
+  },
+  "homepage": "https://github.com/ridelink0/claude-code-usage-limits",
+  "bugs": {
+    "url": "https://github.com/ridelink0/claude-code-usage-limits/issues"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "usage",
+    "rate limit",
+    "status bar"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claude-usage-limits",
+          "title": "Claude usage",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "claude-sidebar-secondary": [
+        {
+          "type": "webview",
+          "id": "claudeUsageLimits.underChat",
+          "name": "Usage limits",
+          "when": "claudeUsageLimits.hostPresent"
+        }
+      ],
+      "claude-usage-limits": [
+        {
+          "type": "webview",
+          "id": "claudeUsageLimits.panel",
+          "name": "Claude usage",
+          "when": "!claudeUsageLimits.hostPresent"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudeUsageLimits.refresh",
+        "title": "Claude Usage Limits: Take a fresh reading"
+      },
+      {
+        "command": "claudeUsageLimits.show",
+        "title": "Claude Usage Limits: Show the panel"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Usage Limits",
+      "properties": {
+        "claudeUsageLimits.fetch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Take live readings with the same call Claude Code makes for /usage, using the login Claude Code already holds. Off shows the reading already on disk."
+        },
+        "claudeUsageLimits.pollSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 15,
+          "description": "Seconds between readings from the usage endpoint."
+        },
+        "claudeUsageLimits.statusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the percentages in the status bar."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node build.js",
+    "package": "node build.js && npx --yes @vscode/vsce package --no-dependencies"
+  }
+}

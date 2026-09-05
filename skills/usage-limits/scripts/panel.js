@@ -321,7 +321,8 @@ function render(built, options) {
           ? bars.rainbow(bars.spinner(tick, { ascii, reduced }), tick, { mode, reduced })
           : bars.paint(bars.spinner(tick, { ascii, reduced }), bars.THEME.claude, mode)
         : bars.dim(ascii ? '.' : '·', mode);
-      const name = row.modelName || bars.prettyModel(row.model);
+      // A session the status line has not described is still a Claude.
+      const name = row.modelName || (row.model ? bars.prettyModel(row.model) : 'Claude');
       const where = whereLabel(row);
       const state = busy
         ? bars.paint('working', bars.THEME.claude, mode)
