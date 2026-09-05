@@ -279,3 +279,20 @@ test('pollBase is quick while working, slow while idle, and never under the floo
   assert.strictEqual(panel.pollBase({ working: true }, { poll: 1 }, {}), 15000);
   assert.strictEqual(panel.pollBase({ working: true }, {}, { USAGE_LIMITS_POLL: '50' }), 50000);
 });
+
+test('the footer reports the network setting, not whether this frame fetched', async () => {
+  const dir = tempConfig('claude-opus-5');
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  try {
+    const between = await panel.snapshot({ fetch: false, network: true });
+    assert.strictEqual(between.fetch, true, 'a frame rebuilt from disk between readings is not network off');
+    const off = await panel.snapshot({ fetch: false, network: false });
+    assert.strictEqual(off.fetch, false);
+    const legacy = await panel.snapshot({ fetch: false });
+    assert.strictEqual(legacy.fetch, false);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  }
+});

@@ -149,14 +149,8 @@ test('no snapshot at all says so rather than inventing bars', () => {
 
 test('a previous status line runs first and its output goes above ours', () => {
   const dir = tempConfig();
-  fs.writeFileSync(
-    statusline.stateFile(),
-    JSON.stringify({
-      previous: { type: 'command', command: process.execPath + ' -e "process.stdout.write(\'prev line\')"' },
-      chain: true,
-    }).replace(statusline.stateFile(), '')
-  );
-  // stateFile() reads CLAUDE_CONFIG_DIR at call time; write it where the child will look.
+  // Written where the child will look, never through stateFile(): that reads
+  // CLAUDE_CONFIG_DIR from this process, which is the real config directory.
   fs.writeFileSync(
     path.join(dir, 'usage-limits-statusline.json'),
     JSON.stringify({

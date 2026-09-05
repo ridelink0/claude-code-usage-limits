@@ -154,7 +154,9 @@ async function snapshot(options) {
   built.now = now;
   built.plan = collected.plan || null;
   built.sessions = brief.liveSessions(brief.readCache(), now, brief.LIVE_WINDOW_MS, null);
-  built.fetch = Boolean(opts.fetch !== false && !live.fetchDisabled(env));
+  // Whether the panel is allowed the network at all, which is what the footer
+  // reports. A frame rebuilt from disk between readings is not "network off".
+  built.fetch = opts.network !== undefined ? Boolean(opts.network) : Boolean(opts.fetch);
   built.outcome = outcome;
   return built;
 }
@@ -503,7 +505,7 @@ async function interactive(args) {
     if (due) {
       state.fetching = true;
       try {
-        state.built = await snapshot({ fetch: true, env, now });
+        state.built = await snapshot({ fetch: true, network: fetch, env, now });
         state.outcome = state.built.outcome;
       } catch (err) {
         state.outcome = { ok: false, kind: 'bad_response', message: err.message };
@@ -518,7 +520,7 @@ async function interactive(args) {
     } else if (!state.built || now - state.lastCheck >= FILE_CHECK_MS) {
       state.lastCheck = now;
       try {
-        state.built = await snapshot({ fetch: false, env, now, outcome: state.outcome });
+        state.built = await snapshot({ fetch: false, network: fetch, env, now, outcome: state.outcome });
       } catch (err) {
         // Keep the last frame; a transient read error is not worth a blank.
       }
@@ -559,7 +561,8 @@ async function main(argv) {
 
   const once = args.once || args.json || !process.stdout.isTTY;
   if (once) {
-    const built = await snapshot({ fetch: args.fetch && !live.fetchDisabled(process.env), env: process.env });
+    const network = args.fetch && !live.fetchDisabled(process.env);
+    const built = await snapshot({ fetch: network, network, env: process.env });
     if (args.json) {
       process.stdout.write(JSON.stringify(built, null, 2) + '\n');
       return 0;
