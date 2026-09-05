@@ -23,6 +23,7 @@ const readline = require('readline');
 
 const host = require('./host.js');
 const codex = require('./codex.js');
+const live = require('./live.js');
 
 // Which agent's meter to read. Resolved once from the command line or the
 // environment, because a process that changed its mind halfway through would
@@ -1626,12 +1627,31 @@ function collect(now) {
   return collectClaude(now);
 }
 
+// Whether the plugin's own live reading should stand in for Claude Code's
+// cache. Both describe the same account; the newer one is simply the more
+// recent fact. A reading for a different account, or one stamped from a clock
+// that is ahead, is not a fresher reading of this account.
+function preferLive(cache, fresh, accountUuid, now) {
+  if (!fresh || !fresh.utilization || typeof fresh.utilization !== 'object') return false;
+  if (!Number.isFinite(fresh.fetchedAtMs)) return false;
+  if (fresh.fetchedAtMs > now + MINUTE) return false;
+  if (fresh.accountUuid && accountUuid && fresh.accountUuid !== accountUuid) return false;
+  if (!cache || !Number.isFinite(cache.fetchedAtMs)) return true;
+  return fresh.fetchedAtMs > cache.fetchedAtMs;
+}
+
 function collectClaude(now) {
   const account = readJson(accountFile()) || {};
   const settings = readJson(path.join(configDir(), 'settings.json')) || {};
   const cache = account.cachedUsageUtilization || null;
-  const utilization = cache && cache.utilization ? cache.utilization : null;
   const oauth = account.oauthAccount || {};
+  // The panel and the status line take the same reading Claude Code takes for
+  // /usage and keep it in a file of their own. When that is newer than what
+  // Claude Code cached, it is the better description of the same account.
+  const fresh = live.readLive();
+  const useLive = preferLive(cache, fresh, oauth.accountUuid, now);
+  const snapshot = useLive ? fresh : cache;
+  const utilization = snapshot && snapshot.utilization ? snapshot.utilization : null;
   const plan = detectPlan(oauth);
 
   return {
@@ -1643,8 +1663,9 @@ function collectClaude(now) {
     planId: plan.id,
     planTier: plan.tier,
     planAdvice: plan.advice,
-    snapshotAgeMs: cache && cache.fetchedAtMs ? now - cache.fetchedAtMs : null,
-    snapshotFetchedAt: cache && cache.fetchedAtMs ? cache.fetchedAtMs : null,
+    snapshotAgeMs: snapshot && snapshot.fetchedAtMs ? now - snapshot.fetchedAtMs : null,
+    snapshotFetchedAt: snapshot && snapshot.fetchedAtMs ? snapshot.fetchedAtMs : null,
+    snapshotSource: utilization ? (useLive ? 'live' : 'cache') : null,
     utilization,
     settings: {
       model: settings.model || 'default',
@@ -2174,7 +2195,9 @@ function render(data) {
   lines.push('  Plan       ' + data.plan);
   lines.push(
     '  Snapshot   ' +
-      (data.snapshotAgeMs === null ? 'none on disk' : formatDuration(data.snapshotAgeMs) + ' old')
+      (data.snapshotAgeMs === null
+        ? 'none on disk'
+        : formatDuration(data.snapshotAgeMs) + ' old' + (data.snapshotSource === 'live' ? ' (live reading)' : ''))
   );
   lines.push('  Settings   model=' + data.settings.model + '  effort=' + data.settings.effortLevel);
   if (data.planChanged) {
@@ -2793,6 +2816,7 @@ module.exports = {
   isCodex,
   otherLimits,
   collectClaude,
+  preferLive,
   readClaudeEvents,
   RATES,
   WINDOWS,
