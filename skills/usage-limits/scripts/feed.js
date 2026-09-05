@@ -192,9 +192,15 @@ function line(built, options) {
     { width: 0, head: false, shorter: true },
     { width: 0, head: false, shorter: true, gap: ' ' },
   ];
+  // Another Claude spending the same budget is worth a word on the line.
+  const others =
+    Number.isFinite(built.othersWorking) && built.othersWorking > 0
+      ? bars.paint('+' + built.othersWorking + ' working', bars.THEME.claude, mode)
+      : '';
   let text = '';
   for (const attempt of attempts) {
     const parts = built.rows.map((row) => segment(row, attempt.width, attempt.shorter));
+    if (others) parts.push(others);
     if (attempt.head) parts.unshift(head);
     text = parts.join(attempt.gap || '  ');
     if (bars.visibleWidth(text) <= columns) return text;
@@ -301,7 +307,13 @@ async function main(argv) {
     const slot = input && input.session_id ? all[input.session_id] : newest(all);
     const collected = usage.collect(now);
     const settings = settingsFor(configDir());
-    const seen = activity.summarise(activity.read(), now);
+    const marks = activity.read();
+    const seen = activity.summarise(marks, now);
+    // The other sessions working right now, so the line can say so.
+    const mine = input && input.session_id ? input.session_id : null;
+    const othersWorking = activity
+      .combine({ marks, feed: all }, now, activity.STALE_MS)
+      .filter((row) => row.state === 'working' && row.sessionId !== mine).length;
     const built = view.build({
       now,
       utilization: collected.utilization,

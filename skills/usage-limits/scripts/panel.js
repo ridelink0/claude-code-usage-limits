@@ -153,12 +153,41 @@ async function snapshot(options) {
   });
   built.now = now;
   built.plan = collected.plan || null;
-  built.sessions = brief.liveSessions(brief.readCache(), now, brief.LIVE_WINDOW_MS, null);
+  // Every Claude on this machine, and which of them are working. Two windows
+  // share one limit, so the other one's state is part of this one's picture.
+  built.sessionsList = loadSessions(now);
+  built.sessions = Math.max(built.sessionsList.length, brief.liveSessions(brief.readCache(), now, brief.LIVE_WINDOW_MS, null));
+  built.othersWorking = built.sessionsList.filter((row) => row.state === 'working').length;
   // Whether the panel is allowed the network at all, which is what the footer
   // reports. A frame rebuilt from disk between readings is not "network off".
   built.fetch = opts.network !== undefined ? Boolean(opts.network) : Boolean(opts.fetch);
   built.outcome = outcome;
   return built;
+}
+
+// The sessions this machine has heard from lately, from every file the hooks
+// and the status line keep. The tally is required lazily: it requires usage.js
+// back, and this module is loaded by the VS Code extension too.
+function loadSessions(now) {
+  let tallyList = [];
+  try {
+    const tally = require('./tally.js');
+    tallyList = tally.sessions(tally.readState());
+  } catch (err) {
+    tallyList = [];
+  }
+  return activity.combine(
+    { marks: activity.read(), feed: feed.readFeed(), tally: tallyList, brief: brief.readCache() },
+    now,
+    brief.LIVE_WINDOW_MS
+  );
+}
+
+// Where a session is working, as short as it can be said.
+function whereLabel(row) {
+  if (row.cwd) return path.basename(String(row.cwd)) || String(row.cwd);
+  if (row.project) return usage.shortenProject(row.project, 18);
+  return '';
 }
 
 // Cut a painted line to a width without leaving an escape open.
@@ -276,8 +305,38 @@ function render(built, options) {
     });
   }
 
+  // The other Claudes. One row each: what it runs, where, and whether it is
+  // working right now, with its own spinner when it is.
+  const list = Array.isArray(built.sessionsList) ? built.sessionsList : [];
+  if (list.length) {
+    const working = list.filter((row) => row.state === 'working').length;
+    const idle = list.length - working;
+    const summary = [working ? working + ' working' : null, idle ? idle + ' idle' : null].filter(Boolean).join(', ');
+    const lines = [bars.bold('Sessions', mode) + bars.dim(' · ' + summary, mode)];
+    const shown = list.slice(0, 5);
+    for (const row of shown) {
+      const busy = row.state === 'working';
+      const glyph = busy
+        ? row.ultracode
+          ? bars.rainbow(bars.spinner(tick, { ascii, reduced }), tick, { mode, reduced })
+          : bars.paint(bars.spinner(tick, { ascii, reduced }), bars.THEME.claude, mode)
+        : bars.dim(ascii ? '.' : '·', mode);
+      const name = row.modelName || bars.prettyModel(row.model);
+      const where = whereLabel(row);
+      const state = busy
+        ? bars.paint('working', bars.THEME.claude, mode)
+        : bars.dim('idle ' + since(now - row.lastAt) + ' ago', mode);
+      const parts = [glyph + ' ' + name];
+      if (where && columns >= 36) parts.push(bars.dim(where, mode));
+      parts.push(state);
+      lines.push(parts.join('  '));
+    }
+    if (list.length > shown.length) lines.push(bars.dim('+' + (list.length - shown.length) + ' more', mode));
+    body.push({ lines });
+  }
+
   const footer = [];
-  if (built.sessions > 1) footer.push(bars.dim(built.sessions + ' sessions sharing this budget', mode));
+  if (!list.length && built.sessions > 1) footer.push(bars.dim(built.sessions + ' sessions sharing this budget', mode));
   if (built.note) {
     const colour = noteColour(built);
     footer.push(colour ? bars.paint(built.note, colour, mode) : bars.dim(built.note, mode));
@@ -591,6 +650,8 @@ module.exports = {
   POLL_IDLE_MS,
   parseArgs,
   snapshot,
+  loadSessions,
+  whereLabel,
   fit,
   since,
   render,

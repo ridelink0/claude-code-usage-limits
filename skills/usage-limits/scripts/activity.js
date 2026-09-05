@@ -99,6 +99,80 @@ function summarise(all, now) {
   };
 }
 
+// Every Claude on this machine that has been heard from lately, one row per
+// session, from all the places the plugin hears about them: the hook marks
+// (working or idle), the status line feed (model, effort, directory), the
+// Stop hook's tally (project, cost, turns) and the prompt hook's cache (when
+// it last prompted). A session is listed if any of them saw it within the
+// window; it is "working" only if its own mark says so and is fresh.
+function combine(sources, now, windowMs) {
+  const at = Number.isFinite(now) ? now : Date.now();
+  const within = Number.isFinite(windowMs) ? windowMs : STALE_MS;
+  const src = sources || {};
+  const rows = new Map();
+
+  const touch = (id, seenAt) => {
+    if (!id || id === '_') return null;
+    let row = rows.get(id);
+    if (!row) {
+      row = {
+        sessionId: id,
+        lastAt: 0,
+        state: 'idle',
+        stateAt: null,
+        ultracode: false,
+        model: null,
+        modelName: null,
+        effort: null,
+        cwd: null,
+        project: null,
+        cost: null,
+        turns: null,
+      };
+      rows.set(id, row);
+    }
+    if (Number.isFinite(seenAt) && seenAt > row.lastAt) row.lastAt = seenAt;
+    return row;
+  };
+
+  for (const id of Object.keys(src.marks || {})) {
+    const m = src.marks[id];
+    if (!m || !Number.isFinite(m.at)) continue;
+    const row = touch(id, m.at);
+    if (!row) continue;
+    row.stateAt = m.at;
+    row.state = m.state === 'working' && at - m.at <= within ? 'working' : 'idle';
+    row.ultracode = Boolean(m.ultracode);
+    if (m.model && !row.model) row.model = m.model;
+  }
+  for (const id of Object.keys(src.feed || {})) {
+    const s = src.feed[id];
+    if (!s || !Number.isFinite(s.at)) continue;
+    const row = touch(id, s.at);
+    if (!row) continue;
+    if (s.model) row.model = s.model;
+    if (s.modelName) row.modelName = s.modelName;
+    if (s.effort) row.effort = s.effort;
+    if (s.cwd) row.cwd = s.cwd;
+  }
+  for (const s of Array.isArray(src.tally) ? src.tally : []) {
+    if (!s || !s.sessionId) continue;
+    const row = touch(s.sessionId, s.lastAt);
+    if (!row) continue;
+    if (s.project) row.project = s.project;
+    if (Number.isFinite(s.cost)) row.cost = s.cost;
+    if (Number.isFinite(s.turns)) row.turns = s.turns;
+  }
+  for (const id of Object.keys(src.brief || {})) {
+    const b = src.brief[id];
+    if (b && Number.isFinite(b.at)) touch(id, b.at);
+  }
+
+  return [...rows.values()]
+    .filter((row) => at - row.lastAt <= within)
+    .sort((a, b) => b.lastAt - a.lastAt);
+}
+
 module.exports = {
   KEEP_SESSIONS,
   STALE_MS,
@@ -107,4 +181,5 @@ module.exports = {
   mark,
   trim,
   summarise,
+  combine,
 };
