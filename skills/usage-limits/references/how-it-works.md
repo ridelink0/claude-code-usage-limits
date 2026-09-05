@@ -308,3 +308,10 @@ keeps it so, and the Stop and SessionEnd hooks mark it idle. Marks live in
 `usage-limits-activity.json`, one per session, and a session silent for fifteen
 minutes counts as idle whatever it last said, because a crash never sends
 Stop.
+
+The sessions list joins those marks with the status line feed (model, effort,
+directory), the Stop hook's tally (project, cost, turns) and the prompt hook's
+cache (when it last prompted), one row per session id, in
+`activity.combine()`. A session is listed if any of them saw it in the last
+fifteen minutes and is working only if its own mark says so and is fresh, so
+the header, the list and the `+N working` on the status line always agree.

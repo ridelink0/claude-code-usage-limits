@@ -38,3 +38,24 @@ code --install-extension claude-usage-limits-1.11.0.vsix
 | `claudeUsageLimits.statusBar` | true | Show the percentages in the status bar. |
 
 Respects `CLAUDE_CONFIG_DIR`, Claude Code's `timeFormat`, and reduced-motion.
+
+## Building and publishing
+
+```
+cd vscode
+npm run package          # builds lib/ from the plugin's scripts and makes the .vsix
+```
+
+To publish to the Visual Studio Marketplace: create a publisher named
+`ridelink` at https://marketplace.visualstudio.com/manage, make an Azure DevOps
+personal access token with the Marketplace (Manage) scope, then
+
+```
+npx @vscode/vsce login ridelink
+npx @vscode/vsce publish --no-dependencies
+```
+
+For Open VSX (the registry VSCodium and Cursor read), make a token at
+https://open-vsx.org/user-settings/tokens and run
+`npx ovsx publish claude-usage-limits-<version>.vsix -p <token>`.
+
