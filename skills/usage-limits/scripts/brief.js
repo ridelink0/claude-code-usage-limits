@@ -16,6 +16,7 @@ const path = require('path');
 const usage = require('./usage.js');
 const host = require('./host.js');
 const tally = require('./tally.js');
+const activity = require('./activity.js');
 
 const SECOND = 1000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -606,11 +607,24 @@ async function run(now, hookInput) {
   // before any file is read.
   usage.setHost(host.detect(process.argv.slice(2), process.env));
 
+  const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
+  // A prompt has arrived, so this session is working, and the prompt itself
+  // says whether it asked for ultracode. The panel animates from this.
+  activity.mark(
+    'working',
+    sessionId,
+    {
+      ultracode: Boolean(
+        hookInput && typeof hookInput.prompt === 'string' && /\bultracode\b/i.test(hookInput.prompt)
+      ),
+    },
+    now
+  );
+
   const config = settings();
   const base = usage.collect(now);
   if (!base.utilization) return '';
 
-  const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
   const all = readCache();
   let view = pickCached(all, sessionId, now, config.cacheSeconds * SECOND);
 

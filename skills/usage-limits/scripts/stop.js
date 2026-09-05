@@ -15,12 +15,16 @@
 const usage = require('./usage.js');
 const host = require('./host.js');
 const tally = require('./tally.js');
+const activity = require('./activity.js');
 
 async function run(now, hookInput) {
+  const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
+  // The reply is finished: the panel beside the chat can stop animating.
+  activity.mark('idle', sessionId, null, now);
+
   if (String(process.env.USAGE_LIMITS_TALLY || '').toLowerCase() === 'off') return '';
   usage.setHost(host.detect(process.argv.slice(2), process.env));
 
-  const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
   const transcript = hookInput && hookInput.transcript_path ? hookInput.transcript_path : null;
   if (!sessionId || !transcript) return '';
 

@@ -24,6 +24,7 @@ const path = require('path');
 const usage = require('./usage.js');
 const brief = require('./brief.js');
 const host = require('./host.js');
+const activity = require('./activity.js');
 
 const SECOND = 1000;
 const DEFAULT_INTERVAL_SECONDS = 120;
@@ -116,6 +117,10 @@ async function run(now, hookInput) {
   usage.setHost(host.detect(process.argv.slice(2), process.env));
 
   const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
+  // A tool call just finished, so the turn is still running. A few bytes, so
+  // the panel beside the chat keeps animating through a long turn.
+  activity.mark('working', sessionId, null, now);
+
   const all = readState();
   const every = intervalMs();
   // The cheap path, and the one taken almost every time.
