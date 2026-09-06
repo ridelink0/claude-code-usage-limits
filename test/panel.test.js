@@ -352,3 +352,16 @@ test('the pace line shrinks to fit a narrow pane instead of being cut off', () =
   const wide = panel.render(built, { columns: 80, mode: 'none', now: NOW }).join('\n');
   assert.match(wide, /^at this pace the 5-hour window runs out in 25m, about 12 turns$/m);
 });
+
+test('the freshness footer stacks in a narrow pane and a plain cut stays plain', () => {
+  const built = view.build({ now: NOW, utilization: account(NOW).cachedUsageUtilization.utilization, fetchedAtMs: NOW - 25000, source: 'api', model: 'claude-opus-5' });
+  built.fetch = false;
+  const narrow = panel.render(built, { columns: 30, mode: 'none', now: NOW });
+  assert.ok(narrow.indexOf('live, updated 25s ago') !== -1, narrow.join('\n'));
+  assert.ok(narrow.indexOf('network off') !== -1, narrow.join('\n'));
+  const wide = panel.render(built, { columns: 60, mode: 'none', now: NOW });
+  assert.ok(wide.indexOf('live, updated 25s ago · network off') !== -1, wide.join('\n'));
+  for (const line of narrow) assert.strictEqual(line.indexOf('\x1b'), -1, 'no escapes in plain mode: ' + JSON.stringify(line));
+  assert.strictEqual(panel.fit('plain text that is long', 5), 'plain');
+  assert.ok(panel.fit(bars.paint('coloured text', [1, 2, 3], 'truecolor'), 4).endsWith('\x1b[0m'));
+});

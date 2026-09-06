@@ -280,7 +280,8 @@ function fit(text, width) {
     shown += 1;
     i += ch.length;
   }
-  return out + '\x1b[0m';
+  // A reset only where there was colour to reset; plain text stays plain.
+  return s.indexOf('\x1b') === -1 ? out : out + '\x1b[0m';
 }
 
 // In a narrow pane the titles are the short ones.
@@ -307,13 +308,22 @@ function since(ms) {
   return usage.formatDuration(ms);
 }
 
-function stateLine(built, mode) {
+// The freshness footer as separate bits, so a narrow pane can stack them
+// rather than cut them.
+function stateBits(built) {
   const bits = [];
   if (built.state === 'none') bits.push('no reading yet');
   else if (built.state === 'live') bits.push('live' + (Number.isFinite(built.ageMs) ? ', updated ' + since(built.ageMs) + ' ago' : ''));
   else bits.push('cached' + (Number.isFinite(built.ageMs) ? ', reading from ' + since(built.ageMs) + ' ago' : ''));
   if (built.fetch === false) bits.push('network off');
-  return bars.dim(bits.join(' · '), mode);
+  return bits;
+}
+
+function stateLines(built, mode, width) {
+  const bits = stateBits(built);
+  const joined = bits.join(' · ');
+  if (joined.length <= width) return [bars.dim(joined, mode)];
+  return bits.map((bit) => bars.dim(bit, mode));
 }
 
 function noteColour(built) {
@@ -435,7 +445,7 @@ function render(built, options) {
     const colour = built.pace.headroomMs < 10 * MINUTE ? bars.THEME.error : built.pace.headroomMs < 30 * MINUTE ? bars.THEME.warning : null;
     footer.push(colour ? bars.paint(text, colour, mode) : bars.dim(text, mode));
   }
-  footer.push(stateLine(built, mode));
+  for (const line of stateLines(built, mode, real)) footer.push(line);
   if (opts.interactive !== false) footer.push(bars.dim('q quit · r refresh', mode));
 
   // Full layout first, then without spacers, then without the footer.
