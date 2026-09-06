@@ -859,7 +859,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-469 tests over the pricing, the window arithmetic, plan and credit detection,
+477 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, the mid-turn pulse, the after-reply tally and the session history, job forecasting,
 per-project attribution, the Codex reader and its installer, the CLI,
 packaging, and the settings save/restore.
