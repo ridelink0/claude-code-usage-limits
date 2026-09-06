@@ -17,6 +17,7 @@ const usage = require('./usage.js');
 const host = require('./host.js');
 const tally = require('./tally.js');
 const activity = require('./activity.js');
+const live = require('./live.js');
 
 const SECOND = 1000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -51,7 +52,12 @@ const DEFAULTS = {
   // something ambitious" - that judgement belongs to whoever is doing the work,
   // and it needs the number, not an instruction.
   runwayMinutes: 10,
+  // How old the reading may be before the hook takes a fresh one.
+  refreshSeconds: 180,
 };
+
+// A hook has ten seconds; the reading gets four of them at most.
+const REFRESH_TIMEOUT_MS = 4000;
 
 // The runway is worth saying long before it is worth acting on, because it is
 // the figure that stops a turn count from flattering. Two hundred turns sounds
@@ -182,6 +188,7 @@ function settings() {
     cacheSeconds: number(env.USAGE_LIMITS_CACHE, DEFAULTS.cacheSeconds),
     fewTurns: number(env.USAGE_LIMITS_FEW_TURNS, DEFAULTS.fewTurns),
     runwayMinutes: number(env.USAGE_LIMITS_RUNWAY, DEFAULTS.runwayMinutes),
+    refreshSeconds: number(env.USAGE_LIMITS_REFRESH, DEFAULTS.refreshSeconds),
   };
 }
 
@@ -622,6 +629,26 @@ async function run(now, hookInput) {
   );
 
   const config = settings();
+  // The reading ages during long turns, and a burst of parallel agents can
+  // spend half a window between two of them. Before the numbers go in front
+  // of Claude, take the same reading Claude Code takes for /usage when the
+  // one on disk is older than a few minutes. Offline or signed out this is
+  // one quick failure and then a widening backoff, never a wait on every
+  // prompt; USAGE_LIMITS_FETCH=off turns it off.
+  if (!usage.isCodex()) {
+    try {
+      const cached = usage.collect(now);
+      await live.refreshIfStale({
+        now,
+        maxAgeMs: config.refreshSeconds * SECOND,
+        cacheFetchedAtMs: cached.snapshotFetchedAt,
+        accountUuid: usage.accountUuid(),
+        timeoutMs: REFRESH_TIMEOUT_MS,
+      });
+    } catch (err) {
+      // The reading on disk is still there.
+    }
+  }
   const base = usage.collect(now);
   if (!base.utilization) return '';
 

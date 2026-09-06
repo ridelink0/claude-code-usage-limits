@@ -325,7 +325,8 @@ that `/usage` makes, with the login Claude Code already holds, plus the
 rate-limit headers on Claude's own API responses whenever the status line
 below is installed. Whichever is newer wins, and the footer says how old it
 is. The week for one model (the Fable line above) only appears while that
-model is the one running, because it cannot stop work on any other. The
+model is the one running, because it cannot stop work on any other; when the
+model cannot be told at all, nothing is hidden on a guess. The
 reading is kept in `usage-limits-live.json`, and the report, the hooks and the
 status line all prefer it whenever it is newer than Claude Code's own cache,
 which can sit hours behind.
@@ -421,6 +422,15 @@ explaining is pace: two days into a week you should be near 29 percent spent, so
 60 percent means you will not last the week, and that is worth hearing at 60
 rather than at 85.
 
+The percentages behind the line are kept fresh too. If the reading on disk is
+older than three minutes when a prompt goes in, the hook first takes the same
+reading Claude Code takes for `/usage`, and the mid-turn pulse does the same
+every two minutes through a long turn. That is what stops a burst of parallel
+agents from emptying a window between two readings: eight of them once spent
+half a window in five minutes while the line, seventeen minutes old, still
+said 42 percent. Offline that is one quick failure and then a widening
+backoff, never a wait on every prompt.
+
 One limit worth knowing: the hook fires when a prompt is submitted, so a
 message sent while Claude is already working does not refresh it. Claude Code
 delivers those into the running turn without re-running hooks, which no plugin
@@ -443,7 +453,8 @@ minute, so it costs about 400ms cold and 120ms warm.
 | `USAGE_LIMITS_PULSE` | on | `off` silences the mid-turn line; `always` prints it even when there is room. |
 | `USAGE_LIMITS_PULSE_SECONDS` | 120 | How often the mid-turn line can fire. |
 | `USAGE_LIMITS_TALLY` | on | Set to `off` to turn off the after-reply tally, the closing line and the session history. |
-| `USAGE_LIMITS_FETCH` | on | `off` keeps the panel off the network; it shows the reading already on disk. |
+| `USAGE_LIMITS_FETCH` | on | `off` keeps the panel and the hooks off the network; they show the reading already on disk. |
+| `USAGE_LIMITS_REFRESH` | 180 | Seconds a reading may age before the before-prompt hook takes a fresh one. The mid-turn pulse uses its own interval. |
 | `USAGE_LIMITS_POLL` | 30 / 120 | Seconds between the panel's readings, working / idle. Never under 15. |
 | `USAGE_LIMITS_MOTION` | on | `off` stops the spinner, the shimmer and the rainbow. Claude Code's `prefersReducedMotion` setting does the same. |
 | `USAGE_LIMITS_STATUSLINE` | on | `off` blanks the status line while still recording the feed the panel reads. |
@@ -611,6 +622,18 @@ codex plugin marketplace add https://github.com/ridelink0/claude-code-usage-limi
 codex plugin add usage-limits@usage-limits
 ```
 
+The panel works under Codex too, GPT-6 Astra included:
+
+```
+npx claude-usage-limits panel --open --host codex
+```
+
+It reads Codex's own meter the way `/status` does, through a short-lived
+`codex app-server`, and draws the same bars under the title `Codex usage`,
+with the model named the way Codex names it. Codex has no status line and no
+hooks, so there is no spinner for a working session and no Sessions list; the
+numbers are the point.
+
 ### One thing is different, and it is worth being straight about
 
 Under Claude Code the budget line arrives on its own, because a plugin can ship
@@ -670,7 +693,7 @@ this reads all of them and does not care which one you are in:
 | Terminal (`claude`) | yes | |
 | VS Code extension | yes | The VS Code extension above puts the bars under the chat and in the status bar. |
 | JetBrains extension | yes | |
-| Desktop app | yes | |
+| Desktop app | yes | The budget line and the hooks. The panel, the status line and the VS Code extension are for the terminal and VS Code; the app shows the limits itself. |
 | Headless (`claude -p`) | yes | Scripts run fine, but there are no slash commands, so `lowpower.js` is the only way to change effort. |
 | Cloud and web sessions | partly | Those run on a remote machine with their own config directory. Percentages are per-account and stay correct; the pace is measured from whatever transcripts are local to wherever you run the script. |
 
@@ -718,13 +741,13 @@ Node 18 or newer, and a Claude Code recent enough to write
 `cachedUsageUtilization` into `~/.claude.json`. If the report says it found no
 snapshot, run `/usage` once inside Claude Code and it will be there.
 
-Nothing is uploaded. The report, the hooks and the status line read only files
-already on the machine and never touch a credential. The panel is the one
-exception, and it is the same call Claude Code makes for `/usage`: it reads
-the login token Claude Code keeps and sends it to Anthropic's usage endpoint,
+Nothing is uploaded. The report and the status line read only files already on
+the machine. The panel, and the hooks when the reading on disk is older than a
+few minutes, take the same reading Claude Code takes for `/usage`: they read
+the login token Claude Code keeps and send it to Anthropic's usage endpoint,
 nowhere else. The token is never written to disk by this plugin, never
-printed, and never refreshed or rotated. `USAGE_LIMITS_FETCH=off` keeps the
-panel entirely offline.
+printed, and never refreshed or rotated. `USAGE_LIMITS_FETCH=off` keeps all of
+it offline, on the reading Claude Code itself last cached.
 
 ## How accurate is it
 
@@ -812,8 +835,9 @@ skills/usage-limits/agents/       how Codex lists the skill
 skills/usage-limits/scripts/      usage.js, brief.js, pulse.js, stop.js,
                                   sessionend.js, tally.js, codex.js, host.js,
                                   lowpower.js, install-codex-hook.js,
-                                  panel.js, feed.js, statusline.js, live.js,
-                                  view.js, bars.js, activity.js
+                                  recommend.js, panel.js, feed.js,
+                                  statusline.js, live.js, view.js, bars.js,
+                                  activity.js
 skills/usage-limits/references/   the longer notes
 hooks/hooks.json                  runs brief.js before each prompt, pulse.js
                                   during long turns, stop.js after each reply
@@ -835,7 +859,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-308 tests over the pricing, the window arithmetic, plan and credit detection,
+469 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, the mid-turn pulse, the after-reply tally and the session history, job forecasting,
 per-project attribution, the Codex reader and its installer, the CLI,
 packaging, and the settings save/restore.

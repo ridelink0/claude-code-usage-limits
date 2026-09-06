@@ -189,9 +189,15 @@ function activate(context) {
     return vscode.workspace.getConfiguration('claudeUsageLimits');
   }
 
+  // Claude Code's own timeFormat setting, from its settings.json, not a VS
+  // Code setting of the same name.
   function clock() {
-    const format = vscode.workspace.getConfiguration('claudeCode').get('timeFormat');
-    return typeof format === 'string' && format.indexOf('24') === 0 ? '24h' : '12h';
+    try {
+      const feed = require('./lib/feed.js');
+      return feed.clockFor(panel.settingsFor(), process.env);
+    } catch (err) {
+      return '12h';
+    }
   }
 
   function updateStatusBar(built, prepared) {

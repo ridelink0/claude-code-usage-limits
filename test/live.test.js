@@ -308,3 +308,69 @@ test('refresh without a login keeps whatever reading was there', () =>
     assert.strictEqual(result.outcome.kind, 'no_credentials');
     assert.strictEqual(result.snapshot.fetchedAtMs, NOW - 1000);
   }));
+
+test('refreshIfStale leaves a young reading alone and takes one when it has aged', () =>
+  withConfigDir(tempDir(), async () => {
+    fs.writeFileSync(
+      path.join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json'),
+      JSON.stringify({ claudeAiOauth: { accessToken: 'tok' } })
+    );
+    let hits = 0;
+    const stub = await serve((req, res) => {
+      hits += 1;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(SAMPLE));
+    });
+    try {
+      live.writeLive({ fetchedAtMs: NOW - 1000, utilization: SAMPLE, accountUuid: 'acc' });
+      const young = await live.refreshIfStale({ now: NOW, maxAgeMs: 60000, url: stub.url, env: {} });
+      assert.strictEqual(young.skipped, 'fresh');
+      assert.strictEqual(hits, 0);
+
+      // Claude Code's own cache counts as a reading too.
+      live.writeLive({ fetchedAtMs: NOW - 10 * 60000, utilization: SAMPLE, accountUuid: 'acc' });
+      const viaCache = await live.refreshIfStale({ now: NOW, maxAgeMs: 60000, cacheFetchedAtMs: NOW - 5000, url: stub.url, env: {} });
+      assert.strictEqual(viaCache.skipped, 'fresh');
+      assert.strictEqual(hits, 0);
+
+      const aged = await live.refreshIfStale({ now: NOW, maxAgeMs: 60000, url: stub.url, accountUuid: 'acc', env: {} });
+      assert.strictEqual(aged.skipped, null);
+      assert.strictEqual(aged.outcome.ok, true);
+      assert.strictEqual(hits, 1);
+      assert.strictEqual(live.readLive().fetchedAtMs, NOW);
+      assert.ok(fs.existsSync(live.attemptFile()));
+
+      // Right after a good reading, nothing to do.
+      const again = await live.refreshIfStale({ now: NOW + 1000, maxAgeMs: 60000, url: stub.url, env: {} });
+      assert.strictEqual(again.skipped, 'fresh');
+      assert.strictEqual(hits, 1);
+    } finally {
+      await stub.close();
+    }
+  }));
+
+test('refreshIfStale backs off after a failure instead of waiting on every prompt', () =>
+  withConfigDir(tempDir(), async () => {
+    fs.writeFileSync(
+      path.join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json'),
+      JSON.stringify({ claudeAiOauth: { accessToken: 'tok' } })
+    );
+    const stub = await serve(() => {});
+    await stub.close();
+    live.writeLive({ fetchedAtMs: NOW - 10 * 60000, utilization: SAMPLE, accountUuid: 'acc' });
+    const first = await live.refreshIfStale({ now: NOW, maxAgeMs: 60000, url: stub.url, env: {}, timeoutMs: 500 });
+    assert.strictEqual(first.skipped, null);
+    assert.strictEqual(first.outcome.kind, 'offline');
+    assert.strictEqual(first.snapshot.fetchedAtMs, NOW - 10 * 60000, 'the old reading stands');
+    const second = await live.refreshIfStale({ now: NOW + 1000, maxAgeMs: 60000, url: stub.url, env: {}, timeoutMs: 500 });
+    assert.strictEqual(second.skipped, 'backoff');
+    const later = await live.refreshIfStale({ now: NOW + 10000, maxAgeMs: 60000, url: stub.url, env: {}, timeoutMs: 500 });
+    assert.strictEqual(later.skipped, null, 'tried again once the backoff passed');
+  }));
+
+test('refreshIfStale with the network off never calls', () =>
+  withConfigDir(tempDir(), async () => {
+    const result = await live.refreshIfStale({ now: NOW, maxAgeMs: 1, url: 'http://127.0.0.1:1/x', env: { USAGE_LIMITS_FETCH: 'off' } });
+    assert.strictEqual(result.skipped, 'disabled');
+    assert.ok(!fs.existsSync(live.attemptFile()));
+  }));

@@ -1,7 +1,10 @@
 # Where the numbers come from
 
-Everything is read from local files. Nothing is sent anywhere, and no API key
-or token is read.
+Everything is read from local files, with one exception: the panel, and the
+hooks when the reading on disk is older than a few minutes, take the same
+reading Claude Code takes for `/usage`, which sends the login token to
+Anthropic's usage endpoint and nowhere else (the last section of this file).
+Nothing else is sent anywhere, and `USAGE_LIMITS_FETCH=off` stops that too.
 
 ## Sources
 
@@ -56,10 +59,11 @@ cannot be worked out, or the weekly is scoped to a model this table has never
 heard of, the window is treated as live. Hiding a limit that can stop the work
 is the one failure worse than over-reporting one.
 
-The status line is the exception worth knowing about: it reads no transcripts
-by design, so the only thing it can know about the running model is the
-setting. It therefore shows every per-model weekly and simply does not let an
-idle one raise `LOW`.
+The one-line `--status` readout is the exception worth knowing about: it reads
+no transcripts by design, so the only thing it can know about the running
+model is the setting. It therefore shows every per-model weekly and simply
+does not let an idle one raise `LOW`. The status line proper (`feed.js`) is
+told the model by Claude Code itself and needs no such caution.
 
 ## Model headroom
 
@@ -274,7 +278,7 @@ Claude Code takes its own `/usage` figures with one GET to
 `https://api.anthropic.com/api/oauth/usage`, sending the login token it holds
 as a bearer token with the `anthropic-beta: oauth-2025-04-20` header and a
 five second timeout. `scripts/live.js` makes exactly that call, reads the
-token from `.credentials.json` beside the config directory (or the
+token from `.credentials.json` inside the config directory (or the
 `Claude Code-credentials` keychain entry on macOS), and writes the answer to
 `usage-limits-live.json` with the account it belongs to. The token is used for
 that one request and nothing else: never written, never printed, never

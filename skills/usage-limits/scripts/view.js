@@ -152,6 +152,14 @@ function build(input) {
   const spend = fromHeaders('spend_limit', headers, headersAt);
   if (spend) rows.push(row('spend_limit', SPEND_TITLE, null, spend, now));
 
+  // A host that meters windows of other lengths (Codex names its own) gets a
+  // row per window it reports, after the two everyone has.
+  for (const spec of Array.isArray(opts.windowSpecs) ? opts.windowSpecs : []) {
+    if (!spec || !spec.key || spec.key === 'five_hour' || spec.key === 'seven_day') continue;
+    const picked = fromSnapshot(spec.key, utilization, fetchedAtMs, source);
+    if (picked) rows.push(row(spec.key, 'Current ' + (spec.label || spec.key) + ' window', null, picked, now));
+  }
+
   let fable = null;
   const hidden = [];
   for (const limit of usage.limitWindows(utilization)) {

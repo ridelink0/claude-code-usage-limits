@@ -22,11 +22,12 @@ every prompt so it plans the work to fit.
 
 ## Install
 
-From the Marketplace, or from the `.vsix` on the
-[releases page](https://github.com/ridelink0/claude-code-usage-limits/releases):
+From the `.vsix` attached to each
+[release](https://github.com/ridelink0/claude-code-usage-limits/releases)
+(Marketplace publishing is pending; see the end of this page):
 
 ```
-code --install-extension claude-usage-limits-1.11.0.vsix
+code --install-extension claude-usage-limits-<version>.vsix
 ```
 
 ## Settings

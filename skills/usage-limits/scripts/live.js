@@ -336,6 +336,71 @@ async function refresh(options) {
   return { outcome, snapshot };
 }
 
+// When the last attempt was, and how long to leave it. Kept apart from the
+// reading so a failed attempt never disturbs a good reading.
+function attemptFile() {
+  return path.join(configDir(), 'usage-limits-fetch.json');
+}
+
+function readAttempt() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(attemptFile(), 'utf8'));
+    return parsed && Number.isFinite(parsed.attemptedAtMs) ? parsed : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function writeAttempt(record) {
+  try {
+    fs.writeFileSync(attemptFile(), JSON.stringify(record), 'utf8');
+  } catch (err) {
+    // Without it the next caller merely tries again a little sooner.
+  }
+}
+
+// A reading only when the one on disk has aged. This is what the hooks call:
+// the budget line was once seventeen minutes old while eight agents spent half
+// a window in parallel, and the plugin said 42 percent as the wall arrived. A
+// reading that is younger than maxAgeMs (from this file or from Claude Code's
+// own cache, whichever is newer) is left alone, a failed attempt is not
+// repeated until its backoff has passed, and the whole thing is skipped when
+// the network is off.
+async function refreshIfStale(options) {
+  const opts = options || {};
+  const env = opts.env || process.env;
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const maxAgeMs = Number.isFinite(opts.maxAgeMs) ? opts.maxAgeMs : 3 * MINUTE;
+  const current = readLive();
+  if (opts.fetch === false || fetchDisabled(env)) return { outcome: null, snapshot: current, skipped: 'disabled' };
+
+  const newestAt = Math.max(
+    current ? current.fetchedAtMs : 0,
+    Number.isFinite(opts.cacheFetchedAtMs) ? opts.cacheFetchedAtMs : 0
+  );
+  if (newestAt > 0 && now - newestAt < maxAgeMs) return { outcome: null, snapshot: current, skipped: 'fresh' };
+
+  const attempt = readAttempt();
+  if (attempt && Number.isFinite(attempt.delayMs) && now - attempt.attemptedAtMs < attempt.delayMs) {
+    return { outcome: null, snapshot: current, skipped: 'backoff' };
+  }
+
+  const result = await refresh({
+    now,
+    accountUuid: opts.accountUuid,
+    env,
+    timeoutMs: opts.timeoutMs,
+    url: opts.url,
+    credentialsFile: opts.credentialsFile,
+  });
+  writeAttempt({
+    attemptedAtMs: now,
+    delayMs: nextDelayMs(result.outcome, attempt ? attempt.delayMs : 0, { baseMs: maxAgeMs, maxMs: 10 * MINUTE }),
+    kind: result.outcome.ok ? 'ok' : result.outcome.kind,
+  });
+  return { outcome: result.outcome, snapshot: result.snapshot, skipped: null };
+}
+
 module.exports = {
   USAGE_URL,
   BETA,
@@ -343,6 +408,7 @@ module.exports = {
   KEYCHAIN_SERVICE,
   credentialsFile,
   liveFile,
+  attemptFile,
   userAgent,
   readToken,
   fetchUsage,
@@ -352,4 +418,5 @@ module.exports = {
   writeLive,
   fetchDisabled,
   refresh,
+  refreshIfStale,
 };

@@ -257,11 +257,16 @@ test('USAGE_LIMITS_FETCH=off is the same as --no-fetch', async () => {
   assert.match(result.stdout, /network off/);
 });
 
-test('under Codex the panel refuses rather than showing the wrong meter', () => {
+test('under Codex the panel reads the Codex meter and says so in the title', () => {
   const dir = tempConfig('claude-opus-5');
-  const result = run(dir, ['--once', '--host', 'codex']);
-  assert.strictEqual(result.status, 2);
-  assert.match(result.stderr, /Codex/);
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-codex-home-'));
+  const result = run(dir, ['--once', '--no-fetch', '--host', 'codex'], { CODEX_HOME: codexHome });
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Codex usage/);
+  assert.match(result.stdout, /no reading yet/);
+  assert.strictEqual(result.stdout.indexOf('Claude usage'), -1);
+  const open = panel.openCommand({ TMUX: '1' }, PANEL, NODE, 'linux', ['--host', 'codex']);
+  assert.strictEqual(open.args[5], '"/usr/bin/node" "/home/me/panel.js" "--host" "codex"');
 });
 
 test('--help prints the flags', () => {

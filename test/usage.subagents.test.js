@@ -129,3 +129,27 @@ test('the report reads subagent transcripts and says how many calls they made', 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('readClaudeEvents finds the agents a Workflow runs, two directories down', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-workflows-'));
+  const project = path.join(dir, 'projects', 'C--proj');
+  fs.mkdirSync(path.join(project, SESSION, 'subagents', 'workflows', 'wf_1'), { recursive: true });
+  fs.writeFileSync(path.join(project, SESSION + '.jsonl'), line('main', NOW - MINUTE) + '\n');
+  fs.writeFileSync(path.join(project, SESSION, 'subagents', 'agent-a.jsonl'), line('sub', NOW - MINUTE, { isSidechain: true }) + '\n');
+  fs.writeFileSync(
+    path.join(project, SESSION, 'subagents', 'workflows', 'wf_1', 'agent-b.jsonl'),
+    line('wf', NOW - MINUTE, { isSidechain: true }) + '\n'
+  );
+  fs.writeFileSync(path.join(project, SESSION, 'subagents', 'workflows', 'wf_1', 'agent-b.meta.json'), '{}');
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  try {
+    const events = await usage.readClaudeEvents(NOW - HOUR);
+    assert.strictEqual(events.length, 3, 'main, plain subagent and workflow agent');
+    assert.strictEqual(events.filter((event) => event.sidechain).length, 2);
+    assert.strictEqual(usage.subagentTranscripts(path.join(project, SESSION, 'subagents'), 0).length, 2);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+  }
+});

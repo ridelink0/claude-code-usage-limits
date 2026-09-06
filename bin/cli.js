@@ -38,9 +38,9 @@ const HELP = `claude-usage-limits - how much agent usage is left, and whether th
 Reads the usage figures the agent already keeps on disk, plus its own session
 history, to report the remaining headroom as turns of work. Works with Claude
 Code and with Codex; the host is detected, or state it with --host. Nothing is
-uploaded. The report and the hooks read no credentials; the panel takes the
+uploaded. The panel, and the hooks when the reading on disk has aged, take the
 same reading Claude Code takes for /usage, with the login Claude Code already
-holds, and sends it nowhere else (USAGE_LIMITS_FETCH=off keeps it offline).
+holds, and send it nowhere else (USAGE_LIMITS_FETCH=off keeps it all offline).
 
   https://github.com/ridelink0/claude-code-usage-limits
 `;

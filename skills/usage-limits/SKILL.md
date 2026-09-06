@@ -110,6 +110,14 @@ from the start of the turn. A message sent while you are already working does
 not fire it again: it arrives without a budget line, and the numbers you are
 holding are now older than they look.
 
+The reading itself is kept fresh: the hook takes the same reading Claude Code
+takes for `/usage` when the one on disk is older than three minutes, and the
+mid-turn pulse does the same every two minutes through a long turn. So the
+figures are as good as `/usage` at those moments. What no hook can do is fire
+between them, and a burst of parallel agents can spend a great deal in the
+gap: eight workflow agents once emptied half a 5-hour window in five minutes.
+Spawn agents knowing that each fresh context re-reads what you already hold.
+
 That matters most when it is the one thing you are about to assert. Re-check
 before saying a job fits, if any of these are true:
 

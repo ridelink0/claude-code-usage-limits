@@ -5,7 +5,8 @@ description: Put the usage bars under the prompt (on), take them out (off), or s
 Run `node "${CLAUDE_PLUGIN_ROOT}/skills/usage-limits/scripts/statusline.js" $ARGUMENTS`.
 With no argument it reports the current state.
 
-It edits the `statusLine` entry in `~/.claude/settings.json` through a
+It edits the `statusLine` entry in `settings.json` in the Claude config
+directory (`~/.claude`, or `CLAUDE_CONFIG_DIR`) through a
 temporary file, keeps a backup, and `off` restores exactly what was there. A
 status line that was already set is kept and printed above ours. The change
 applies to new Claude Code sessions, not this one.

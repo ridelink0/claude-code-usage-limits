@@ -28,6 +28,7 @@ const { spawn } = require('child_process');
 
 const usage = require('./usage.js');
 const host = require('./host.js');
+const codex = require('./codex.js');
 const bars = require('./bars.js');
 const view = require('./view.js');
 const live = require('./live.js');
@@ -86,7 +87,7 @@ function parseArgs(argv) {
     poll: null,
     width: null,
     help: false,
-    ascii: false,
+    ascii: String(process.env.USAGE_LIMITS_ASCII || '') === '1',
     hostName: null,
   };
   const list = argv || [];
@@ -123,28 +124,47 @@ async function snapshot(options) {
   const env = opts.env || process.env;
   const now = Number.isFinite(opts.now) ? opts.now : Date.now();
   let outcome = opts.outcome || null;
+  const onCodex = usage.isCodex();
 
-  if (opts.fetch) {
-    const result = await live.refresh({ now, accountUuid: accountUuid(), env, timeoutMs: opts.timeoutMs });
-    outcome = result.outcome;
+  let collected;
+  if (onCodex) {
+    // Codex keeps its meter in its session rollouts and answers a live reading
+    // through its own app-server, which is what /status shows. That is the
+    // system Codex uses, so it is the one read here.
+    let meter = null;
+    if (opts.fetch) {
+      try {
+        meter = await codex.refresh();
+        outcome = { ok: true };
+      } catch (err) {
+        outcome = { ok: false, kind: 'offline', message: (err && err.code) || 'codex did not answer' };
+      }
+    }
+    collected = codex.collect(now, meter ? { meter } : undefined);
+  } else {
+    if (opts.fetch) {
+      const result = await live.refresh({ now, accountUuid: accountUuid(), env, timeoutMs: opts.timeoutMs });
+      outcome = result.outcome;
+    }
+    collected = usage.collect(now);
   }
 
-  const collected = usage.collect(now);
-  const slots = feed.readFeed();
+  const slots = onCodex ? {} : feed.readFeed();
   const slot = feed.newest(slots);
-  const seen = activity.summarise(activity.read(), now);
-  const settings = settingsFor();
+  const seen = onCodex ? { working: codexWorking(now), ultracode: false, model: null } : activity.summarise(activity.read(), now);
+  const settings = onCodex ? {} : settingsFor();
 
   const built = view.build({
     now,
     utilization: collected.utilization,
     fetchedAtMs: collected.snapshotFetchedAt,
-    source: collected.snapshotSource,
+    source: onCodex ? (outcome && outcome.ok ? 'api' : 'cache') : collected.snapshotSource,
+    windowSpecs: collected.windowSpecs || null,
     headers: slot ? slot.rateLimits : null,
     headersAt: slot ? slot.headersAt : null,
     model: (slot && slot.model) || seen.model || null,
     modelName: slot ? slot.modelName : null,
-    effort: slot ? slot.effort : null,
+    effort: slot ? slot.effort : (onCodex && collected.settings && collected.settings.effortLevel !== 'default' ? collected.settings.effortLevel : null),
     working: seen.working || feed.isWorking(slot, now),
     ultracode: seen.ultracode || settings.ultracode === true,
     settingsModel: collected.settings ? collected.settings.model : null,
@@ -152,17 +172,33 @@ async function snapshot(options) {
     env,
   });
   built.now = now;
+  built.host = onCodex ? 'codex' : 'claude';
+  built.title = onCodex ? 'Codex usage' : TITLE;
   built.plan = collected.plan || null;
+  if (onCodex && collected.windowless && !built.note) built.note = 'this plan meters no rolling window';
   // Every Claude on this machine, and which of them are working. Two windows
   // share one limit, so the other one's state is part of this one's picture.
-  built.sessionsList = loadSessions(now);
-  built.sessions = Math.max(built.sessionsList.length, brief.liveSessions(brief.readCache(), now, brief.LIVE_WINDOW_MS, null));
+  // Codex leaves no marks, so under Codex the list is empty rather than wrong.
+  built.sessionsList = onCodex ? [] : loadSessions(now);
+  built.sessions = onCodex ? 0 : Math.max(built.sessionsList.length, brief.liveSessions(brief.readCache(), now, brief.LIVE_WINDOW_MS, null));
   built.othersWorking = built.sessionsList.filter((row) => row.state === 'working').length;
   // Whether the panel is allowed the network at all, which is what the footer
   // reports. A frame rebuilt from disk between readings is not "network off".
   built.fetch = opts.network !== undefined ? Boolean(opts.network) : Boolean(opts.fetch);
   built.outcome = outcome;
   return built;
+}
+
+// Codex has no hooks to say when it is working, but it appends to its rollout
+// file as it goes, so a rollout touched in the last few seconds is a turn in
+// progress.
+function codexWorking(now) {
+  try {
+    const recent = codex.rolloutFiles(now - 5 * SECOND);
+    return recent.some((entry) => !Number.isFinite(entry.at) || entry.at >= now - 5 * SECOND);
+  } catch (err) {
+    return false;
+  }
 }
 
 // The sessions this machine has heard from lately, from every file the hooks
@@ -271,11 +307,12 @@ function render(built, options) {
       ? bars.rainbow(bars.spinner(tick, { ascii, reduced }), tick, { mode, reduced })
       : bars.paint(bars.spinner(tick, { ascii, reduced }), bars.THEME.claude, mode)
     : bars.paint(ascii ? '*' : '✻', bars.THEME.claude, mode);
+  const titleText = built.title || TITLE;
   const title = built.ultracode
-    ? bars.rainbow(TITLE, tick, { mode, reduced })
+    ? bars.rainbow(titleText, tick, { mode, reduced })
     : animate
-      ? bars.shimmer(TITLE, tick, bars.THEME.claude, bars.THEME.claudeShimmer, { mode, reduced })
-      : bars.paint(TITLE, bars.THEME.claude, mode);
+      ? bars.shimmer(titleText, tick, bars.THEME.claude, bars.THEME.claudeShimmer, { mode, reduced })
+      : bars.paint(titleText, bars.THEME.claude, mode);
 
   const effortName = built.ultracode ? 'ultracode' : built.effort;
   const effort = effortName ? bars.effortColour(effortName) : null;
@@ -371,12 +408,13 @@ function quote(value) {
 
 // How to put the panel in a pane to the right of the current one, for the
 // terminals that can be told to. Pure, so the table can be tested.
-function openCommand(env, panelPath, nodePath, platform) {
+function openCommand(env, panelPath, nodePath, platform, extraArgs) {
   const e = env || process.env;
   const os = platform || process.platform;
   const node = nodePath || process.execPath;
   const panel = panelPath || __filename;
-  const cmd = quote(node) + ' ' + quote(panel);
+  const extra = Array.isArray(extraArgs) ? extraArgs.map(String) : [];
+  const cmd = [quote(node), quote(panel)].concat(extra.map(quote)).join(' ');
 
   if (e.TMUX) {
     return {
@@ -388,21 +426,21 @@ function openCommand(env, panelPath, nodePath, platform) {
   if (e.WEZTERM_PANE) {
     return {
       program: 'wezterm',
-      args: ['cli', 'split-pane', '--right', '--percent', '32', '--', node, panel],
+      args: ['cli', 'split-pane', '--right', '--percent', '32', '--', node, panel].concat(extra),
       note: 'opened a pane to the right in WezTerm',
     };
   }
   if (e.KITTY_WINDOW_ID) {
     return {
       program: 'kitten',
-      args: ['@', 'launch', '--location=vsplit', '--bias=32', '--cwd=current', node, panel],
+      args: ['@', 'launch', '--location=vsplit', '--bias=32', '--cwd=current', node, panel].concat(extra),
       note: 'opened a pane to the right in kitty (needs allow_remote_control)',
     };
   }
   if (e.ZELLIJ) {
     return {
       program: 'zellij',
-      args: ['action', 'new-pane', '-d', 'right', '--', node, panel],
+      args: ['action', 'new-pane', '-d', 'right', '--', node, panel].concat(extra),
       note: 'opened a pane to the right in zellij',
     };
   }
@@ -430,8 +468,8 @@ function openCommand(env, panelPath, nodePath, platform) {
   return null;
 }
 
-function openPanel(env) {
-  const plan = openCommand(env, __filename, process.execPath, process.platform);
+function openPanel(env, extraArgs) {
+  const plan = openCommand(env, __filename, process.execPath, process.platform, extraArgs);
   if (!plan) {
     process.stdout.write(
       'This terminal cannot be told to split. Open a second pane to the right and run:\n  ' +
@@ -610,14 +648,7 @@ async function main(argv) {
     return 0;
   }
   usage.setHost(host.detect(argv || [], process.env));
-  if (usage.isCodex()) {
-    process.stderr.write(
-      'panel: this reads the usage call Claude Code makes, which Codex does not have. ' +
-        'Under Codex use the report: usage.js --host codex\n'
-    );
-    return 2;
-  }
-  if (args.open) return openPanel(process.env);
+  if (args.open) return openPanel(process.env, args.hostName ? ['--host', args.hostName] : []);
 
   const once = args.once || args.json || !process.stdout.isTTY;
   if (once) {
@@ -650,6 +681,7 @@ module.exports = {
   POLL_WORKING_MS,
   POLL_IDLE_MS,
   parseArgs,
+  settingsFor,
   snapshot,
   loadSessions,
   whereLabel,

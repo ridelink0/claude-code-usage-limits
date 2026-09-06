@@ -25,6 +25,7 @@ const usage = require('./usage.js');
 const brief = require('./brief.js');
 const host = require('./host.js');
 const activity = require('./activity.js');
+const live = require('./live.js');
 
 const SECOND = 1000;
 const DEFAULT_INTERVAL_SECONDS = 120;
@@ -129,6 +130,24 @@ async function run(now, hookInput) {
   // Claimed before the scan rather than after, so a slow scan cannot let a
   // second tool call start another one.
   writeState(trim(all, sessionId, now));
+
+  // A reading as old as the interval is replaced with the one Claude Code
+  // would take for /usage, so a turn that runs for an hour is measured
+  // against the account rather than against a guess from its own transcript.
+  if (!usage.isCodex()) {
+    try {
+      const cached = usage.collect(now);
+      await live.refreshIfStale({
+        now,
+        maxAgeMs: every,
+        cacheFetchedAtMs: cached.snapshotFetchedAt,
+        accountUuid: usage.accountUuid(),
+        timeoutMs: 4000,
+      });
+    } catch (err) {
+      // The reading on disk is still there.
+    }
+  }
 
   const data = await usage.report(now, { sessionId });
   const binding = data.binding;

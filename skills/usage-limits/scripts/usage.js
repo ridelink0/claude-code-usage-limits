@@ -506,6 +506,29 @@ function freshFiles(dir, since) {
     .filter((file) => fresh(file, since));
 }
 
+// Every transcript under a session's subagents directory. Plain subagents
+// write straight into it; the agents a Workflow runs write under
+// subagents/workflows/<run id>/, and eight of those spending in parallel is
+// exactly the burst that empties a window between two readings, so they must
+// be counted. Two levels down is as deep as Claude Code goes today; a bounded
+// walk copes if that changes.
+function subagentTranscripts(dir, since, depth) {
+  const left = Number.isFinite(depth) ? depth : 3;
+  const files = freshFiles(dir, since);
+  if (left <= 0) return files;
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    return files;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    for (const file of subagentTranscripts(path.join(dir, entry.name), since, left - 1)) files.push(file);
+  }
+  return files;
+}
+
 async function readClaudeEvents(since) {
   const root = path.join(configDir(), 'projects');
   let dirs = [];
@@ -530,7 +553,7 @@ async function readClaudeEvents(since) {
         // A session's subagents write their transcripts under
         // <project>/<session id>/subagents/. Same budget, different file, and
         // for a long time an Explore or Plan agent's whole spend went unseen.
-        for (const file of freshFiles(path.join(full, entry.name, 'subagents'), since)) {
+        for (const file of subagentTranscripts(path.join(full, entry.name, 'subagents'), since)) {
           files.push({ file, project: dir.name });
         }
         continue;
@@ -1638,6 +1661,14 @@ function preferLive(cache, fresh, accountUuid, now) {
   if (fresh.accountUuid && accountUuid && fresh.accountUuid !== accountUuid) return false;
   if (!cache || !Number.isFinite(cache.fetchedAtMs)) return true;
   return fresh.fetchedAtMs > cache.fetchedAtMs;
+}
+
+// The account the login belongs to, so a live reading can be stamped with it.
+function accountUuid() {
+  const account = readJson(accountFile());
+  return account && account.oauthAccount && account.oauthAccount.accountUuid
+    ? account.oauthAccount.accountUuid
+    : null;
 }
 
 function collectClaude(now) {
@@ -2817,6 +2848,8 @@ module.exports = {
   otherLimits,
   collectClaude,
   preferLive,
+  accountUuid,
+  subagentTranscripts,
   readClaudeEvents,
   RATES,
   WINDOWS,

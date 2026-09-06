@@ -123,18 +123,12 @@ function readNewLines(file, from) {
 }
 
 // Where Claude Code writes the transcripts of the subagents a session spawned.
+// Plain subagents write straight into <session>/subagents/; the agents a
+// Workflow runs write under subagents/workflows/<run id>/. Both spend this
+// session's budget.
 function subagentFiles(transcriptPath, sessionId) {
   const dir = path.join(path.dirname(transcriptPath), sessionId, 'subagents');
-  let names;
-  try {
-    names = fs.readdirSync(dir);
-  } catch (err) {
-    return [];
-  }
-  return names
-    .filter((name) => name.endsWith('.jsonl'))
-    .sort()
-    .map((name) => path.join(dir, name));
+  return usage.subagentTranscripts(dir, 0).sort();
 }
 
 function apply(session, event, sidechain, delta) {

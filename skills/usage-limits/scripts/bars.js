@@ -292,6 +292,18 @@ function prettyModel(id) {
     suffix = ' ' + bracket[1].toUpperCase();
     name = name.slice(0, bracket.index);
   }
+  // OpenAI's names, for the Codex side: "gpt-6-astra" is "GPT-6 Astra",
+  // "gpt-5.6-sol" is "GPT-5.6 Sol", "o4-mini" is "o4 Mini".
+  const gpt = name.match(/^gpt-?(\d+(?:\.\d+)?)(?:-(.+))?$/i);
+  if (gpt) {
+    const rest = gpt[2] ? ' ' + gpt[2].split('-').filter(Boolean).map(capitalise).join(' ') : '';
+    return 'GPT-' + gpt[1] + rest + suffix;
+  }
+  const oSeries = name.match(/^(o\d+)(?:-(.+))?$/i);
+  if (oSeries) {
+    const rest = oSeries[2] ? ' ' + oSeries[2].split('-').filter(Boolean).map(capitalise).join(' ') : '';
+    return oSeries[1].toLowerCase() + rest + suffix;
+  }
   name = name.replace(/^.*?claude-/, '');
   name = name.replace(/-v\d+:\d+$/, '');
   name = name.replace(/-\d{8}$/, '');

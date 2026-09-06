@@ -229,3 +229,23 @@ test('the display name from Claude beats the pretty-printed id', () => {
   assert.strictEqual(built.modelLabel, 'Fable 5.1');
   assert.strictEqual(built.model, 'claude-fable-5-1[1m]');
 });
+
+test('a host with windows of its own lengths gets a row per window', () => {
+  const built = view.build({
+    now: NOW,
+    utilization: {
+      five_hour: { utilization: 5, resets_at: new Date(NOW + HOUR).toISOString() },
+      window_1440m: { utilization: 40, resets_at: new Date(NOW + 12 * HOUR).toISOString() },
+    },
+    fetchedAtMs: NOW,
+    source: 'api',
+    windowSpecs: [{ key: 'five_hour', label: '5-hour' }, { key: 'window_1440m', label: '24-hour' }],
+    model: 'gpt-6-astra',
+  });
+  assert.deepStrictEqual(
+    built.rows.map((row) => row.title),
+    ['Current session', 'Current week (all models)', 'Current 24-hour window']
+  );
+  assert.strictEqual(built.rows[2].percent, 40);
+  assert.strictEqual(built.modelLabel, 'GPT-6 Astra');
+});

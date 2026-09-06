@@ -168,3 +168,10 @@ test('prettyModel reads like the model picker', () => {
   assert.strictEqual(bars.prettyModel(null), 'Unknown model');
   assert.strictEqual(bars.prettyModel(''), 'Unknown model');
 });
+
+test('prettyModel names OpenAI models the way Codex does', () => {
+  assert.strictEqual(bars.prettyModel('gpt-6-astra'), 'GPT-6 Astra');
+  assert.strictEqual(bars.prettyModel('gpt-5.6-sol'), 'GPT-5.6 Sol');
+  assert.strictEqual(bars.prettyModel('gpt-5'), 'GPT-5');
+  assert.strictEqual(bars.prettyModel('o4-mini'), 'o4 Mini');
+});
