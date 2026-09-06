@@ -34,6 +34,9 @@ const WORKING_GAP_MS = 4000;
 // A previous status line gets this long, then we go on without it.
 const CHAIN_TIMEOUT_MS = 2000;
 const STDIN_WAIT_MS = 500;
+// How long a display keeps describing the session it chose before it will
+// follow a different one.
+const STICKY_QUIET_MS = 5 * 60 * 1000;
 // Claude Code draws the status line inside its own margins, a few columns
 // narrower than COLUMNS, and clips what does not fit.
 const STATUSLINE_MARGIN = 4;
@@ -86,8 +89,10 @@ function gapMeansWorking(settings) {
 // spin this one's line.
 function ownState(marks, sessionId, now) {
   const mine = sessionId && marks ? marks[sessionId] : null;
-  if (!mine || !Number.isFinite(mine.at) || now - mine.at > activity.STALE_MS) return { working: false, ultracode: false };
-  return { working: mine.state === 'working', ultracode: Boolean(mine.ultracode) };
+  if (!mine || !Number.isFinite(mine.at) || now - mine.at > activity.STALE_MS) {
+    return { working: false, ultracode: false, ultrathink: false };
+  }
+  return { working: mine.state === 'working', ultracode: Boolean(mine.ultracode), ultrathink: Boolean(mine.ultrathink) };
 }
 
 function number(value) {
@@ -141,6 +146,22 @@ function newest(all) {
   return best;
 }
 
+// Which session a display with no session of its own should describe.
+//
+// "Whichever moved last" reads badly with two windows open: two Claudes on the
+// same model at different efforts made the line flip between ultracode and
+// xhigh every few seconds, which is noise, not news. So a display sticks to
+// the session it is already describing until that one has been quiet for a
+// while, and only then moves to the newest.
+function stickySlot(all, previousId, now, quietMs) {
+  const slots = all || {};
+  const quiet = Number.isFinite(quietMs) ? quietMs : STICKY_QUIET_MS;
+  const at = Number.isFinite(now) ? now : Date.now();
+  const held = previousId ? slots[previousId] : null;
+  if (held && Number.isFinite(held.at) && at - held.at <= quiet) return held;
+  return newest(slots);
+}
+
 function isWorking(slot, now) {
   if (!slot || !Number.isFinite(slot.at) || !Number.isFinite(slot.prevAt)) return false;
   return now - slot.at < WORKING_GAP_MS && slot.at - slot.prevAt < WORKING_GAP_MS;
@@ -166,13 +187,9 @@ function line(built, options) {
   if (built.state === 'none') return bars.dim('usage: no reading yet', mode);
 
   const glyph = built.working
-    ? built.ultracode
-      ? bars.rainbow(bars.spinner(tick, { ascii, reduced }), tick, { mode, reduced })
-      : bars.paint(bars.spinner(tick, { ascii, reduced }), bars.THEME.claude, mode)
+    ? bars.paint(bars.spinner(tick, { ascii, reduced }), bars.THEME.claude, mode)
     : bars.paint(ascii ? '*' : '✻', bars.THEME.claude, mode);
-  // Ultracode is xhigh plus workflows, and Claude names it as its own level in
-  // the picker, so it is named here too, in the rainbow the picker uses.
-  const effortName = built.ultracode ? 'ultracode' : built.effort;
+  const effortName = built.effort;
   const effort = effortName ? bars.effortColour(effortName) : null;
   const effortText = !effortName
     ? ''
@@ -187,7 +204,7 @@ function line(built, options) {
     const label = shortLabel(row, shorter);
     const percent = row.level === 'fill' ? row.percentText : bars.paint(row.percentText, bars.levelColour(row.level), mode);
     if (!width || row.percent === null) return label + ' ' + percent;
-    return label + ' ' + bars.bar(row.percent, width, { mode, level: row.level, ascii }) + ' ' + percent;
+    return label + ' ' + bars.bar(row.percent, width, { mode, level: row.level, ascii, tick, reduced, style: built.style }) + ' ' + percent;
   };
 
   const attempts = [
@@ -346,7 +363,7 @@ async function main(argv) {
       modelName: slot ? slot.modelName : null,
       effort: slot ? slot.effort : null,
       working: own.working || (gapMeansWorking(settings) && isWorking(slot, now)),
-      ultracode: own.ultracode || settings.ultracode === true,
+      ultrathink: Boolean(own.ultrathink),
       settingsModel: collected.settings ? collected.settings.model : null,
       env,
     });
@@ -379,6 +396,8 @@ module.exports = {
   record,
   newest,
   isWorking,
+  stickySlot,
+  STICKY_QUIET_MS,
   gapMeansWorking,
   ownState,
   line,

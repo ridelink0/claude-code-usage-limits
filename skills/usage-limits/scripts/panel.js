@@ -154,7 +154,9 @@ async function snapshot(options) {
   }
 
   const slots = onCodex ? {} : feed.readFeed();
-  const slot = feed.newest(slots);
+  // Stay with the session already being described, so two windows on the same
+  // model at different efforts do not make the header flip back and forth.
+  const slot = feed.stickySlot(slots, opts.sessionId, now);
   const seen = onCodex ? { working: codexWorking(now), ultracode: false, model: null } : activity.summarise(activity.read(), now);
   const settings = onCodex ? {} : settingsFor();
 
@@ -168,14 +170,24 @@ async function snapshot(options) {
     headersAt: slot ? slot.headersAt : null,
     model: (slot && slot.model) || seen.model || null,
     modelName: slot ? slot.modelName : null,
-    effort: slot ? slot.effort : (onCodex && collected.settings && collected.settings.effortLevel !== 'default' ? collected.settings.effortLevel : null),
+    // The status line is told the effort by Claude Code itself; the setting is
+    // the fallback, and it is what says "ultracode" when no status line is
+    // installed.
+    effort:
+      (slot && slot.effort) ||
+      (collected.settings && collected.settings.effortLevel && collected.settings.effortLevel !== 'default'
+        ? collected.settings.effortLevel
+        : null),
     working: seen.working || feed.isWorking(slot, now),
-    ultracode: seen.ultracode || settings.ultracode === true,
+    // Ultracode comes from the effort level above, not from here. Ultrathink
+    // is a word in a prompt, and the hooks record it per session.
+    ultrathink: Boolean(seen.ultrathink),
     settingsModel: collected.settings ? collected.settings.model : null,
     outcome,
     env,
   });
   built.now = now;
+  built.sessionId = slot && slot.sessionId ? slot.sessionId : null;
   built.host = onCodex ? 'codex' : 'claude';
   built.title = onCodex ? 'Codex usage' : TITLE;
   built.plan = collected.plan || null;
@@ -353,19 +365,17 @@ function render(built, options) {
   const barWidth = Math.max(8, Math.min(50, columns - 6));
   const animate = built.working && !reduced;
 
+  // The title is Claude's orange, shimmering while Claude works, and nothing
+  // else: the rainbow and the purple belong to the bars.
   const glyph = built.working
-    ? built.ultracode
-      ? bars.rainbow(bars.spinner(tick, { ascii, reduced }), tick, { mode, reduced })
-      : bars.paint(bars.spinner(tick, { ascii, reduced }), bars.THEME.claude, mode)
+    ? bars.paint(bars.spinner(tick, { ascii, reduced }), bars.THEME.claude, mode)
     : bars.paint(ascii ? '*' : '✻', bars.THEME.claude, mode);
   const titleText = built.title || TITLE;
-  const title = built.ultracode
-    ? bars.rainbow(titleText, tick, { mode, reduced })
-    : animate
-      ? bars.shimmer(titleText, tick, bars.THEME.claude, bars.THEME.claudeShimmer, { mode, reduced })
-      : bars.paint(titleText, bars.THEME.claude, mode);
+  const title = animate
+    ? bars.shimmer(titleText, tick, bars.THEME.claude, bars.THEME.claudeShimmer, { mode, reduced })
+    : bars.paint(titleText, bars.THEME.claude, mode);
 
-  const effortName = built.ultracode ? 'ultracode' : built.effort;
+  const effortName = built.effort;
   const effort = effortName ? bars.effortColour(effortName) : null;
   const effortText = !effortName
     ? ''
@@ -375,7 +385,10 @@ function render(built, options) {
         ? bars.shimmer(effortName, tick, effort.rgb, effort.shimmer, { mode, reduced })
         : bars.paint(effortName, effort.rgb, mode);
   const status = built.working ? 'working' : 'idle';
-  const who = [built.modelLabel, effortText, bars.dim(status, mode)].filter(Boolean).join(bars.dim(' · ', mode));
+  const thinking = built.ultrathink
+    ? bars.rainbow('ultrathink', tick, { mode, reduced })
+    : '';
+  const who = [built.modelLabel, effortText, thinking, bars.dim(status, mode)].filter(Boolean).join(bars.dim(' · ', mode));
 
   const head = [glyph + ' ' + bars.bold(title, mode), who];
   const body = [];
@@ -385,7 +398,9 @@ function render(built, options) {
     body.push({
       lines: [
         bars.bold(columns < 34 ? shortTitle(row) : row.title, mode),
-        (row.percent === null ? bars.paint((ascii ? '-' : '░').repeat(barWidth), bars.THEME.empty, mode) : bars.bar(row.percent, barWidth, { mode, level: row.level, ascii })) +
+        (row.percent === null
+          ? bars.paint((ascii ? '-' : '░').repeat(barWidth), bars.THEME.empty, mode)
+          : bars.bar(row.percent, barWidth, { mode, level: row.level, ascii, tick, reduced, style: built.style })) +
           ' ' +
           percent,
         subline(row, mode, { now, clock }),
@@ -687,7 +702,7 @@ async function interactive(args) {
       // The reading runs beside the frames, never in front of them: a slow
       // network must not freeze the spinner or the countdown.
       state.fetching = true;
-      snapshot({ fetch: true, network: fetch, env, now })
+      snapshot({ fetch: true, network: fetch, env, now, sessionId: state.built ? state.built.sessionId : null })
         .then((built) => {
           state.built = built;
           state.outcome = built.outcome;
@@ -715,6 +730,7 @@ async function interactive(args) {
           now,
           outcome: state.outcome,
           pace: state.built ? state.built.pace : null,
+          sessionId: state.built ? state.built.sessionId : null,
         });
       } catch (err) {
         // Keep the last frame; a transient read error is not worth a blank.
@@ -734,7 +750,7 @@ async function interactive(args) {
     }
     if (state.built) {
       const tick = Math.floor(Date.now() / bars.TICK_MS);
-      const animating = (state.built.working || state.built.ultracode) && !reduced;
+      const animating = (state.built.working || state.built.ultracode || state.built.ultrathink) && !reduced;
       if (state.dirty || (animating && tick !== state.lastTick) || now - state.lastCheck < FRAME_MS) {
         state.lastTick = tick;
         draw(Date.now());

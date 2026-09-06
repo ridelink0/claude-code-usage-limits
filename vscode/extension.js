@@ -72,9 +72,12 @@ function prepare(built, clock) {
   return {
     rows,
     modelLabel: built.modelLabel,
-    effort: built.ultracode ? 'ultracode' : built.effort,
+    effort: built.effort,
     working: Boolean(built.working),
-    ultracode: Boolean(built.ultracode),
+    // The bars carry the animation: "rainbow" for ultrathink and max effort,
+    // "ultra" for the ultracode effort level. The title never changes colour.
+    style: built.style || '',
+    ultrathink: Boolean(built.ultrathink),
     note: built.note,
     noteKind: built.outcome && !built.outcome.ok ? built.outcome.kind : null,
     freshness,
@@ -122,7 +125,9 @@ function html(webview, nonce) {
     '.idle .spin::after{content:"✻";}',
     '@keyframes spin{0%{content:"·"}8.3%{content:"✢"}16.6%{content:"✳"}25%{content:"✶"}33.3%{content:"✻"}41.6%{content:"✽"}50%{content:"✽"}58.3%{content:"✻"}66.6%{content:"✶"}75%{content:"✳"}83.3%{content:"✢"}91.6%{content:"·"}}',
     '.working .title .text{background:linear-gradient(90deg,' + claude + ' 0%,' + claude + ' 40%,' + shimmer + ' 50%,' + claude + ' 60%,' + claude + ' 100%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sweep 1.8s linear infinite;}',
-    '.ultracode .title .text,.ultracode .effort{background:linear-gradient(90deg,' + rainbow + ',' + (theme ? rgb(theme.rainbow[0]) : '#eb5f57') + ');background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:sweep 3s linear infinite;}',
+    '.rainbow .fill{background:linear-gradient(90deg,' + rainbow + ',' + (theme ? rgb(theme.rainbow[0]) : '#eb5f57') + ') !important;background-size:300% 100% !important;animation:slide 3s linear infinite;}',
+    '.ultra .fill{background:linear-gradient(90deg,' + ultra + ',' + (theme ? rgb(theme.ultraShimmer) : '#d0b4ff') + ',' + ultra + ') !important;background-size:200% 100% !important;animation:slide 2s linear infinite;}',
+    '@keyframes slide{0%{background-position:0 0}100%{background-position:-200% 0}}',
     '@keyframes sweep{0%{background-position:100% 0}100%{background-position:-100% 0}}',
     '.who{opacity:.75;margin:2px 0 10px;}',
     '.effort{color:' + ultra + ';}',
@@ -150,7 +155,7 @@ function html(webview, nonce) {
     'const vscode = acquireVsCodeApi();',
     'const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c]));',
     'function render(v){',
-    '  const cls = (v.ultracode ? "ultracode " : "") + (v.working ? "working" : "idle");',
+    '  const cls = (v.style ? v.style + " " : "") + (v.working ? "working" : "idle");',
     '  let h = `<div class="${cls}"><div class="title"><span class="spin"></span><span class="text">Claude usage</span></div>`;',
     '  h += `<div class="who">${esc(v.modelLabel)}${v.effort ? ` · <span class="effort">${esc(v.effort)}</span>` : ""} · ${v.working ? "working" : "idle"}</div>`;',
     '  for (const r of v.rows) {',
@@ -159,7 +164,7 @@ function html(webview, nonce) {
     '  }',
     '  if (v.sessions.length) {',
     '    h += `<div class="sessions"><h4>Sessions <span class="where">· ${esc(v.sessionsSummary)}</span></h4>`;',
-    '    for (const s of v.sessions) h += `<div class="s ${s.working ? "on" : ""}${s.ultracode ? " ultracode" : ""}"><span class="${s.working ? "working" : "idle"}"><span class="spin"></span></span><span>${esc(s.model)}</span>${s.where ? `<span class="where">${esc(s.where)}</span>` : ""}<span class="state">${s.working ? "working" : "idle " + ago(s.agoMs) + " ago"}</span></div>`;',
+    '    for (const s of v.sessions) h += `<div class="s ${s.working ? "on" : ""}"><span class="${s.working ? "working" : "idle"}"><span class="spin"></span></span><span>${esc(s.model)}</span>${s.where ? `<span class="where">${esc(s.where)}</span>` : ""}<span class="state">${s.working ? "working" : "idle " + ago(s.agoMs) + " ago"}</span></div>`;',
     '    h += `</div>`;',
     '  }',
     '  if (v.note) h += `<div class="note ${v.noteKind === "unauthorized" || v.noteKind === "forbidden" || v.noteKind === "no_credentials" ? "bad" : "warn"}">${esc(v.note)}</div>`;',
@@ -262,7 +267,14 @@ function activate(context) {
     if (doFetch && state.fetching) return;
     if (doFetch) state.fetching = true;
     try {
-      const built = await panel.snapshot({ fetch: doFetch, network, outcome: doFetch ? null : state.last && state.last.outcome });
+      const built = await panel.snapshot({
+        fetch: doFetch,
+        network,
+        outcome: doFetch ? null : state.last && state.last.outcome,
+        // Keep describing the same session, so two windows at different
+        // efforts do not flip the header back and forth.
+        sessionId: state.last ? state.last.sessionId : null,
+      });
       state.last = built;
       state.prepared = prepare(built, clock());
       updateStatusBar(built, state.prepared);

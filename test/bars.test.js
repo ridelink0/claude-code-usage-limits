@@ -51,6 +51,28 @@ test('ascii bars use plain characters', () => {
   assert.strictEqual(bars.stripAnsi(bars.bar(50, 4, { mode: 'none', ascii: true })), '##--');
 });
 
+test('a styled bar paints its filled cells, and only those', () => {
+  const rainbow = bars.bar(50, 10, { mode: 'truecolor', style: 'rainbow', tick: 1 });
+  assert.strictEqual(bars.stripAnsi(rainbow), '█'.repeat(5) + '░'.repeat(5));
+  const colours = new Set(rainbow.match(/38;2;[0-9;]+m/g) || []);
+  assert.ok(colours.size >= 4, 'several rainbow colours, got ' + colours.size);
+  assert.ok(rainbow.indexOf('38;2;80;83;112') !== -1, 'the empty cells keep their own colour');
+
+  const ultra = bars.bar(50, 10, { mode: 'truecolor', style: 'ultra', tick: 1 });
+  assert.strictEqual(bars.stripAnsi(ultra), '█'.repeat(5) + '░'.repeat(5));
+  assert.ok(ultra.indexOf('38;2;175;135;255') !== -1, 'the ultra purple');
+  assert.ok(ultra.indexOf('38;2;177;185;249') === -1, 'not the plain fill');
+
+  // A style is animation, so it moves with the tick and stops under reduced motion.
+  assert.notStrictEqual(bars.bar(50, 10, { mode: 'truecolor', style: 'rainbow', tick: 1 }), bars.bar(50, 10, { mode: 'truecolor', style: 'rainbow', tick: 2 }));
+  assert.strictEqual(
+    bars.bar(50, 10, { mode: 'truecolor', style: 'ultra', tick: 1, reduced: true }),
+    bars.bar(50, 10, { mode: 'truecolor', style: 'ultra', tick: 9, reduced: true })
+  );
+  // No colour at all means no style either.
+  assert.strictEqual(bars.bar(50, 4, { mode: 'none', style: 'rainbow' }), '██░░');
+});
+
 test('colour mode respects NO_COLOR, FORCE_COLOR and the terminal', () => {
   assert.strictEqual(bars.colourMode({ NO_COLOR: '1', COLORTERM: 'truecolor' }, true), 'none');
   assert.strictEqual(bars.colourMode({ FORCE_COLOR: '1' }, false), 'truecolor');
@@ -124,7 +146,9 @@ test('effort levels take the colours the effort picker uses', () => {
   assert.deepStrictEqual(bars.effortColour('xhigh').rgb, bars.THEME.ultra);
   assert.ok(bars.effortColour('xhigh').shimmer);
   assert.strictEqual(bars.effortColour('max').rainbow, true);
-  assert.strictEqual(bars.effortColour('ultracode').rainbow, true);
+  // Claude Code's effort picker paints Ultracode purple, not rainbow.
+  assert.strictEqual(bars.effortColour('ultracode').rainbow, false);
+  assert.deepStrictEqual(bars.effortColour('ultracode').rgb, bars.THEME.ultra);
   assert.deepStrictEqual(bars.effortColour('whatever').rgb, bars.THEME.inactive);
   assert.deepStrictEqual(bars.effortColour(null).rgb, bars.THEME.inactive);
 });

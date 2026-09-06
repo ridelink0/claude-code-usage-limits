@@ -166,10 +166,18 @@ function bar(percent, width, options) {
   const fillGlyph = opts.ascii ? FILL_ASCII : FILL;
   const emptyGlyph = opts.ascii ? EMPTY_ASCII : EMPTY;
   const mode = opts.mode || 'none';
-  return (
-    paint(fillGlyph.repeat(filled), levelColour(opts.level || level(pct)), mode) +
-    paint(emptyGlyph.repeat(cells - filled), THEME.empty, mode)
-  );
+  // The filled cells: one colour for the level, or under ultracode the
+  // rainbow sliding along the bar, or under ultrathink the purple with a
+  // moving highlight, the way Claude Code paints those two words.
+  let fill;
+  if (opts.style === 'rainbow' && mode !== 'none') {
+    fill = rainbow(fillGlyph.repeat(filled), opts.tick, { mode, reduced: opts.reduced });
+  } else if (opts.style === 'ultra' && mode !== 'none') {
+    fill = shimmer(fillGlyph.repeat(filled), opts.tick, THEME.ultra, THEME.ultraShimmer, { mode, reduced: opts.reduced });
+  } else {
+    fill = paint(fillGlyph.repeat(filled), levelColour(opts.level || level(pct)), mode);
+  }
+  return fill + paint(emptyGlyph.repeat(cells - filled), THEME.empty, mode);
 }
 
 function spinner(tick, options) {
@@ -231,8 +239,11 @@ function effortColour(name) {
       return { rgb: THEME.permission, shimmer: null, rainbow: false };
     case 'xhigh':
       return { rgb: THEME.ultra, shimmer: THEME.ultraShimmer, rainbow: false };
-    case 'max':
+    // Claude Code's effort picker paints Ultracode in the purple; max is the
+    // one it animates in the rainbow.
     case 'ultracode':
+      return { rgb: THEME.ultra, shimmer: THEME.ultraShimmer, rainbow: false };
+    case 'max':
       return { rgb: THEME.ultra, shimmer: THEME.ultraShimmer, rainbow: true };
     default:
       return { rgb: THEME.inactive, shimmer: null, rainbow: false };

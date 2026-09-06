@@ -191,11 +191,23 @@ test('render paints the working state, the ultracode rainbow and the note colour
   assert.ok(spun[0].indexOf('38;2;235;159;127') !== -1, 'the title shimmers in the claude colour');
   assert.match(bars.stripAnsi(spun[1]), /working$/);
 
-  const ultra = view.build({ now: NOW, utilization: account(NOW).cachedUsageUtilization.utilization, fetchedAtMs: NOW, source: 'api', model: 'claude-opus-5', working: true, effort: 'xhigh', ultracode: true });
-  const rainbow = bars.THEME.rainbow.concat(bars.THEME.rainbowShimmer).map((rgb) => '38;2;' + rgb.join(';') + 'm');
-  const painted = panel.render(ultra, { columns: 40, mode: 'truecolor', tick: 3, now: NOW });
-  assert.ok(rainbow.some((code) => painted[0].indexOf(code) !== -1), 'rainbow title');
-  assert.match(bars.stripAnsi(painted[1]), /ultracode/);
+  // The animation is on the BARS, never on the title, and it follows the
+  // effort level and the ultrathink keyword rather than any word in a prompt.
+  const rainbowCodes = bars.THEME.rainbow.concat(bars.THEME.rainbowShimmer).map((rgb) => '38;2;' + rgb.join(';') + 'm');
+  const thinking = view.build({ now: NOW, utilization: account(NOW).cachedUsageUtilization.utilization, fetchedAtMs: NOW, source: 'api', model: 'claude-opus-5', working: true, effort: 'xhigh', ultrathink: true });
+  const painted = panel.render(thinking, { columns: 40, mode: 'truecolor', tick: 3, now: NOW });
+  const bodyText = painted.slice(2).join('\n');
+  assert.ok(rainbowCodes.filter((code) => bodyText.indexOf(code) !== -1).length >= 3, 'the bars run rainbow under ultrathink');
+  assert.strictEqual(rainbowCodes.filter((code) => painted[0].indexOf(code) !== -1).length, 0, 'the title is never rainbow');
+  assert.ok(painted[0].indexOf('38;2;215;119;87') !== -1 || painted[0].indexOf('38;2;235;159;127') !== -1, 'the title stays Claude orange');
+  assert.match(bars.stripAnsi(painted[1]), /xhigh/, 'the effort is still xhigh');
+  assert.match(bars.stripAnsi(painted[1]), /ultrathink/);
+
+  const ultra = view.build({ now: NOW, utilization: account(NOW).cachedUsageUtilization.utilization, fetchedAtMs: NOW, source: 'api', model: 'claude-opus-5', working: true, effort: 'ultracode' });
+  const purple = panel.render(ultra, { columns: 40, mode: 'truecolor', tick: 3, now: NOW });
+  assert.ok(purple.slice(2).join('\n').indexOf('38;2;175;135;255') !== -1, 'the bars run purple under the ultracode level');
+  assert.strictEqual(rainbowCodes.filter((code) => purple.join('\n').indexOf(code) !== -1).length, 0, 'no rainbow anywhere');
+  assert.match(bars.stripAnsi(purple[1]), /ultracode/);
 
   const offline = view.build({ now: NOW, utilization: account(NOW).cachedUsageUtilization.utilization, fetchedAtMs: NOW - 3 * 60000, source: 'api', model: 'claude-opus-5', outcome: { ok: false, kind: 'offline' } });
   offline.outcome = { ok: false, kind: 'offline' };

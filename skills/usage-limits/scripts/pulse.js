@@ -134,8 +134,10 @@ async function run(now, hookInput) {
   // A reading as old as the interval is replaced with the one Claude Code
   // would take for /usage, so a turn that runs for an hour is measured
   // against the account rather than against a guess from its own transcript.
-  if (!usage.isCodex()) {
-    try {
+  try {
+    if (usage.isCodex()) {
+      await require('./codex.js').refreshIfStale({ now, maxAgeMs: every, timeoutMs: 4000 });
+    } else {
       const cached = usage.collect(now);
       await live.refreshIfStale({
         now,
@@ -144,9 +146,9 @@ async function run(now, hookInput) {
         accountUuid: usage.accountUuid(),
         timeoutMs: 4000,
       });
-    } catch (err) {
-      // The reading on disk is still there.
     }
+  } catch (err) {
+    // The reading on disk is still there.
   }
 
   const data = await usage.report(now, { sessionId });

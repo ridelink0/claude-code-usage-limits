@@ -195,7 +195,21 @@ function build(input) {
   const state = !hasData ? 'none' : ageMs !== null && ageMs < LIVE_AGE_MS ? 'live' : 'cached';
 
   const effort = opts.effort ? String(opts.effort).toLowerCase() : null;
-  const ultracode = Boolean(opts.ultracode) || effort === 'max' || effort === 'ultracode';
+  // Ultracode is a level in Claude Code's own effort picker, painted purple
+  // there, so it comes from the level the agent reports and NEVER from a word
+  // in the prompt. Reading it from the text was wrong twice over: "ultracode"
+  // appears in ordinary requests, and the marks are machine-wide, so one
+  // session mentioning it turned every panel purple while the effort was
+  // xhigh.
+  const ultracode = effort === 'ultracode';
+  // Ultrathink is a word in the prompt, and Claude Code paints that word in
+  // the rainbow, so the bars do the same.
+  const ultrathink = Boolean(opts.ultrathink);
+  // What the bars do: the rainbow for ultrathink and for max effort, the
+  // purple gradient of the effort picker for ultracode, their own level
+  // colour otherwise. The title is never painted in either; it stays the
+  // Claude orange, because the bar is the thing being reported on.
+  const style = ultrathink || effort === 'max' ? 'rainbow' : ultracode ? 'ultra' : null;
 
   return {
     rows,
@@ -205,6 +219,8 @@ function build(input) {
     modelLabel: opts.modelName || bars.prettyModel(model),
     effort,
     ultracode,
+    ultrathink,
+    style,
     working: Boolean(opts.working),
     state,
     ageMs,

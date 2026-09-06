@@ -621,8 +621,12 @@ async function run(now, hookInput) {
     'working',
     sessionId,
     {
-      ultracode: Boolean(
-        hookInput && typeof hookInput.prompt === 'string' && /\bultracode\b/i.test(hookInput.prompt)
+      // Only ultrathink, and only as a whole word: it is a real directive in
+      // the prompt. Ultracode is an effort level, read from the setting the
+      // agent reports, never from the text - the word turns up in ordinary
+      // requests, and these marks are read by every panel on the machine.
+      ultrathink: Boolean(
+        hookInput && typeof hookInput.prompt === 'string' && /\bultrathink\b/i.test(hookInput.prompt)
       ),
     },
     now
@@ -635,8 +639,17 @@ async function run(now, hookInput) {
   // one on disk is older than a few minutes. Offline or signed out this is
   // one quick failure and then a widening backoff, never a wait on every
   // prompt; USAGE_LIMITS_FETCH=off turns it off.
-  if (!usage.isCodex()) {
-    try {
+  try {
+    if (usage.isCodex()) {
+      // Codex only writes its meter when it makes a request, so between turns
+      // the newest figure can be half an hour old. Ask it, the way /status
+      // does, when the reading has aged.
+      await require('./codex.js').refreshIfStale({
+        now,
+        maxAgeMs: config.refreshSeconds * SECOND,
+        timeoutMs: REFRESH_TIMEOUT_MS,
+      });
+    } else {
       const cached = usage.collect(now);
       await live.refreshIfStale({
         now,
@@ -645,9 +658,9 @@ async function run(now, hookInput) {
         accountUuid: usage.accountUuid(),
         timeoutMs: REFRESH_TIMEOUT_MS,
       });
-    } catch (err) {
-      // The reading on disk is still there.
     }
+  } catch (err) {
+    // The reading on disk is still there.
   }
   const base = usage.collect(now);
   if (!base.utilization) return '';

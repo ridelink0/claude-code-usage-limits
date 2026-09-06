@@ -628,8 +628,109 @@ function meterFromDisk() {
   return null;
 }
 
+// Where a live reading taken by refreshIfStale() is kept, so the hooks and the
+// report see it without asking Codex again.
+function liveFile() {
+  return path.join(homeDir(), 'usage-limits-codex-live.json');
+}
+
+function readLiveMeter() {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(liveFile(), 'utf8'));
+  } catch (err) {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (!Number.isFinite(parsed.at) || !parsed.meter || typeof parsed.meter !== 'object') return null;
+  return parsed;
+}
+
+function writeLiveMeter(reading) {
+  try {
+    const file = liveFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temp = file + '.' + process.pid + '.usage-limits-tmp';
+    fs.writeFileSync(temp, JSON.stringify(reading), 'utf8');
+    fs.renameSync(temp, file);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function attemptFile() {
+  return path.join(homeDir(), 'usage-limits-codex-fetch.json');
+}
+
+// Ask Codex for the meter, but only when the newest reading on disk has aged,
+// and never twice in quick succession. Codex writes its meter into a rollout
+// only when it makes a request, so between turns the newest reading can be
+// half an hour old: the agent then plans against a figure from before the work
+// it just did, says the limit is fine, and hits it. This is what closes that
+// gap, the same way the Claude side takes a fresh /usage reading.
+async function refreshIfStale(options) {
+  const opts = options || {};
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const maxAgeMs = Number.isFinite(opts.maxAgeMs) ? opts.maxAgeMs : 3 * MINUTE;
+  const env = opts.env || process.env;
+  if (opts.fetch === false || String(env.USAGE_LIMITS_FETCH || '').toLowerCase() === 'off') {
+    return { reading: readLiveMeter(), skipped: 'disabled' };
+  }
+
+  const onDisk = meterFromDisk();
+  const live = readLiveMeter();
+  const newestAt = Math.max(onDisk && Number.isFinite(onDisk.at) ? onDisk.at : 0, live ? live.at : 0);
+  if (newestAt > 0 && now - newestAt < maxAgeMs) return { reading: live, skipped: 'fresh' };
+
+  let attempt = null;
+  try {
+    attempt = JSON.parse(fs.readFileSync(attemptFile(), 'utf8'));
+  } catch (err) {
+    attempt = null;
+  }
+  const sinceAttempt = attempt && Number.isFinite(attempt.attemptedAtMs) ? now - attempt.attemptedAtMs : null;
+  if (sinceAttempt !== null && Number.isFinite(attempt.delayMs) && sinceAttempt >= -MINUTE && sinceAttempt < attempt.delayMs) {
+    return { reading: live, skipped: 'backoff' };
+  }
+  // Claim the attempt before making it: Codex's app-server takes about a
+  // second, and several hooks can fire at once.
+  const claim = (delayMs, kind) => {
+    try {
+      fs.writeFileSync(attemptFile(), JSON.stringify({ attemptedAtMs: now, delayMs, kind }), 'utf8');
+    } catch (err) {
+      // One extra attempt is survivable.
+    }
+  };
+  claim(Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 8000, 'inflight');
+
+  try {
+    const reading = await refresh({ codexPath: opts.codexPath, timeoutMs: opts.timeoutMs });
+    if (!reading || !reading.meter) {
+      claim(maxAgeMs, 'empty');
+      return { reading: live, skipped: null, error: 'no meter' };
+    }
+    writeLiveMeter(reading);
+    claim(maxAgeMs, 'ok');
+    return { reading, skipped: null };
+  } catch (err) {
+    // Codex missing or not answering: back off rather than pay for it again on
+    // every prompt.
+    claim(Math.min(10 * MINUTE, Math.max(2 * MINUTE, maxAgeMs * 2)), (err && err.code) || 'error');
+    return { reading: live, skipped: null, error: (err && err.code) || 'error' };
+  }
+}
+
 function collect(now, options) {
-  const found = (options && options.meter) || meterFromDisk();
+  // The newest of the three: a reading handed in, one taken by the hooks, or
+  // the newest one Codex happened to write into a rollout.
+  const given = options && options.meter;
+  const live = readLiveMeter();
+  const disk = meterFromDisk();
+  const best =
+    given ||
+    (live && (!disk || !Number.isFinite(disk.at) || live.at > disk.at) ? live : disk);
+  const found = best;
   const mapped = found ? utilizationFrom(found.meter) : null;
   const plan = planFrom(mapped && mapped.planType);
 
@@ -847,6 +948,11 @@ module.exports = {
   planFrom,
   latestMeter,
   meterFromDisk,
+  liveFile,
+  attemptFile,
+  readLiveMeter,
+  writeLiveMeter,
+  refreshIfStale,
   calibrate,
   MIN_POINTS_MOVED,
   MIN_SAMPLE_TURNS,

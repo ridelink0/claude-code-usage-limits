@@ -63,6 +63,7 @@ function mark(state, sessionId, extra, now) {
       // The keyword is per prompt, so a Stop keeps what the prompt said and the
       // next prompt says again.
       ultracode: extra && typeof extra.ultracode === 'boolean' ? extra.ultracode : Boolean(previous.ultracode),
+      ultrathink: extra && typeof extra.ultrathink === 'boolean' ? extra.ultrathink : Boolean(previous.ultrathink),
     };
     if (extra && extra.model) entry.model = String(extra.model);
     else if (previous.model) entry.model = previous.model;
@@ -107,6 +108,7 @@ function summarise(all, now) {
   return {
     working: Boolean(working),
     ultracode: Boolean(working ? working.ultracode : newest && newest.ultracode),
+    ultrathink: Boolean(working ? working.ultrathink : newest && newest.ultrathink),
     model: (working && working.model) || (newest && newest.model) || null,
     at: newest ? newest.at : null,
   };
@@ -134,6 +136,7 @@ function combine(sources, now, windowMs) {
         state: 'idle',
         stateAt: null,
         ultracode: false,
+        ultrathink: false,
         model: null,
         modelName: null,
         effort: null,
@@ -156,6 +159,7 @@ function combine(sources, now, windowMs) {
     row.stateAt = m.at;
     row.state = m.state === 'working' && at - m.at <= within ? 'working' : 'idle';
     row.ultracode = Boolean(m.ultracode);
+    row.ultrathink = Boolean(m.ultrathink);
     if (m.model && !row.model) row.model = m.model;
   }
   for (const id of Object.keys(src.feed || {})) {

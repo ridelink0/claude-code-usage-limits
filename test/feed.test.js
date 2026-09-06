@@ -201,15 +201,14 @@ test('line paints the percentage only once it is worth noticing', () => {
   assert.match(bars.stripAnsi(text), /^✻ Opus 5  session █+░+ 85%  week █+░+ 12%$/);
 });
 
-test('line shows the spinner while working and the rainbow under ultracode', () => {
+test('line shows the spinner while working, and names the effort it was given', () => {
   const built = view.build({ now: NOW, headers: { five_hour: { used_percentage: 5, resets_at: 1 } }, headersAt: NOW, model: 'claude-opus-5', working: true, effort: 'xhigh' });
-  const a = bars.stripAnsi(feed.line(built, { columns: 120, mode: 'truecolor', tick: 1 }));
-  assert.strictEqual(a.charAt(0), '✢');
-  const ultra = view.build({ now: NOW, headers: { five_hour: { used_percentage: 5, resets_at: 1 } }, headersAt: NOW, model: 'claude-opus-5', working: true, effort: 'xhigh', ultracode: true });
-  const painted = feed.line(ultra, { columns: 120, mode: 'truecolor', tick: 1 });
+  const painted = feed.line(built, { columns: 120, mode: 'truecolor', tick: 1 });
+  assert.strictEqual(bars.stripAnsi(painted).charAt(0), '✢');
+  assert.match(bars.stripAnsi(painted), /xhigh/);
+  assert.strictEqual(bars.stripAnsi(painted).indexOf('ultracode'), -1, 'xhigh is not ultracode');
   const rainbow = bars.THEME.rainbow.concat(bars.THEME.rainbowShimmer).map((rgb) => '38;2;' + rgb.join(';') + 'm');
-  assert.ok(rainbow.some((code) => painted.indexOf(code) !== -1), 'rainbow colours present');
-  assert.match(bars.stripAnsi(painted), /ultracode/, 'named as its own level');
+  assert.strictEqual(rainbow.filter((code) => painted.indexOf(code) !== -1).length, 0, 'nothing rainbow at xhigh');
 });
 
 test('slotFrom keeps what an update does not repeat', () => {
@@ -242,7 +241,38 @@ test('a status line on a fast timer cannot look permanently working', () => {
 
 test('the line spins for its own session only', () => {
   const marks = { me: { at: NOW, state: 'working', ultracode: true }, other: { at: NOW, state: 'working' } };
-  assert.deepStrictEqual(feed.ownState(marks, 'me', NOW + 1000), { working: true, ultracode: true });
-  assert.deepStrictEqual(feed.ownState(marks, 'quiet', NOW + 1000), { working: false, ultracode: false });
-  assert.deepStrictEqual(feed.ownState(marks, 'me', NOW + 20 * 60 * 1000), { working: false, ultracode: false });
+  assert.deepStrictEqual(feed.ownState(marks, 'me', NOW + 1000), { working: true, ultracode: true, ultrathink: false });
+  assert.deepStrictEqual(feed.ownState(marks, 'quiet', NOW + 1000), { working: false, ultracode: false, ultrathink: false });
+  assert.deepStrictEqual(feed.ownState(marks, 'me', NOW + 20 * 60 * 1000), { working: false, ultracode: false, ultrathink: false });
+});
+
+test('the bars run rainbow under ultrathink and purple under the ultracode level', () => {
+  const headers = { five_hour: { used_percentage: 50, resets_at: 1 }, seven_day: { used_percentage: 20, resets_at: 1 } };
+  const rainbowLine = feed.line(view.build({ now: NOW, headers, headersAt: NOW, model: 'claude-opus-5', working: true, effort: 'xhigh', ultrathink: true }), { columns: 120, mode: 'truecolor', tick: 2 });
+  const rainbow = bars.THEME.rainbow.concat(bars.THEME.rainbowShimmer).map((rgb) => '38;2;' + rgb.join(';') + 'm');
+  assert.ok(rainbow.filter((code) => rainbowLine.indexOf(code) !== -1).length >= 3, 'several rainbow colours in the bars');
+  assert.strictEqual(bars.stripAnsi(rainbowLine).charAt(0), '✳', 'the spinner is a spinner, not a rainbow');
+
+  const purpleLine = feed.line(view.build({ now: NOW, headers, headersAt: NOW, model: 'claude-opus-5', working: true, effort: 'ultracode' }), { columns: 120, mode: 'truecolor', tick: 2 });
+  assert.ok(purpleLine.indexOf('38;2;175;135;255') !== -1, 'the ultra purple');
+  assert.ok(purpleLine.indexOf('38;2;177;185;249') === -1, 'not the plain fill');
+  assert.strictEqual(rainbow.filter((code) => purpleLine.indexOf(code) !== -1).length, 0, 'and no rainbow');
+});
+
+test('a display sticks to one session instead of flipping between two', () => {
+  // Two Claudes, same model, different efforts: the header used to swap
+  // between ultracode and xhigh every time either one ticked.
+  const all = {
+    a: { at: NOW, sessionId: 'a', effort: 'ultracode', model: 'claude-opus-5' },
+    b: { at: NOW + 500, sessionId: 'b', effort: 'xhigh', model: 'claude-opus-5' },
+  };
+  const first = feed.stickySlot(all, null, NOW + 1000);
+  assert.strictEqual(first.sessionId, 'b', 'with nothing held, the newest');
+  assert.strictEqual(feed.stickySlot(all, 'a', NOW + 1000).sessionId, 'a', 'held sessions are kept');
+  assert.strictEqual(feed.stickySlot(all, 'a', NOW + 2000).effort, 'ultracode');
+  // Only once the held session has been quiet for a while does it move on.
+  assert.strictEqual(feed.stickySlot(all, 'a', NOW + feed.STICKY_QUIET_MS + 1).sessionId, 'b');
+  // A held session that has gone away is not held.
+  assert.strictEqual(feed.stickySlot(all, 'gone', NOW + 1000).sessionId, 'b');
+  assert.strictEqual(feed.stickySlot({}, 'a', NOW), null);
 });
