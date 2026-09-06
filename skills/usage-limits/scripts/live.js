@@ -108,14 +108,17 @@ function readToken(options) {
     // The keychain is a child process each time, so a long-lived panel or the
     // VS Code extension remembers the answer for a few minutes.
     const nowMs = Date.now();
-    if (opts.cache !== false && keychainMemo && nowMs - keychainMemo.at < KEYCHAIN_MEMO_MS) return keychainMemo.result;
+    // Only the real keychain is remembered; an injected reader (the tests)
+    // is asked every time.
+    const remember = opts.cache !== false && !opts.exec;
+    if (remember && keychainMemo && nowMs - keychainMemo.at < KEYCHAIN_MEMO_MS) return keychainMemo.result;
     const exec = opts.exec || defaultExec;
     try {
       const out = exec(['find-generic-password', '-s', KEYCHAIN_SERVICE, '-w']);
       const parsed = parseCredentials(String(out || '').trim());
       if (parsed && parsed.token) {
         const result = { token: parsed.token, expiresAt: parsed.expiresAt, source: 'keychain' };
-        keychainMemo = { at: nowMs, result };
+        if (remember) keychainMemo = { at: nowMs, result };
         return result;
       }
     } catch (err) {
