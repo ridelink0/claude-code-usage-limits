@@ -70,11 +70,11 @@ const PANEL = '/home/me/panel.js';
 test('openCommand knows how to split each terminal', () => {
   const tmux = panel.openCommand({ TMUX: '/tmp/x' }, PANEL, NODE, 'linux');
   assert.strictEqual(tmux.program, 'tmux');
-  assert.deepStrictEqual(tmux.args, ['split-window', '-h', '-d', '-l', '32%', '"/usr/bin/node" "/home/me/panel.js"']);
+  assert.deepStrictEqual(tmux.args, ['split-window', '-h', '-d', '-l', '24%', '"/usr/bin/node" "/home/me/panel.js"']);
 
   const wez = panel.openCommand({ WEZTERM_PANE: '1' }, PANEL, NODE, 'darwin');
   assert.strictEqual(wez.program, 'wezterm');
-  assert.deepStrictEqual(wez.args, ['cli', 'split-pane', '--right', '--percent', '32', '--', NODE, PANEL]);
+  assert.deepStrictEqual(wez.args, ['cli', 'split-pane', '--right', '--percent', '24', '--', NODE, PANEL]);
 
   const kitty = panel.openCommand({ KITTY_WINDOW_ID: '1' }, PANEL, NODE, 'linux');
   assert.strictEqual(kitty.program, 'kitten');
@@ -88,7 +88,7 @@ test('openCommand knows how to split each terminal', () => {
   assert.strictEqual(wt.shell, true);
   assert.strictEqual(
     wt.command,
-    'start "" wt.exe -w 0 sp -V --size 0.32 --title "Claude usage" --suppressApplicationTitle "C:\\node.exe" "C:\\p\\panel.js"'
+    'start "" wt.exe -w 0 sp -V --size 0.24 --title "Claude usage" --suppressApplicationTitle "C:\\node.exe" "C:\\p\\panel.js"'
   );
 
   const plainWindows = panel.openCommand({}, 'C:\\p\\panel.js', 'C:\\node.exe', 'win32');
@@ -152,7 +152,10 @@ test('render hides the Fable week for another model and fits a narrow pane', () 
   const lines = panel.render(built, { columns: 24, mode: 'none', tick: 0, now: NOW });
   const text = lines.join('\n');
   assert.strictEqual(text.indexOf('Fable'), -1);
-  assert.match(text, /Current session/);
+  // A narrow pane gets the short titles.
+  assert.match(text, /^Session$/m);
+  assert.match(text, /^Week$/m);
+  assert.strictEqual(text.indexOf('Current session'), -1);
   for (const line of lines) assert.ok(bars.visibleWidth(line) <= 24, 'fits: ' + line);
 });
 
@@ -304,11 +307,11 @@ test('the footer reports the network setting, not whether this frame fetched', a
 
 test('tmux older than 3.1 gets the old percentage flag', () => {
   const old = panel.openCommand({ TMUX: '1' }, PANEL, NODE, 'linux', [], { tmuxVersion: 'tmux 3.0a' });
-  assert.deepStrictEqual(old.args.slice(0, 5), ['split-window', '-h', '-d', '-p', '32']);
+  assert.deepStrictEqual(old.args.slice(0, 5), ['split-window', '-h', '-d', '-p', '24']);
   const modern = panel.openCommand({ TMUX: '1' }, PANEL, NODE, 'linux', [], { tmuxVersion: 'tmux 3.4' });
-  assert.deepStrictEqual(modern.args.slice(0, 5), ['split-window', '-h', '-d', '-l', '32%']);
+  assert.deepStrictEqual(modern.args.slice(0, 5), ['split-window', '-h', '-d', '-l', '24%']);
   const unknown = panel.openCommand({ TMUX: '1' }, PANEL, NODE, 'linux', [], {});
-  assert.deepStrictEqual(unknown.args.slice(3, 5), ['-l', '32%']);
+  assert.deepStrictEqual(unknown.args.slice(3, 5), ['-l', '24%']);
 });
 
 test('render cuts to the width that really exists, even under the layout minimum', () => {
@@ -316,4 +319,21 @@ test('render cuts to the width that really exists, even under the layout minimum
   for (const line of panel.render(built, { columns: 15, mode: 'none', now: NOW })) {
     assert.ok(bars.visibleWidth(line) <= 15, 'fits 15: ' + line);
   }
+});
+
+test('the pace line says when the binding window runs out, coloured by how soon', () => {
+  const built = view.build({ now: NOW, utilization: account(NOW).cachedUsageUtilization.utilization, fetchedAtMs: NOW, source: 'api', model: 'claude-opus-5' });
+  built.pace = { label: '5-hour', headroomMs: 25 * 60 * 1000, resetsInMs: HOUR, turnsLeft: 12, runsOut: true };
+  const soon = panel.render(built, { columns: 80, mode: 'truecolor', now: NOW }).join('\n');
+  assert.ok(soon.indexOf('\x1b[38;2;255;193;7mat this pace the 5-hour window runs out in 25m, about 12 turns') !== -1, soon);
+  built.pace = { label: '5-hour', headroomMs: 5 * 60 * 1000, resetsInMs: HOUR, turnsLeft: 2, runsOut: true };
+  const now = panel.render(built, { columns: 80, mode: 'truecolor', now: NOW }).join('\n');
+  assert.ok(now.indexOf('\x1b[38;2;255;107;128mat this pace') !== -1, 'under ten minutes is red');
+  built.pace = { label: '5-hour', headroomMs: 3 * HOUR, resetsInMs: HOUR, turnsLeft: 90, runsOut: false };
+  const fine = panel.render(built, { columns: 80, mode: 'none', now: NOW }).join('\n');
+  assert.strictEqual(fine.indexOf('at this pace'), -1, 'the reset comes first, so nothing to say');
+  built.pace = null;
+  assert.strictEqual(panel.render(built, { columns: 80, mode: 'none', now: NOW }).join('\n').indexOf('at this pace'), -1);
+  assert.strictEqual(panel.parseArgs(['--no-bell']).bell, false);
+  assert.strictEqual(panel.parseArgs([]).bell, true);
 });

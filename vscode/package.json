@@ -1,7 +1,7 @@
 {
   "name": "claude-usage-limits",
   "displayName": "Claude Usage Limits",
-  "description": "Your Claude Code session, weekly and per-model limits as live bars under the Claude Code chat and in the status bar, drawn in Claude's own colours from Claude's own numbers.",
+  "description": "Your Claude Code session, weekly and per-model limits as live bars in a view beside the Claude Code chat, drawn in Claude's own colours from Claude's own numbers.",
   "version": "1.11.2",
   "publisher": "ridelink",
   "license": "MIT",
@@ -15,7 +15,7 @@
     "url": "https://github.com/ridelink0/claude-code-usage-limits/issues"
   },
   "engines": {
-    "vscode": "^1.96.0"
+    "vscode": "^1.106.0"
   },
   "categories": [
     "Other",
@@ -26,7 +26,7 @@
     "claude code",
     "usage",
     "rate limit",
-    "status bar"
+    "sidebar"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -34,7 +34,7 @@
   "main": "./extension.js",
   "contributes": {
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "claude-usage-limits",
           "title": "Claude usage",
@@ -43,20 +43,11 @@
       ]
     },
     "views": {
-      "claude-sidebar-secondary": [
-        {
-          "type": "webview",
-          "id": "claudeUsageLimits.underChat",
-          "name": "Usage limits",
-          "when": "claudeUsageLimits.hostPresent"
-        }
-      ],
       "claude-usage-limits": [
         {
           "type": "webview",
           "id": "claudeUsageLimits.panel",
-          "name": "Claude usage",
-          "when": "claudeUsageLimits.standalone"
+          "name": "Claude usage"
         }
       ]
     },
@@ -84,10 +75,15 @@
           "minimum": 15,
           "description": "Seconds between readings from the usage endpoint."
         },
-        "claudeUsageLimits.statusBar": {
+        "claudeUsageLimits.showOnStartup": {
           "type": "boolean",
           "default": true,
-          "description": "Show the percentages in the status bar."
+          "description": "Open the panel in the right sidebar when VS Code starts."
+        },
+        "claudeUsageLimits.statusBar": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also show the percentages in the status bar at the bottom. Off by default: the panel beside the chat is the one place."
         }
       }
     }

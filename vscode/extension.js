@@ -211,7 +211,8 @@ function activate(context) {
   }
 
   function updateStatusBar(built, prepared) {
-    if (!config().get('statusBar', true)) {
+    // Off unless asked for: the panel beside the chat is the one place.
+    if (!config().get('statusBar', false)) {
       item.hide();
       return;
     }
@@ -296,11 +297,10 @@ function activate(context) {
     },
   };
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('claudeUsageLimits.underChat', provider),
     vscode.window.registerWebviewViewProvider('claudeUsageLimits.panel', provider),
     vscode.commands.registerCommand('claudeUsageLimits.refresh', () => refresh(true)),
     vscode.commands.registerCommand('claudeUsageLimits.show', () =>
-      vscode.commands.executeCommand(host ? 'claudeUsageLimits.underChat.focus' : 'claudeUsageLimits.panel.focus')
+      vscode.commands.executeCommand('claudeUsageLimits.panel.focus')
     ),
     vscode.window.onDidChangeWindowState((windowState) => {
       if (windowState.focused) refresh(true);
@@ -319,6 +319,11 @@ function activate(context) {
   state.timer = setInterval(tick, FILE_CHECK_MS);
   context.subscriptions.push({ dispose: () => clearInterval(state.timer) });
   refresh(true);
+  // Open the panel in the right sidebar, so it is there beside the chat
+  // without anyone having to find it.
+  if (config().get('showOnStartup', true)) {
+    Promise.resolve(vscode.commands.executeCommand('workbench.view.extension.claude-usage-limits')).catch(() => {});
+  }
 }
 
 function deactivate() {}

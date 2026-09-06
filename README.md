@@ -347,6 +347,12 @@ every tool call keeps it so, the Stop hook marks it idle), so the list is live
 without anyone polling anything. The status line adds `+1 working` when
 another session is spending.
 
+Under the bars it says when the binding window runs out at the pace of the
+last hour, measured from every session's spend, whenever that comes before
+the reset: `at this pace the 5-hour window runs out in 25m, about 12 turns`,
+yellow inside half an hour and red inside ten minutes. The pane rings the
+terminal bell once when a window turns yellow and once more when it turns red.
+
 `panel` alone runs it in the current pane, `--once` prints one frame, `--json`
 prints the fields, `--no-fetch` (or `USAGE_LIMITS_FETCH=off`) keeps it
 entirely offline on the reading already on disk, and `--poll N` sets the
@@ -461,6 +467,7 @@ minute, so it costs about 400ms cold and 120ms warm.
 | `USAGE_LIMITS_CLOCK` | from settings | `12h` or `24h` for reset times; otherwise follows Claude Code's `timeFormat`. |
 | `USAGE_LIMITS_COLOUR` | detected | `256` or `none` to override colour detection. `NO_COLOR` and `FORCE_COLOR` are honoured. |
 | `USAGE_LIMITS_ASCII` | off | `1` draws the bars and the spinner with plain characters. |
+| `USAGE_LIMITS_BELL` | on | `off` silences the panel's terminal bell when a window turns yellow or red (`--no-bell` does the same). |
 
 ## What a session cost
 
@@ -666,12 +673,10 @@ allowance and never quotes a price, so the percentages stand alone. And
 
 The Claude Code extension for VS Code shows the limits only when you ask with
 `/usage`, and it does not render a custom status line. So there is an
-extension of its own in [vscode/](vscode/): the same bars as a view that sits
-directly under the Claude Code chat in the secondary side bar (it contributes
-into the Claude Code extension's own view container, so there is no gap and
-nothing to arrange), a status bar item with the percentages that turns yellow
-and red at the same thresholds, the Sessions list, and the same animations in
-CSS. It carries the plugin's scripts inside it, so it has no dependencies and
+extension of its own in [vscode/](vscode/): the same bars as one full-height
+view in the right sidebar, beside the chat, opened for you when VS Code
+starts, with the Sessions list and the same animations in CSS. Nothing at the
+bottom unless you turn `claudeUsageLimits.statusBar` on. It carries the plugin's scripts inside it, so it has no dependencies and
 reads the same files and takes the same reading as the terminal panel.
 
 ```

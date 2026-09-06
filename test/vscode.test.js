@@ -68,7 +68,7 @@ function fakeVscode(record) {
       onDidChangeWindowState: () => ({ dispose() {} }),
     },
     workspace: {
-      getConfiguration: () => ({ get: (key, fallback) => (key === 'fetch' ? false : fallback) }),
+      getConfiguration: () => ({ get: (key, fallback) => (key === 'fetch' ? false : key === 'statusBar' ? true : fallback) }),
       onDidChangeConfiguration: () => ({ dispose() {} }),
     },
   };
@@ -114,8 +114,9 @@ test('the extension activates, paints the status bar and renders the view', asyn
 
     assert.deepStrictEqual(record.commands[0], ['setContext', 'claudeUsageLimits.hostPresent', true]);
     assert.deepStrictEqual(record.commands[1], ['setContext', 'claudeUsageLimits.standalone', false]);
-    assert.ok(record.providers['claudeUsageLimits.underChat'], 'the view under the chat is registered');
-    assert.ok(record.providers['claudeUsageLimits.panel'], 'the standalone view is registered');
+    assert.ok(record.providers['claudeUsageLimits.panel'], 'the one view, in the right sidebar');
+    assert.ok(!record.providers['claudeUsageLimits.underChat'], 'nothing under the chat any more');
+    assert.ok(record.commands.some((c) => c[0] === 'workbench.view.extension.claude-usage-limits'), 'opens itself on startup');
     assert.ok(record.registered['claudeUsageLimits.refresh']);
     assert.match(record.item.text, /5h 85%/);
     assert.match(record.item.text, /wk 7%/);
@@ -137,7 +138,7 @@ test('the extension activates, paints the status bar and renders the view', asyn
       },
       onDidDispose: () => {},
     };
-    record.providers['claudeUsageLimits.underChat'].resolveWebviewView(view);
+    record.providers['claudeUsageLimits.panel'].resolveWebviewView(view);
     assert.match(view.webview.html, /Content-Security-Policy/);
     assert.match(view.webview.html, /Claude usage/);
     assert.match(view.webview.html, /rgb\(80,83,112\)/, 'rate_limit_empty paints the track');

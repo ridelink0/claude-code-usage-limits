@@ -22,6 +22,9 @@ every prompt so it plans the work to fit.
 
 ## Install
 
+Needs VS Code 1.106 (October 2025) or newer, the first release that lets an
+extension put a view container in the right sidebar.
+
 From the `.vsix` attached to each
 [release](https://github.com/ridelink0/claude-code-usage-limits/releases)
 (Marketplace publishing is pending; see the end of this page):

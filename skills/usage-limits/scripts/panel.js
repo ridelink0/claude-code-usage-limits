@@ -47,6 +47,7 @@ const FILE_CHECK_MS = SECOND;
 const FRAME_MS = 100;
 const MIN_COLUMNS = 24;
 const TITLE = 'Claude usage';
+const LEVEL_RANK = { fill: 0, warning: 1, error: 2 };
 
 const HELP = `claude-usage-limits panel - live limits in a pane beside the chat
 
@@ -58,6 +59,7 @@ const HELP = `claude-usage-limits panel - live limits in a pane beside the chat
   panel --poll 45      seconds between readings (default 30 working, 120 idle)
   panel --width 40     draw for this many columns instead of the terminal's
   panel --ascii        plain characters instead of block glyphs
+  panel --no-bell      no terminal bell when a window turns yellow or red
 
 Shows the current session (5-hour) window, the current week, and the week for
 the model in use when the account caps that model on its own. Bars turn yellow
@@ -88,12 +90,14 @@ function parseArgs(argv) {
     width: null,
     help: false,
     ascii: String(process.env.USAGE_LIMITS_ASCII || '') === '1',
+    bell: true,
     hostName: null,
   };
   const list = argv || [];
   for (let i = 0; i < list.length; i += 1) {
     const arg = list[i];
     if (arg === '--once') args.once = true;
+    else if (arg === '--no-bell') args.bell = false;
     else if (arg === '--json') args.json = true;
     else if (arg === '--open') args.open = true;
     else if (arg === '--no-fetch') args.fetch = false;
@@ -182,11 +186,38 @@ async function snapshot(options) {
   built.sessionsList = onCodex ? [] : loadSessions(now);
   built.sessions = onCodex ? 0 : Math.max(built.sessionsList.length, brief.liveSessions(brief.readCache(), now, brief.LIVE_WINDOW_MS, null));
   built.othersWorking = built.sessionsList.filter((row) => row.state === 'working').length;
+  // What the pace says: when the binding window runs out at the current rate,
+  // if that comes before its reset. The transcript scan behind it belongs to
+  // the report, so it is taken with the readings, not with every frame; the
+  // frames in between carry the last answer forward.
+  built.pace = opts.pace !== undefined ? opts.pace : await paceOf(now);
   // Whether the panel is allowed the network at all, which is what the footer
   // reports. A frame rebuilt from disk between readings is not "network off".
   built.fetch = opts.network !== undefined ? Boolean(opts.network) : Boolean(opts.fetch);
   built.outcome = outcome;
   return built;
+}
+
+// The report's runway: how long the binding window lasts at the pace of the
+// last hour, measured from every session's spend. The percentage says where
+// you are; this says when you hit the wall, which is the number the rival
+// monitors lead with and the one that matters on a busy afternoon.
+async function paceOf(now) {
+  try {
+    const data = await usage.report(now, {});
+    const binding = data && data.binding;
+    if (!binding || !Number.isFinite(binding.headroomMs)) return null;
+    const resetsInMs = Number.isFinite(binding.resetsAt) ? binding.resetsAt - now : null;
+    return {
+      label: binding.label,
+      headroomMs: binding.headroomMs,
+      resetsInMs,
+      turnsLeft: Number.isFinite(binding.turnsLeft) ? binding.turnsLeft : null,
+      runsOut: binding.verdict === 'runs-out' || (resetsInMs !== null && binding.headroomMs < resetsInMs),
+    };
+  } catch (err) {
+    return null;
+  }
 }
 
 // Codex has no hooks to say when it is working, but it appends to its rollout
@@ -250,6 +281,13 @@ function fit(text, width) {
     i += ch.length;
   }
   return out + '\x1b[0m';
+}
+
+// In a narrow pane the titles are the short ones.
+function shortTitle(row) {
+  if (row.key === 'five_hour') return 'Session';
+  if (row.key === 'seven_day') return 'Week';
+  return String(row.title).replace(/^Current week /, 'Week ').replace(/^Current /, '');
 }
 
 function subline(row, mode, opts) {
@@ -336,7 +374,7 @@ function render(built, options) {
       row.level === 'fill' ? row.percentText : bars.paint(row.percentText, bars.levelColour(row.level), mode);
     body.push({
       lines: [
-        bars.bold(row.title, mode),
+        bars.bold(columns < 34 ? shortTitle(row) : row.title, mode),
         (row.percent === null ? bars.paint((ascii ? '-' : '░').repeat(barWidth), bars.THEME.empty, mode) : bars.bar(row.percent, barWidth, { mode, level: row.level, ascii })) +
           ' ' +
           percent,
@@ -382,6 +420,13 @@ function render(built, options) {
     const colour = noteColour(built);
     footer.push(colour ? bars.paint(built.note, colour, mode) : bars.dim(built.note, mode));
   }
+  if (built.pace && built.pace.runsOut && Number.isFinite(built.pace.headroomMs)) {
+    const text =
+      'at this pace the ' + built.pace.label + ' window runs out in ' + usage.formatDuration(built.pace.headroomMs) +
+      (Number.isFinite(built.pace.turnsLeft) ? ', about ' + built.pace.turnsLeft + ' turns' : '');
+    const colour = built.pace.headroomMs < 10 * MINUTE ? bars.THEME.error : built.pace.headroomMs < 30 * MINUTE ? bars.THEME.warning : null;
+    footer.push(colour ? bars.paint(text, colour, mode) : bars.dim(text, mode));
+  }
   footer.push(stateLine(built, mode));
   if (opts.interactive !== false) footer.push(bars.dim('q quit · r refresh', mode));
 
@@ -425,21 +470,21 @@ function openCommand(env, panelPath, nodePath, platform, extraArgs, options) {
     const old = version && (Number(version[1]) < 3 || (Number(version[1]) === 3 && Number(version[2]) < 1));
     return {
       program: 'tmux',
-      args: ['split-window', '-h', '-d'].concat(old ? ['-p', '32'] : ['-l', '32%'], [cmd]),
+      args: ['split-window', '-h', '-d'].concat(old ? ['-p', '24'] : ['-l', '24%'], [cmd]),
       note: 'opened a pane to the right in tmux',
     };
   }
   if (e.WEZTERM_PANE) {
     return {
       program: 'wezterm',
-      args: ['cli', 'split-pane', '--right', '--percent', '32', '--', node, panel].concat(extra),
+      args: ['cli', 'split-pane', '--right', '--percent', '24', '--', node, panel].concat(extra),
       note: 'opened a pane to the right in WezTerm',
     };
   }
   if (e.KITTY_WINDOW_ID) {
     return {
       program: 'kitten',
-      args: ['@', 'launch', '--location=vsplit', '--bias=32', '--cwd=current', node, panel].concat(extra),
+      args: ['@', 'launch', '--location=vsplit', '--bias=24', '--cwd=current', node, panel].concat(extra),
       note: 'opened a pane to the right in kitty (needs allow_remote_control)',
     };
   }
@@ -454,7 +499,7 @@ function openCommand(env, panelPath, nodePath, platform, extraArgs, options) {
     if (e.WT_SESSION) {
       return {
         command:
-          'start "" wt.exe -w 0 sp -V --size 0.32 --title "Claude usage" --suppressApplicationTitle ' + cmd,
+          'start "" wt.exe -w 0 sp -V --size 0.24 --title "Claude usage" --suppressApplicationTitle ' + cmd,
         shell: true,
         note: 'opened a pane to the right in Windows Terminal',
       };
@@ -539,8 +584,10 @@ async function interactive(args) {
   const clock = feed.clockFor(settings, env);
   const mode = bars.colourMode(env, out.isTTY);
   const fetch = args.fetch && !live.fetchDisabled(env);
+  const bell = args.bell && String(env.USAGE_LIMITS_BELL || '').toLowerCase() !== 'off';
 
   const state = {
+    levels: {},
     built: null,
     outcome: null,
     lastFetchAt: 0,
@@ -643,9 +690,24 @@ async function interactive(args) {
     if (!state.built || now - state.lastCheck >= FILE_CHECK_MS) {
       state.lastCheck = now;
       try {
-        state.built = await snapshot({ fetch: false, network: fetch, env, now, outcome: state.outcome });
+        state.built = await snapshot({
+          fetch: false,
+          network: fetch,
+          env,
+          now,
+          outcome: state.outcome,
+          pace: state.built ? state.built.pace : null,
+        });
       } catch (err) {
         // Keep the last frame; a transient read error is not worth a blank.
+      }
+      // One bell when a window first turns yellow, another when it turns red.
+      if (bell && state.built) {
+        for (const row of state.built.rows) {
+          const before = state.levels[row.key];
+          if (before !== undefined && LEVEL_RANK[row.level] > LEVEL_RANK[before]) out.write('\x07');
+          state.levels[row.key] = row.level;
+        }
       }
       // A window that rolled over deserves a reading sooner than the timer.
       if (fetch && state.built && state.built.rows.some((row) => row.stale) && state.delayMs > 5 * SECOND) {
