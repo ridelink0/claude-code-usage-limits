@@ -26,6 +26,7 @@ const bars = require('./bars.js');
 const view = require('./view.js');
 const activity = require('./activity.js');
 const statusline = require('./statusline.js');
+const live = require('./live.js');
 
 const KEEP_SESSIONS = 8;
 // Two updates this close together mean Claude is mid-turn.
@@ -69,16 +70,24 @@ function readFeed() {
 }
 
 function writeFeed(all) {
-  try {
-    const file = feedFile();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const temp = file + '.' + process.pid + '.usage-limits-tmp';
-    fs.writeFileSync(temp, JSON.stringify(all), 'utf8');
-    fs.renameSync(temp, file);
-    return true;
-  } catch (err) {
-    return false;
-  }
+  return live.writeAtomic(feedFile(), JSON.stringify(all));
+}
+
+// Two updates a few seconds apart mean a turn in progress, unless the status
+// line is on a timer that fires that often anyway, in which case the gap says
+// nothing and only the hooks' marks do.
+function gapMeansWorking(settings) {
+  const line = settings && settings.statusLine;
+  const every = line && Number.isFinite(line.refreshInterval) ? line.refreshInterval * 1000 : null;
+  return !(every !== null && every <= WORKING_GAP_MS);
+}
+
+// This session's own mark, from the hooks. Another window working must not
+// spin this one's line.
+function ownState(marks, sessionId, now) {
+  const mine = sessionId && marks ? marks[sessionId] : null;
+  if (!mine || !Number.isFinite(mine.at) || now - mine.at > activity.STALE_MS) return { working: false, ultracode: false };
+  return { working: mine.state === 'working', ultracode: Boolean(mine.ultracode) };
 }
 
 function number(value) {
@@ -231,13 +240,13 @@ function readStdin() {
 
 // The status line that was there before ours, run with the same stdin, so
 // installing this one loses nothing.
-function runPrevious(command, raw, env) {
+function runPrevious(command, raw, env, budgetMs) {
   try {
     const result = spawnSync(command, {
       shell: true,
       input: raw,
       encoding: 'utf8',
-      timeout: CHAIN_TIMEOUT_MS,
+      timeout: Math.max(300, Number.isFinite(budgetMs) ? budgetMs : CHAIN_TIMEOUT_MS),
       env: env || process.env,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'ignore'],
@@ -268,9 +277,18 @@ function motionOff(settings, env) {
   return Boolean(settings && settings.prefersReducedMotion === true);
 }
 
+// Written and flushed before the process is allowed to end: stdout is a pipe
+// here, and a pipe write can still be in flight when process.exit runs.
+function out(text) {
+  return new Promise((resolve) => {
+    process.stdout.write(text, () => resolve());
+  });
+}
+
 async function main(argv) {
   const env = process.env;
-  const now = Date.now();
+  const started = Date.now();
+  const now = started;
   let chained = '';
   try {
     usage.setHost(host.detect(argv || [], env));
@@ -285,7 +303,8 @@ async function main(argv) {
 
     const state = statusline.readState();
     if (state && state.chain && state.previous && state.previous.type === 'command' && state.previous.command) {
-      chained = runPrevious(state.previous.command, raw, env);
+      // Whatever the stdin wait used comes out of the previous line's time.
+      chained = runPrevious(state.previous.command, raw, env, CHAIN_TIMEOUT_MS - (Date.now() - started));
     }
 
     let all = readFeed();
@@ -296,11 +315,11 @@ async function main(argv) {
 
     const off = String(env.USAGE_LIMITS_STATUSLINE || '').toLowerCase();
     if (off === 'off' || off === '0' || off === 'false') {
-      if (chained) process.stdout.write(chained + '\n');
+      if (chained) await out(chained + '\n');
       return 0;
     }
     if (usage.isCodex()) {
-      if (chained) process.stdout.write(chained + '\n');
+      if (chained) await out(chained + '\n');
       return 0;
     }
 
@@ -308,9 +327,11 @@ async function main(argv) {
     const collected = usage.collect(now);
     const settings = settingsFor(configDir());
     const marks = activity.read();
-    const seen = activity.summarise(marks, now);
-    // The other sessions working right now, so the line can say so.
     const mine = input && input.session_id ? input.session_id : null;
+    // This session's own state; only with no session id at all does the
+    // machine-wide picture stand in for it.
+    const own = mine ? ownState(marks, mine, now) : activity.summarise(marks, now);
+    // The other sessions working right now, so the line can say so.
     const othersWorking = activity
       .combine({ marks, feed: all }, now, activity.STALE_MS)
       .filter((row) => row.state === 'working' && row.sessionId !== mine).length;
@@ -324,8 +345,8 @@ async function main(argv) {
       model: slot ? slot.model : null,
       modelName: slot ? slot.modelName : null,
       effort: slot ? slot.effort : null,
-      working: isWorking(slot, now) || seen.working,
-      ultracode: seen.ultracode || settings.ultracode === true,
+      working: own.working || (gapMeansWorking(settings) && isWorking(slot, now)),
+      ultracode: own.ultracode || settings.ultracode === true,
       settingsModel: collected.settings ? collected.settings.model : null,
       env,
     });
@@ -339,10 +360,10 @@ async function main(argv) {
       ascii: String(env.USAGE_LIMITS_ASCII || '') === '1',
       clock: clockFor(settings, env),
     });
-    process.stdout.write((chained ? chained + '\n' : '') + text + '\n');
+    await out((chained ? chained + '\n' : '') + text + '\n');
     return 0;
   } catch (err) {
-    if (chained) process.stdout.write(chained + '\n');
+    if (chained) await out(chained + '\n');
     return 0;
   }
 }
@@ -358,6 +379,8 @@ module.exports = {
   record,
   newest,
   isWorking,
+  gapMeansWorking,
+  ownState,
   line,
   runPrevious,
   clockFor,

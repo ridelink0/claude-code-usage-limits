@@ -301,3 +301,19 @@ test('the footer reports the network setting, not whether this frame fetched', a
     else process.env.CLAUDE_CONFIG_DIR = before;
   }
 });
+
+test('tmux older than 3.1 gets the old percentage flag', () => {
+  const old = panel.openCommand({ TMUX: '1' }, PANEL, NODE, 'linux', [], { tmuxVersion: 'tmux 3.0a' });
+  assert.deepStrictEqual(old.args.slice(0, 5), ['split-window', '-h', '-d', '-p', '32']);
+  const modern = panel.openCommand({ TMUX: '1' }, PANEL, NODE, 'linux', [], { tmuxVersion: 'tmux 3.4' });
+  assert.deepStrictEqual(modern.args.slice(0, 5), ['split-window', '-h', '-d', '-l', '32%']);
+  const unknown = panel.openCommand({ TMUX: '1' }, PANEL, NODE, 'linux', [], {});
+  assert.deepStrictEqual(unknown.args.slice(3, 5), ['-l', '32%']);
+});
+
+test('render cuts to the width that really exists, even under the layout minimum', () => {
+  const built = view.build({ now: NOW, utilization: account(NOW).cachedUsageUtilization.utilization, fetchedAtMs: NOW, source: 'api', model: 'claude-opus-5' });
+  for (const line of panel.render(built, { columns: 15, mode: 'none', now: NOW })) {
+    assert.ok(bars.visibleWidth(line) <= 15, 'fits 15: ' + line);
+  }
+});

@@ -281,7 +281,7 @@ function stateLine(built, mode) {
 function noteColour(built) {
   const kind = built.outcome && !built.outcome.ok ? built.outcome.kind : null;
   if (kind === 'unauthorized' || kind === 'forbidden' || kind === 'no_credentials') return bars.THEME.error;
-  if (kind === 'offline' || kind === 'rate_limited' || kind === 'server' || kind === 'http' || kind === 'bad_response') {
+  if (kind === 'offline' || kind === 'expired' || kind === 'rate_limited' || kind === 'server' || kind === 'http' || kind === 'bad_response') {
     return bars.THEME.warning;
   }
   return null;
@@ -291,7 +291,10 @@ function noteColour(built) {
 // dropping breathing room first and footers second.
 function render(built, options) {
   const opts = options || {};
-  const columns = Math.max(MIN_COLUMNS, Number.isFinite(opts.columns) ? Math.floor(opts.columns) : 40);
+  // Laid out for at least MIN_COLUMNS, but cut to the width that really
+  // exists: a line wider than the pane wraps, and a wrapped frame scrolls.
+  const real = Number.isFinite(opts.columns) ? Math.max(1, Math.floor(opts.columns)) : 40;
+  const columns = Math.max(MIN_COLUMNS, real);
   const height = Number.isFinite(opts.rows) ? Math.floor(opts.rows) : null;
   const mode = opts.mode || 'none';
   const tick = Number.isFinite(opts.tick) ? opts.tick : 0;
@@ -399,7 +402,7 @@ function render(built, options) {
   if (height !== null && lines.length > height) lines = compose(false, true);
   if (height !== null && lines.length > height) lines = compose(false, false);
   if (height !== null && lines.length > height) lines = lines.slice(0, height);
-  return lines.map((line) => fit(line, columns));
+  return lines.map((line) => fit(line, real));
 }
 
 function quote(value) {
@@ -408,7 +411,7 @@ function quote(value) {
 
 // How to put the panel in a pane to the right of the current one, for the
 // terminals that can be told to. Pure, so the table can be tested.
-function openCommand(env, panelPath, nodePath, platform, extraArgs) {
+function openCommand(env, panelPath, nodePath, platform, extraArgs, options) {
   const e = env || process.env;
   const os = platform || process.platform;
   const node = nodePath || process.execPath;
@@ -417,9 +420,12 @@ function openCommand(env, panelPath, nodePath, platform, extraArgs) {
   const cmd = [quote(node), quote(panel)].concat(extra.map(quote)).join(' ');
 
   if (e.TMUX) {
+    // A percentage on -l arrived in tmux 3.1; older ones want the old -p.
+    const version = options && options.tmuxVersion ? String(options.tmuxVersion).match(/(\d+)\.(\d+)/) : null;
+    const old = version && (Number(version[1]) < 3 || (Number(version[1]) === 3 && Number(version[2]) < 1));
     return {
       program: 'tmux',
-      args: ['split-window', '-h', '-d', '-l', '32%', cmd],
+      args: ['split-window', '-h', '-d'].concat(old ? ['-p', '32'] : ['-l', '32%'], [cmd]),
       note: 'opened a pane to the right in tmux',
     };
   }
@@ -468,8 +474,20 @@ function openCommand(env, panelPath, nodePath, platform, extraArgs) {
   return null;
 }
 
+function tmuxVersion() {
+  try {
+    const result = require('child_process').spawnSync('tmux', ['-V'], { encoding: 'utf8', timeout: 2000, windowsHide: true });
+    return result && result.stdout ? String(result.stdout).trim() : null;
+  } catch (err) {
+    return null;
+  }
+}
+
 function openPanel(env, extraArgs) {
-  const plan = openCommand(env, __filename, process.execPath, process.platform, extraArgs);
+  const e = env || process.env;
+  const plan = openCommand(e, __filename, process.execPath, process.platform, extraArgs, {
+    tmuxVersion: e.TMUX ? tmuxVersion() : null,
+  });
   if (!plan) {
     process.stdout.write(
       'This terminal cannot be told to split. Open a second pane to the right and run:\n  ' +
@@ -601,21 +619,28 @@ async function interactive(args) {
     const now = Date.now();
     const due = fetch && !state.fetching && now - state.lastFetchAt >= state.delayMs;
     if (due) {
+      // The reading runs beside the frames, never in front of them: a slow
+      // network must not freeze the spinner or the countdown.
       state.fetching = true;
-      try {
-        state.built = await snapshot({ fetch: true, network: fetch, env, now });
-        state.outcome = state.built.outcome;
-      } catch (err) {
-        state.outcome = { ok: false, kind: 'bad_response', message: err.message };
-      }
-      state.lastFetchAt = Date.now();
-      state.delayMs = live.nextDelayMs(state.outcome, state.delayMs, {
-        baseMs: pollBase(state.built, args, env),
-        maxMs: POLL_IDLE_MS,
-      });
-      state.fetching = false;
-      state.dirty = true;
-    } else if (!state.built || now - state.lastCheck >= FILE_CHECK_MS) {
+      snapshot({ fetch: true, network: fetch, env, now })
+        .then((built) => {
+          state.built = built;
+          state.outcome = built.outcome;
+        })
+        .catch((err) => {
+          state.outcome = { ok: false, kind: 'bad_response', message: err && err.message ? err.message : String(err) };
+        })
+        .then(() => {
+          state.lastFetchAt = Date.now();
+          state.delayMs = live.nextDelayMs(state.outcome, state.delayMs, {
+            baseMs: pollBase(state.built, args, env),
+            maxMs: POLL_IDLE_MS,
+          });
+          state.fetching = false;
+          state.dirty = true;
+        });
+    }
+    if (!state.built || now - state.lastCheck >= FILE_CHECK_MS) {
       state.lastCheck = now;
       try {
         state.built = await snapshot({ fetch: false, network: fetch, env, now, outcome: state.outcome });

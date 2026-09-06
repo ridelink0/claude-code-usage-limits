@@ -105,12 +105,18 @@ function readToken(options) {
   }
 
   if (platform === 'darwin') {
+    // The keychain is a child process each time, so a long-lived panel or the
+    // VS Code extension remembers the answer for a few minutes.
+    const nowMs = Date.now();
+    if (opts.cache !== false && keychainMemo && nowMs - keychainMemo.at < KEYCHAIN_MEMO_MS) return keychainMemo.result;
     const exec = opts.exec || defaultExec;
     try {
       const out = exec(['find-generic-password', '-s', KEYCHAIN_SERVICE, '-w']);
       const parsed = parseCredentials(String(out || '').trim());
       if (parsed && parsed.token) {
-        return { token: parsed.token, expiresAt: parsed.expiresAt, source: 'keychain' };
+        const result = { token: parsed.token, expiresAt: parsed.expiresAt, source: 'keychain' };
+        keychainMemo = { at: nowMs, result };
+        return result;
       }
     } catch (err) {
       // No keychain entry, or no permission to read it: same answer as no file.
@@ -118,6 +124,34 @@ function readToken(options) {
   }
 
   return { token: null, reason: 'no_credentials' };
+}
+
+let keychainMemo = null;
+const KEYCHAIN_MEMO_MS = 5 * MINUTE;
+
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+function isLoopback(hostname) {
+  return LOOPBACK.has(String(hostname || '').toLowerCase());
+}
+
+// Where the login may be sent: Anthropic over https, or this machine (the
+// tests run a stub on a loopback port). A project's settings file can put
+// anything into the environment of a hook, and USAGE_LIMITS_USAGE_URL must
+// not be a way to walk off with the token.
+function allowedUrl(raw) {
+  if (!raw) return null;
+  let url;
+  try {
+    url = new URL(String(raw));
+  } catch (err) {
+    return null;
+  }
+  if (isLoopback(url.hostname)) return url.toString();
+  if (url.protocol !== 'https:') return null;
+  const host = url.hostname.toLowerCase();
+  if (host === 'anthropic.com' || host.endsWith('.anthropic.com')) return url.toString();
+  return null;
 }
 
 function bad(kind, status, retryAfterMs, message) {
@@ -150,12 +184,11 @@ function fetchUsage(options) {
   return new Promise((resolve) => {
     if (!opts.token) return resolve(bad('no_credentials', null, null, 'no Claude login found'));
 
-    let url;
-    try {
-      url = new URL(opts.url || USAGE_URL);
-    } catch (err) {
-      return resolve(bad('bad_response', null, null, 'the usage url is not a url'));
+    const permitted = allowedUrl(opts.url || USAGE_URL);
+    if (!permitted) {
+      return resolve(bad('bad_response', null, null, 'refusing to send the login anywhere but Anthropic over https'));
     }
+    const url = new URL(permitted);
     const client = url.protocol === 'http:' ? http : https;
     const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
 
@@ -242,6 +275,7 @@ function nextDelayMs(outcome, previousMs, options) {
         ? Math.min(Math.max(outcome.retryAfterMs, 1000), 10 * MINUTE)
         : 60 * 1000;
     case 'unauthorized':
+    case 'expired':
     case 'forbidden':
     case 'no_credentials':
       return 30 * 1000;
@@ -263,6 +297,8 @@ function describe(outcome) {
       return 'offline';
     case 'unauthorized':
       return 'sign in to Claude Code again';
+    case 'expired':
+      return 'login expired, Claude Code renews it on its next call';
     case 'forbidden':
       return 'usage not available for this login';
     case 'no_credentials':
@@ -287,18 +323,28 @@ function readLive() {
   return parsed;
 }
 
-// Through a temporary file, so a reader never sees half a reading.
-function writeLive(snapshot) {
+// Through a temporary file named for this process, so a reader never sees
+// half a reading and two writers never share a temp file. A rename that fails
+// (Windows, with the target held open) leaves nothing behind.
+function writeAtomic(file, text) {
+  const temp = file + '.' + process.pid + '.usage-limits-tmp';
   try {
-    const file = liveFile();
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const temp = file + '.usage-limits-tmp';
-    fs.writeFileSync(temp, JSON.stringify(snapshot), 'utf8');
+    fs.writeFileSync(temp, text, 'utf8');
     fs.renameSync(temp, file);
     return true;
   } catch (err) {
+    try {
+      fs.unlinkSync(temp);
+    } catch (gone) {
+      // Nothing to clean up.
+    }
     return false;
   }
+}
+
+function writeLive(snapshot) {
+  return writeAtomic(liveFile(), JSON.stringify(snapshot));
 }
 
 function fetchDisabled(env) {
@@ -320,9 +366,14 @@ async function refresh(options) {
       snapshot: readLive(),
     };
   }
+  // A token past its expiry gets a 401 and nothing else. Claude Code renews it
+  // on its own next call, so do not send it, and say what is being waited for.
+  if (Number.isFinite(creds.expiresAt) && creds.expiresAt < (Number.isFinite(opts.now) ? opts.now : Date.now())) {
+    return { outcome: bad('expired', null, null, 'the login has expired; Claude Code renews it on its next call'), snapshot: readLive() };
+  }
   const outcome = await fetchUsage({
     token: creds.token,
-    url: opts.url || env.USAGE_LIMITS_USAGE_URL || USAGE_URL,
+    url: allowedUrl(opts.url || env.USAGE_LIMITS_USAGE_URL) || USAGE_URL,
     timeoutMs: opts.timeoutMs,
   });
   if (!outcome.ok) return { outcome, snapshot: readLive() };
@@ -352,11 +403,9 @@ function readAttempt() {
 }
 
 function writeAttempt(record) {
-  try {
-    fs.writeFileSync(attemptFile(), JSON.stringify(record), 'utf8');
-  } catch (err) {
-    // Without it the next caller merely tries again a little sooner.
-  }
+  // Atomic, so a concurrent reader never parses half a record and skips the
+  // backoff by accident.
+  writeAtomic(attemptFile(), JSON.stringify(record));
 }
 
 // A reading only when the one on disk has aged. This is what the hooks call:
@@ -381,9 +430,18 @@ async function refreshIfStale(options) {
   if (newestAt > 0 && now - newestAt < maxAgeMs) return { outcome: null, snapshot: current, skipped: 'fresh' };
 
   const attempt = readAttempt();
-  if (attempt && Number.isFinite(attempt.delayMs) && now - attempt.attemptedAtMs < attempt.delayMs) {
+  // A record from a clock that was ahead would hold the backoff until the
+  // wall clock caught up with it; a minute of skew is all that is honoured.
+  const sinceAttempt = attempt ? now - attempt.attemptedAtMs : 0;
+  if (attempt && Number.isFinite(attempt.delayMs) && sinceAttempt >= -MINUTE && sinceAttempt < attempt.delayMs) {
     return { outcome: null, snapshot: current, skipped: 'backoff' };
   }
+
+  // Claim the attempt before making it, so the other hooks that fire in the
+  // same second (parallel agents, several windows) skip rather than each
+  // sending its own request and each waiting out its own timeout.
+  const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
+  writeAttempt({ attemptedAtMs: now, delayMs: timeoutMs, kind: 'inflight' });
 
   const result = await refresh({
     now,
@@ -395,7 +453,10 @@ async function refreshIfStale(options) {
   });
   writeAttempt({
     attemptedAtMs: now,
-    delayMs: nextDelayMs(result.outcome, attempt ? attempt.delayMs : 0, { baseMs: maxAgeMs, maxMs: 10 * MINUTE }),
+    delayMs: nextDelayMs(result.outcome, attempt && attempt.kind !== 'inflight' ? attempt.delayMs : 0, {
+      baseMs: maxAgeMs,
+      maxMs: 10 * MINUTE,
+    }),
     kind: result.outcome.ok ? 'ok' : result.outcome.kind,
   });
   return { outcome: result.outcome, snapshot: result.snapshot, skipped: null };
@@ -409,6 +470,9 @@ module.exports = {
   credentialsFile,
   liveFile,
   attemptFile,
+  allowedUrl,
+  isLoopback,
+  writeAtomic,
   userAgent,
   readToken,
   fetchUsage,

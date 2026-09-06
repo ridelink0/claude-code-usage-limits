@@ -233,3 +233,16 @@ test('record keeps the newest sessions and newest picks the latest', () => {
   assert.strictEqual(feed.record(all, null, NOW), all);
   assert.strictEqual(feed.newest({}), null);
 });
+
+test('a status line on a fast timer cannot look permanently working', () => {
+  assert.strictEqual(feed.gapMeansWorking({}), true);
+  assert.strictEqual(feed.gapMeansWorking({ statusLine: { refreshInterval: 10 } }), true);
+  assert.strictEqual(feed.gapMeansWorking({ statusLine: { refreshInterval: 2 } }), false);
+});
+
+test('the line spins for its own session only', () => {
+  const marks = { me: { at: NOW, state: 'working', ultracode: true }, other: { at: NOW, state: 'working' } };
+  assert.deepStrictEqual(feed.ownState(marks, 'me', NOW + 1000), { working: true, ultracode: true });
+  assert.deepStrictEqual(feed.ownState(marks, 'quiet', NOW + 1000), { working: false, ultracode: false });
+  assert.deepStrictEqual(feed.ownState(marks, 'me', NOW + 20 * 60 * 1000), { working: false, ultracode: false });
+});

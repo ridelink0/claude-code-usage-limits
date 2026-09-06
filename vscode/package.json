@@ -56,7 +56,7 @@
           "type": "webview",
           "id": "claudeUsageLimits.panel",
           "name": "Claude usage",
-          "when": "!claudeUsageLimits.hostPresent"
+          "when": "claudeUsageLimits.standalone"
         }
       ]
     },

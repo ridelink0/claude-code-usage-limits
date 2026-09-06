@@ -113,6 +113,7 @@ test('the extension activates, paints the status bar and renders the view', asyn
     await new Promise((resolve) => setTimeout(resolve, 800));
 
     assert.deepStrictEqual(record.commands[0], ['setContext', 'claudeUsageLimits.hostPresent', true]);
+    assert.deepStrictEqual(record.commands[1], ['setContext', 'claudeUsageLimits.standalone', false]);
     assert.ok(record.providers['claudeUsageLimits.underChat'], 'the view under the chat is registered');
     assert.ok(record.providers['claudeUsageLimits.panel'], 'the standalone view is registered');
     assert.ok(record.registered['claudeUsageLimits.refresh']);

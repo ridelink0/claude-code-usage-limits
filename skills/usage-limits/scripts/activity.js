@@ -68,10 +68,20 @@ function mark(state, sessionId, extra, now) {
     else if (previous.model) entry.model = previous.model;
     all[sessionId || '_'] = entry;
     const file = activityFile();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
     const temp = file + '.' + process.pid + '.usage-limits-tmp';
-    fs.writeFileSync(temp, JSON.stringify(trim(all)), 'utf8');
-    fs.renameSync(temp, file);
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(temp, JSON.stringify(trim(all)), 'utf8');
+      fs.renameSync(temp, file);
+    } catch (err) {
+      // A rename Windows refused leaves nothing behind.
+      try {
+        fs.unlinkSync(temp);
+      } catch (gone) {
+        // Nothing to clean up.
+      }
+      return false;
+    }
     return true;
   } catch (err) {
     return false;

@@ -374,3 +374,44 @@ test('refreshIfStale with the network off never calls', () =>
     assert.strictEqual(result.skipped, 'disabled');
     assert.ok(!fs.existsSync(live.attemptFile()));
   }));
+
+test('the login only ever goes to Anthropic over https, or to this machine', () => {
+  assert.strictEqual(live.allowedUrl('https://api.anthropic.com/api/oauth/usage'), 'https://api.anthropic.com/api/oauth/usage');
+  assert.strictEqual(live.allowedUrl('http://127.0.0.1:4321/x'), 'http://127.0.0.1:4321/x');
+  assert.strictEqual(live.allowedUrl('http://localhost:4321/x'), 'http://localhost:4321/x');
+  assert.strictEqual(live.allowedUrl('http://attacker.example/'), null);
+  assert.strictEqual(live.allowedUrl('https://attacker.example/'), null);
+  assert.strictEqual(live.allowedUrl('https://anthropic.com.evil.example/'), null);
+  assert.strictEqual(live.allowedUrl('http://api.anthropic.com/'), null, 'never plain http off the machine');
+  assert.strictEqual(live.allowedUrl('not a url'), null);
+  assert.strictEqual(live.allowedUrl(''), null);
+});
+
+test('a refused url makes no request', async () => {
+  const outcome = await live.fetchUsage({ token: 'tok', url: 'http://attacker.example/steal', timeoutMs: 500 });
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.kind, 'bad_response');
+});
+
+test('an expired login is not sent; the panel waits for Claude Code to renew it', () =>
+  withConfigDir(tempDir(), async () => {
+    fs.writeFileSync(
+      path.join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json'),
+      JSON.stringify({ claudeAiOauth: { accessToken: 'tok', expiresAt: NOW - 1000 } })
+    );
+    let hits = 0;
+    const stub = await serve((req, res) => {
+      hits += 1;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(SAMPLE));
+    });
+    try {
+      const result = await live.refresh({ now: NOW, url: stub.url, env: {} });
+      assert.strictEqual(result.outcome.kind, 'expired');
+      assert.strictEqual(hits, 0);
+      assert.match(live.describe(result.outcome), /expired/);
+      assert.strictEqual(live.nextDelayMs(result.outcome, 0, {}), 30000);
+    } finally {
+      await stub.close();
+    }
+  }));

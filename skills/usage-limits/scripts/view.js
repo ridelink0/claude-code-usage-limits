@@ -116,6 +116,8 @@ function noteFor(outcome, ageMs) {
       return 'network off' + suffix;
     case 'unauthorized':
       return 'sign in to Claude Code again' + suffix;
+    case 'expired':
+      return 'the login has expired, Claude Code renews it on its next call' + suffix;
     case 'forbidden':
       return 'usage is not available for this login' + suffix;
     case 'no_credentials':
@@ -141,7 +143,10 @@ function build(input) {
   // knows for certain; the setting is the fallback; nothing is hidden when
   // neither says.
   const model = opts.model || opts.settingsModel || env.ANTHROPIC_MODEL || null;
-  const families = usage.familiesInUse(null, null, [opts.model, opts.settingsModel, env.ANTHROPIC_MODEL]);
+  // When Claude Code has said which model is running, that is the whole
+  // answer: adding the setting on top would keep a Fable week on screen after
+  // /model moved the session to Opus. The setting is only the fallback.
+  const families = usage.familiesInUse(null, null, opts.model ? [opts.model] : [opts.settingsModel, env.ANTHROPIC_MODEL]);
 
   const rows = [];
   for (const key of ['five_hour', 'seven_day']) {

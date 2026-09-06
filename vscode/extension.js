@@ -177,6 +177,16 @@ function html(webview, nonce) {
 function activate(context) {
   const host = vscode.extensions.getExtension('anthropic.claude-code');
   vscode.commands.executeCommand('setContext', 'claudeUsageLimits.hostPresent', Boolean(host));
+  // The standalone view is gated on this key, which is unset until now, so it
+  // never flashes on before the Claude Code check has run.
+  vscode.commands.executeCommand('setContext', 'claudeUsageLimits.standalone', !host);
+  // This is VS Code with Claude Code in it. Never let the host detection wander
+  // off to a Codex install that happens to be on the same machine.
+  try {
+    require('./lib/usage.js').setHost('claude');
+  } catch (err) {
+    // Without lib/ there is nothing to pin; the status bar says so below.
+  }
 
   const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1000);
   item.name = 'Claude usage';

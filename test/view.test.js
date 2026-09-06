@@ -249,3 +249,10 @@ test('a host with windows of its own lengths gets a row per window', () => {
   assert.strictEqual(built.rows[2].percent, 40);
   assert.strictEqual(built.modelLabel, 'GPT-6 Astra');
 });
+
+test('the model Claude Code reports wins over the setting for the Fable week', () => {
+  const moved = view.build({ now: NOW, utilization: snapshot(), fetchedAtMs: NOW, source: 'api', model: 'claude-opus-5', settingsModel: 'claude-fable-5-1' });
+  assert.strictEqual(moved.fable, null, 'the session moved to Opus, whatever the setting says');
+  assert.strictEqual(moved.hidden.length, 1);
+  assert.strictEqual(view.build({ now: NOW, outcome: { ok: false, kind: 'expired' } }).note, 'the login has expired, Claude Code renews it on its next call, no reading yet');
+});
