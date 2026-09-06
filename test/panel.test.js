@@ -337,3 +337,18 @@ test('the pace line says when the binding window runs out, coloured by how soon'
   assert.strictEqual(panel.parseArgs(['--no-bell']).bell, false);
   assert.strictEqual(panel.parseArgs([]).bell, true);
 });
+
+test('the pace line shrinks to fit a narrow pane instead of being cut off', () => {
+  const built = view.build({ now: NOW, utilization: account(NOW).cachedUsageUtilization.utilization, fetchedAtMs: NOW, source: 'api', model: 'claude-opus-5' });
+  built.pace = { label: '5-hour', headroomMs: 25 * 60 * 1000, resetsInMs: HOUR, turnsLeft: 12, runsOut: true };
+  const narrow = panel.render(built, { columns: 26, mode: 'none', now: NOW }).join('\n');
+  assert.match(narrow, /^wall in 25m$/m, narrow);
+  const thirty = panel.render(built, { columns: 30, mode: 'none', now: NOW }).join('\n');
+  assert.match(thirty, /^runs out in 25m at this pace$/m, thirty);
+  const middling = panel.render(built, { columns: 44, mode: 'none', now: NOW }).join('\n');
+  assert.match(middling, /^runs out in 25m at this pace, about 12 turns$/m, middling);
+  const tighter = panel.render(built, { columns: 36, mode: 'none', now: NOW }).join('\n');
+  assert.match(tighter, /^runs out in 25m at this pace$/m, tighter);
+  const wide = panel.render(built, { columns: 80, mode: 'none', now: NOW }).join('\n');
+  assert.match(wide, /^at this pace the 5-hour window runs out in 25m, about 12 turns$/m);
+});

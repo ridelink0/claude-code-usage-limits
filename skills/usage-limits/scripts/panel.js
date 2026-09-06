@@ -421,9 +421,17 @@ function render(built, options) {
     footer.push(colour ? bars.paint(built.note, colour, mode) : bars.dim(built.note, mode));
   }
   if (built.pace && built.pace.runsOut && Number.isFinite(built.pace.headroomMs)) {
-    const text =
-      'at this pace the ' + built.pace.label + ' window runs out in ' + usage.formatDuration(built.pace.headroomMs) +
-      (Number.isFinite(built.pace.turnsLeft) ? ', about ' + built.pace.turnsLeft + ' turns' : '');
+    // The longest form that fits: a sentence in a wide pane, a phrase in a
+    // narrow one, never a sentence cut off halfway.
+    const left = usage.formatDuration(built.pace.headroomMs);
+    const turns = Number.isFinite(built.pace.turnsLeft) ? ', about ' + built.pace.turnsLeft + ' turns' : '';
+    const forms = [
+      'at this pace the ' + built.pace.label + ' window runs out in ' + left + turns,
+      'runs out in ' + left + ' at this pace' + turns,
+      'runs out in ' + left + ' at this pace',
+      'wall in ' + left,
+    ];
+    const text = forms.find((form) => form.length <= real) || forms[forms.length - 1];
     const colour = built.pace.headroomMs < 10 * MINUTE ? bars.THEME.error : built.pace.headroomMs < 30 * MINUTE ? bars.THEME.warning : null;
     footer.push(colour ? bars.paint(text, colour, mode) : bars.dim(text, mode));
   }
