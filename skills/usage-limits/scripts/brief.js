@@ -59,6 +59,16 @@ const DEFAULTS = {
 // A hook has ten seconds; the reading gets four of them at most.
 const REFRESH_TIMEOUT_MS = 4000;
 
+// Past this much of a per-model week, say how to free it. Below it the advice
+// is noise: there is room, and the model in use is the right one.
+const HALF_SPENT = 50;
+
+// "fable" -> "Fable", the way the account names the window.
+function familyLabel(family) {
+  const name = String(family || '');
+  return name ? name.charAt(0).toUpperCase() + name.slice(1) : name;
+}
+
 // The runway is worth saying long before it is worth acting on, because it is
 // the figure that stops a turn count from flattering. Two hundred turns sounds
 // like plenty and can be twenty minutes when three sessions are spending.
@@ -269,6 +279,10 @@ function pressure(window, now, config, turnsLeft) {
 const CACHED_BINDING_FIELDS = [
   'key',
   'label',
+  // The model family a per-model weekly is scoped to. Read by the line that
+  // says a model switch is the only thing that frees such a window, so it has
+  // to survive the cache like every other field the wording depends on.
+  'family',
   'applies',
   'percentUsed',
   'stale',
@@ -444,6 +458,17 @@ function briefText(parts) {
     sentences.push(
       'This limit refused work ' + parts.refusedAgo + ' ago, so treat the room above as ' +
         'the amount that ran out last time, not a fresh allowance.'
+    );
+  }
+  // A per-model weekly is the one window effort cannot help with. Nothing you
+  // do more cheaply on this model frees it; only running a different model
+  // does, and that has to be said, because the obvious move at 90 percent is
+  // to drop the effort and keep going, which spends the same window slower.
+  if (parts.family) {
+    sentences.push(
+      'That window counts ' + parts.family + ' turns only, so lowering effort does not free it: ' +
+        'switching model does. Use /model (or scripts/lowpower.js on --model <other>) for work ' +
+        'that does not need ' + parts.family + ', and keep this one for what does.'
     );
   }
   if (parts.othersSummary) sentences.push('Other windows: ' + parts.othersSummary + '.');
@@ -721,6 +746,12 @@ async function run(now, hookInput) {
         ? usage.formatDuration(now - binding.refusedAt)
         : null,
     binding,
+    // Named only while the window is actually tight: at 20 percent nobody
+    // needs telling how to free it.
+    family:
+      binding && binding.family && Number.isFinite(binding.percentUsed) && binding.percentUsed >= HALF_SPENT
+        ? familyLabel(binding.family)
+        : null,
     othersSummary: view.othersSummary,
     turnsLeft: view.turnsLeft,
     resetsIn:

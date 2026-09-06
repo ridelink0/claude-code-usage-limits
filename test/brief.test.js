@@ -744,3 +744,22 @@ test('a window this session cannot spend into is named as one', () => {
     "weekly (Fable) 88% (not this session's model)"
   );
 });
+
+test('a per-model weekly says that only a model switch frees it', () => {
+  const near = {
+    binding: { key: 'seven_day_scoped:fable', label: 'weekly (Fable)', family: 'fable', percentUsed: 66, applies: true, verdict: 'burning' },
+    othersSummary: '5-hour 12%',
+    turnsLeft: 300,
+    yourTurnsLeft: 300,
+    family: 'Fable',
+    pressure: 'roomy',
+  };
+  const text = brief.briefText(near);
+  assert.match(text, /counts Fable turns only/);
+  assert.match(text, /lowering effort does not free it/);
+  assert.match(text, /\/model/);
+
+  // Nothing said for a shared window, or for a per-model week with room left.
+  const shared = brief.briefText({ binding: { key: 'five_hour', label: '5-hour', percentUsed: 66 }, pressure: 'roomy' });
+  assert.strictEqual(shared.indexOf('counts'), -1);
+});
