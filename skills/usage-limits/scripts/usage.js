@@ -924,7 +924,11 @@ async function readClaudeEvents(since, options) {
         changed = true;
         continue;
       }
-      if (!alive.has(file) && !(Number.isFinite(held.mtimeMs) && held.mtimeMs >= keepFrom)) {
+      // Past the window is gone whatever happened. An entry the scan merely
+      // did not reach is dropped only when the scan was complete: a partial
+      // one has not seen every file and must not be what decides they are dead.
+      const tooOld = !(Number.isFinite(held.mtimeMs) && held.mtimeMs >= keepFrom);
+      if (tooOld || (!partial && !alive.has(file))) {
         delete cache.files[file];
         changed = true;
         continue;
@@ -942,8 +946,8 @@ async function readClaudeEvents(since, options) {
         changed = true;
       }
     }
-    // A partial scan has not seen every file, so it must not be the run that
-    // decides which cache entries are dead. It still saves what it did read.
+    // Through a temporary file named for this process, so two windows running
+    // the hook at the same moment cannot interleave a half-written cache.
     if (changed) writeScanCache(cache);
   }
 
