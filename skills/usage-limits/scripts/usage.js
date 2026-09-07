@@ -1687,19 +1687,24 @@ function stampPlan(all, planId) {
 // Turn count only breaks the tie: it says how much local spend sat behind the
 // reading, not how precise the denominator was, and preferring it outright is
 // how a 44-turn baseline read at 1% once beat every honest sample after it.
+// Which of two prices to keep, and which to write back to disk.
+//
+// A wider reading is a better measurement, so percent still ranks - but only
+// between two readings that are measurements at all. An entry learned at either
+// end of the meter is not one, and ranking on percent alone meant a price
+// learned at 100 could never be displaced by an honest one from the middle:
+// 100 is the highest number there is, so it won every comparison and was
+// written back for ever. The file could not heal itself even once the readers
+// had started ignoring it.
 function betterCalibration(current, candidate) {
-  if (!candidate || !Number.isFinite(candidate.usdPerPercent) || candidate.usdPerPercent <= 0) {
-    return current || null;
+  const fresh = usableCalibration(candidate);
+  const held = usableCalibration(current);
+  if (!fresh) return held || null;
+  if (!held || !Number.isFinite(held.turns)) return fresh;
+  if (Number.isFinite(fresh.percent) && Number.isFinite(held.percent) && fresh.percent !== held.percent) {
+    return fresh.percent > held.percent ? fresh : held;
   }
-  if (!current || !Number.isFinite(current.turns)) return candidate;
-  if (
-    Number.isFinite(candidate.percent) &&
-    Number.isFinite(current.percent) &&
-    candidate.percent !== current.percent
-  ) {
-    return candidate.percent > current.percent ? candidate : current;
-  }
-  return candidate.turns > current.turns ? candidate : current;
+  return fresh.turns > held.turns ? fresh : held;
 }
 
 // Everything the report needs about one limit window.
@@ -1820,22 +1825,19 @@ function buildWindow(spec, snapshot, events, now, options) {
     // holding. The learned price covers it: what a point costs is a property
     // of the plan, not of this reading.
     const selfPriced =
-      rawPercent >= MIN_BASELINE_PERCENT && upTo.cost > 0 && upTo.turns >= MIN_BASELINE_TURNS
+      rawPercent >= MIN_BASELINE_PERCENT &&
+      rawPercent <= MAX_BASELINE_PERCENT &&
+      upTo.cost > 0 &&
+      upTo.turns >= MIN_BASELINE_TURNS
         ? { usdPerPercent: upTo.cost / rawPercent, turns: upTo.turns, percent: rawPercent }
         : null;
     // A metered window has nothing to learn: its price per point is stated.
     if (selfPriced && !extra.metered) window.calibration = selfPriced;
 
-    const known = extra.knownCalibration;
-    // A remembered price read off a near-empty meter is the same rounding
-    // bracket in disguise, so it is no more usable than measuring one now.
-    const usable =
-      known &&
-      Number.isFinite(known.usdPerPercent) &&
-      known.usdPerPercent > 0 &&
-      !(Number.isFinite(known.percent) && known.percent < MIN_BASELINE_PERCENT)
-        ? known
-        : null;
+    // A remembered price is only as good as the reading it was learned from,
+    // and both ends of the meter lie. One gate, shared with the headroom
+    // arithmetic below.
+    const usable = usableCalibration(extra.knownCalibration);
     // Trust the better-measured of the two, whichever that is; a stated price
     // beats both.
     const stated =
@@ -1884,10 +1886,17 @@ function buildWindow(spec, snapshot, events, now, options) {
   // window reading 1% divided a full hour of spend by one and priced the
   // remaining 99 points at thousands of dollars. Below the floor the learned
   // price takes over through the fallback chain.
+  // The ceiling is the same rule the other way up: at 100 the meter has
+  // stopped counting, so the spend past it divides against points that were
+  // never registered and every remaining point looks cheaper than it is.
   const measured =
-    percent !== null && percent >= MIN_BASELINE_PERCENT && spent.cost > 0 && !thin;
+    percent !== null &&
+    percent >= MIN_BASELINE_PERCENT &&
+    percent <= MAX_BASELINE_PERCENT &&
+    spent.cost > 0 &&
+    !thin;
   const derived = measured ? spent.cost / percent : null;
-  const known = extra.knownCalibration;
+  const known = usableCalibration(extra.knownCalibration);
   const metered =
     Boolean(extra.metered) && Number.isFinite(extra.usdPerPercent) && extra.usdPerPercent > 0;
   const priced = metered
@@ -2264,6 +2273,36 @@ const MIN_BASELINE_TURNS = 5;
 // 1% while the local spend divided by it asserted 97% of a window that was
 // truly at 35.
 const MIN_BASELINE_PERCENT = 5;
+
+// And a reading near the top cannot price one either, for the opposite reason.
+//
+// The price of a point is the spend inside the window divided by the meter's
+// own percentage, and that arithmetic assumes the meter is still counting. It
+// stops at 100. Everything spent past the cap is real money that moved no
+// points, so dividing by 100 counts it against points that were never
+// registered and the price comes out too cheap - which then converts later
+// spend into far more points than it moved, and the reported percentage
+// overshoots the account.
+//
+// Measured here on 2026-09-07: a five-hour price learned at a reading of 100
+// said a point cost $0.67, while the same window measured between two live
+// readings in the healthy range - 24% to 47% on $20.85 - said $0.91. Thirty-six
+// per cent too cheap, and the display was reading 54% against an account at 47.
+const MAX_BASELINE_PERCENT = 95;
+
+// Whether a remembered price may be used at all.
+//
+// Defined once because the question is asked in two different places, and
+// gating only one of them was exactly how the capped price kept getting
+// through: the correction refused it and the headroom arithmetic took it
+// anyway. A price with no reading recorded against it predates this check and
+// is taken on trust; a recorded one has to be from the middle of the meter.
+function usableCalibration(known) {
+  if (!known || !Number.isFinite(known.usdPerPercent) || known.usdPerPercent <= 0) return null;
+  if (!Number.isFinite(known.percent)) return known;
+  if (known.percent < MIN_BASELINE_PERCENT || known.percent > MAX_BASELINE_PERCENT) return null;
+  return known;
+}
 
 // Past this much of a window, a handful of local turns is not what spent it,
 // so their total is not a fair price for a point.
@@ -3518,6 +3557,8 @@ module.exports = {
   SATURATION_LIMIT,
   MIN_BASELINE_TURNS,
   MIN_BASELINE_PERCENT,
+  usableCalibration,
+  MAX_BASELINE_PERCENT,
   accountFile,
   buildWindows,
   limitWindows,
