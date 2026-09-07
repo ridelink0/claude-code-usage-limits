@@ -10,18 +10,27 @@
 //   - Codex has the whole hook engine. The binary carries UserPromptSubmit,
 //     SessionStart, PreToolUse and the rest, and `codex features list` reports
 //     `hooks` as stable and enabled.
-//   - A plugin cannot ship one. `plugin_hooks` is reported as `removed`.
-//   - And on codex-cli 0.151.0-alpha.7.2 nothing fires it. Measured, with a
-//     hook whose only job was to write a file: not from ~/.codex/hooks.json,
-//     not from a `[hooks]` table in config.toml, not from ~/.codex/hooks/, and
-//     not in `codex exec` or the desktop app. The engine is present and inert.
+//   - A plugin cannot ship one. `plugin_hooks` is reported as `removed`, so a
+//     `hooks` field in .codex-plugin/plugin.json is accepted and ignored.
+//   - On codex-cli 0.151.0-alpha.7.2 nothing fired hooks from anywhere. On
+//     0.153.4 the user-level ~/.codex/hooks.json does run them, but only after
+//     a one-time review: the terminal UI opens with "Hooks need review - hooks
+//     can run outside the sandbox after you trust them", and the choices are
+//     "Trust all and continue" or "Continue without trusting (hooks won't
+//     run)". The trust is persisted as a hash of the hooks, so a hook this
+//     script rewrites has to be trusted again. The desktop app never shows
+//     that review, which is why a machine using only the app can have the
+//     hooks installed for weeks and never once run them.
 //
-// So the hooks are still written, because they cost nothing and will start
-// working the day that build ships. But they are not what makes this automatic
-// today. AGENTS.md is: Codex reads it at the top of every session in scope,
-// which is the one always-on instruction channel that actually runs. It cannot
-// carry live numbers the way a hook can, so instead it tells Codex to go and
-// read them at the start of a piece of work.
+// So the hooks are written, and `status` says whether anything has ever run
+// them. But the trust review is the user's to accept, deliberately - this
+// script does not forge a trust hash to get round a safety prompt - and until
+// it is accepted the hooks are inert. AGENTS.md is what works regardless:
+// Codex reads it at the top of every session in scope, which is the one
+// always-on instruction channel. It cannot carry live numbers the way a hook
+// can, so instead it tells Codex to go and read them at the start of a piece
+// of work - and, since the effort setting is what actually empties a Codex
+// window, to look at that.
 //
 // Both halves are marked and reversible, and neither touches anything else in
 // the files it edits.
@@ -40,6 +49,10 @@ const host = require('./host.js');
 const EVENTS = [
   { event: 'UserPromptSubmit', script: 'brief.js', status: 'Checking usage limits' },
   { event: 'PostToolUse', script: 'pulse.js', status: 'Checking usage limits' },
+  // Codex has subagents too, and a turn that hands its work to them makes no
+  // tool calls of its own for as long as they run. Same quiet refresh as on
+  // Claude Code; pulse.js sees the event name and says nothing.
+  { event: 'SubagentStop', script: 'pulse.js', status: 'Checking usage limits' },
 ];
 const EVENT = EVENTS[0].event;
 // Ten seconds is the same budget the Claude hook gets. The brief caches the
@@ -49,6 +62,23 @@ const TIMEOUT_SECONDS = 10;
 function hooksFile() {
   return path.join(host.codexHome(), 'hooks.json');
 }
+
+// Whether Codex has ever actually run one of these hooks. Each writes a small
+// state file beside the rollouts the first time it fires, so the hooks being
+// installed with none of those present means the trust review has never been
+// accepted - which is the state a machine using only the desktop app sits in
+// indefinitely, with no error anywhere to say so.
+function everRan() {
+  const dir = host.codexHome();
+  return ['usage-limits-pulse.json', 'usage-limits-brief.json'].some((name) =>
+    host.exists(path.join(dir, name))
+  );
+}
+
+const TRUST_STEP =
+  'Codex runs hooks from this file only after a one-time review. Start `codex` in a\n' +
+  '  terminal once and choose "Trust all and continue"; the desktop app never shows\n' +
+  '  that review. Rewriting the hooks changes their hash, so `on` means reviewing again.';
 
 function briefScript(name) {
   return path.join(__dirname, name || 'brief.js');
@@ -134,6 +164,12 @@ function agentsBlock() {
     'answers or skip verification to save budget: unspent budget is lost at the',
     'reset, not carried over. Do not run this on every reply; once at the start of a',
     'piece of work is enough.',
+    '',
+    'The reasoning effort in config.toml is what actually empties a window: one',
+    'ordinary task at ultra effort on a Plus plan can take a whole five-hour window.',
+    'The report measures what each effort costs here and prices the window at the',
+    'one set now; if it says the window holds only a few turns at this effort, say',
+    'so, and use a lower effort for work that does not need the thinking.',
     AGENTS_END,
   ].join('\n');
 }
@@ -283,10 +319,14 @@ function status() {
           (agentsStale() ? '\n  It points at another copy of the plugin, so run `on`.' : '')
         : 'AGENTS.md block missing from ' + agentsFile() + '. Run `on`.'
   );
-  lines.push(
-    'Hooks are written for when Codex runs them; on current builds they do not fire, ' +
-      'so the AGENTS.md block is what makes this work.'
-  );
+  if (!missing.length) {
+    lines.push(
+      everRan()
+        ? 'Codex has run these hooks: their state files are beside its rollouts.'
+        : 'Codex has never run these hooks. ' + TRUST_STEP + '\n' +
+          '  Until then the AGENTS.md block is what makes this work.'
+    );
+  }
 
   return {
     installed: !missing.length && agents,
@@ -344,7 +384,7 @@ function enable() {
       '    of work. This is the part that works today.\n' +
       '  ' + hooksFile() + '\n' +
       EVENTS.map((one) => '    ' + one.event + '  ' + command(one.script)).join('\n') + '\n' +
-      '    Ready for when Codex runs plugin-less hooks; inert on current builds.\n' +
+      '    ' + TRUST_STEP.replace(/\n  /g, '\n    ') + '\n' +
       'Start a new thread for it to take effect. Run `off` to remove both.',
   };
 }

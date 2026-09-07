@@ -679,14 +679,21 @@ function readScanCache() {
   return { version: SCAN_VERSION, files: parsed.files };
 }
 
-// Through a temporary file, so a hook killed mid-write cannot leave a cache
-// that fails to parse. Losing it costs one slow scan, never a wrong number.
-function writeScanCache(cache) {
-  const file = scanFile();
+// Every state file the plugin shares between processes goes through here.
+//
+// Two windows run the same hooks at the same moment, and the status line runs
+// every few hundred milliseconds. A plain writeFileSync is a truncate followed
+// by a write, and a reader that lands between the two sees an empty or
+// half-written file, parses nothing, and - for anything read, changed and
+// written back, like the tally - then writes its own slot over everyone
+// else's. Writing beside the file and renaming into place means every read
+// sees either the old whole or the new whole. A rename Windows refuses leaves
+// nothing behind, and the caller carries on with what is on disk.
+function writeJsonAtomic(file, value) {
   const temp = file + '.' + process.pid + '.usage-limits-tmp';
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(temp, JSON.stringify(cache), 'utf8');
+    fs.writeFileSync(temp, JSON.stringify(value), 'utf8');
     fs.renameSync(temp, file);
     return true;
   } catch (err) {
@@ -697,6 +704,11 @@ function writeScanCache(cache) {
     }
     return false;
   }
+}
+
+// Losing the scan cache costs one slow scan, never a wrong number.
+function writeScanCache(cache) {
+  return writeJsonAtomic(scanFile(), cache);
 }
 
 // A byte range of a file, without pulling the whole thing into memory.
@@ -875,7 +887,9 @@ function eventsForFile(entry, cache, keepFrom) {
 async function readClaudeEvents(since, options) {
   const opts = options || {};
   const startedAt = Date.now();
-  const budgetMs = Number.isFinite(opts.budgetMs) && opts.budgetMs > 0 ? opts.budgetMs : null;
+  // Zero is a real budget - spent before the first file - not "no budget";
+  // absent or negative means unlimited. A test relies on zero being exact.
+  const budgetMs = Number.isFinite(opts.budgetMs) && opts.budgetMs >= 0 ? opts.budgetMs : null;
   const keepFrom = Math.min(since, startedAt - SCAN_KEEP_MS);
 
   const files = claudeTranscriptFiles(since);
@@ -1551,8 +1565,7 @@ function readCalibration() {
 
 function writeCalibration(all) {
   try {
-    fs.mkdirSync(path.dirname(calibrationFile()), { recursive: true });
-    fs.writeFileSync(calibrationFile(), JSON.stringify(all), 'utf8');
+    writeJsonAtomic(calibrationFile(), all);
   } catch (err) {
     // Losing it costs accuracy on the next thin baseline, nothing more.
   }
@@ -1586,8 +1599,7 @@ function readModelRecord() {
 
 function writeModelRecord(all) {
   try {
-    fs.mkdirSync(path.dirname(modelRecordFile()), { recursive: true });
-    fs.writeFileSync(modelRecordFile(), JSON.stringify(all), 'utf8');
+    writeJsonAtomic(modelRecordFile(), all);
   } catch (err) {
     // The record is a convenience for a thin week, not a source of truth.
   }
@@ -3475,6 +3487,7 @@ module.exports = {
   scanFile,
   readScanCache,
   writeScanCache,
+  writeJsonAtomic,
   parseSlice,
   RATES,
   WINDOWS,

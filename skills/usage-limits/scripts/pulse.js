@@ -65,14 +65,10 @@ function readState() {
 }
 
 function writeState(all) {
-  try {
-    const file = stateFile();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(all), 'utf8');
-  } catch (err) {
-    // Losing the throttle means one extra scan, which is survivable. Failing
-    // the tool call it runs after is not.
-  }
+  // Never throws. Losing the throttle means one extra scan, which is
+  // survivable; failing the tool call it runs after is not. Atomic because
+  // several sessions' tool calls land on this file within the same second.
+  usage.writeJsonAtomic(stateFile(), all);
 }
 
 function trim(all, sessionId, at) {

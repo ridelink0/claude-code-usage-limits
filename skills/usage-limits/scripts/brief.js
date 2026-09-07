@@ -184,12 +184,10 @@ function mergeCache(all, sessionId, entry, keep) {
 }
 
 function writeCache(all) {
-  try {
-    fs.mkdirSync(path.dirname(cacheFile()), { recursive: true });
-    fs.writeFileSync(cacheFile(), JSON.stringify(all), 'utf8');
-  } catch (err) {
-    // A cache miss costs a scan. A crash costs the prompt. Prefer the scan.
-  }
+  // Never throws: a cache miss costs a scan, a crash costs the prompt. Atomic
+  // because every open window's prompt hook writes this same file, and a torn
+  // read by one of them wiped the others' slots on the way back.
+  usage.writeJsonAtomic(cacheFile(), all);
 }
 
 function settings() {

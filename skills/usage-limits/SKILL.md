@@ -430,11 +430,14 @@ happened to write. It starts a short-lived `codex app-server`, takes about a
 second, and is the Codex equivalent of running `/usage` in Claude Code. Use it
 when the report says the snapshot is old, not routinely.
 
-The difference that matters: **there is no budget line in front of the prompt.**
-Claude Code lets a plugin ship hooks, so it gets one automatically. Codex will
-not load hooks from a plugin, and on current builds it does not run them from
-`~/.codex/hooks.json` or `config.toml` either, so nothing puts the figures in
-front of you before you start.
+The difference that matters: **the budget line is not automatic until you say
+so.** Claude Code lets a plugin ship hooks, so it gets one on install. Codex
+does not load hooks from a plugin (`plugin_hooks` is a removed feature), and it
+runs the ones in `~/.codex/hooks.json` only after a one-time review it shows
+when `codex` starts in a terminal: "Hooks need review - Trust all and
+continue". The desktop app never shows that review, so a machine using only
+the app can have the hooks installed for weeks and never run them once.
+`install-codex-hook.js status` says whether they have ever run.
 
 What replaces it is an instruction, installed by:
 

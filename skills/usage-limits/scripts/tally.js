@@ -46,15 +46,14 @@ function readState() {
   }
 }
 
+// Atomic, because this file is read, changed and written back by the Stop hook
+// of every session at once. A torn read here did not just lose one total: the
+// reader parsed nothing, then wrote its own slot back as the whole file, and
+// every other session's tally went with it.
 function writeState(all) {
-  try {
-    const file = stateFile();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(all), 'utf8');
-  } catch (err) {
-    // Losing the total costs one re-read of the transcript. Failing the hook
-    // that runs after every reply is not worth avoiding that.
-  }
+  // Never throws: losing the total costs one re-read of the transcript, and
+  // failing the hook that runs after every reply is not worth avoiding that.
+  usage.writeJsonAtomic(stateFile(), all);
 }
 
 function isSession(value) {
