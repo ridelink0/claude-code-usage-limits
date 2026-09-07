@@ -30,8 +30,15 @@ const live = require('./live.js');
 const SECOND = 1000;
 const DEFAULT_INTERVAL_SECONDS = 120;
 
+// Same reasoning as the brief: ten seconds for the hook, four for a live
+// reading, five for the scan, one of slack. This hook interrupts work in
+// progress, so being late is worse here than anywhere else.
+const SCAN_BUDGET_MS = 5000;
+
 // One slot per session, same shape and same trimming as the brief's cache.
-const KEEP_SESSIONS = 8;
+// Two keys per session now - the spoken pulse and the quiet subagent refresh -
+// so this is double what it was.
+const KEEP_SESSIONS = 16;
 
 function stateFile() {
   const dir = usage.isCodex()
@@ -118,18 +125,41 @@ async function run(now, hookInput) {
   usage.setHost(host.detect(process.argv.slice(2), process.env));
 
   const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
-  // A tool call just finished, so the turn is still running. A few bytes, so
-  // the panel beside the chat keeps animating through a long turn.
-  activity.mark('working', sessionId, null, now);
+  const event = hookInput && hookInput.hook_event_name ? String(hookInput.hook_event_name) : 'PostToolUse';
+
+  // A subagent finishing is the other reason to look, and on a busy afternoon
+  // it is the more important one.
+  //
+  // This hook exists because PostToolUse fires on the MAIN thread's tool calls,
+  // and a turn that hands its work to a workflow makes none for half an hour.
+  // On 2026-09-06 two workflows spent a whole five-hour window between one
+  // prompt and the next, and nothing ran in between to notice: the reading on
+  // disk aged eleven minutes while forty-three agents spent against it, and the
+  // session was cut off at a figure the plugin still believed was 3%.
+  //
+  // So it refreshes and says nothing. The mark is deliberately not written -
+  // a subagent is not a session, and marking one would put it in the list of
+  // windows sharing this budget and split the headroom with a ghost.
+  const quiet = event === 'SubagentStop';
+  if (!quiet) {
+    // A tool call just finished, so the turn is still running. A few bytes, so
+    // the panel beside the chat keeps animating through a long turn.
+    activity.mark('working', sessionId, null, now);
+  }
 
   const all = readState();
   const every = intervalMs();
+  // The quiet refresh keeps its own throttle. Sharing one with the spoken
+  // pulse would mean a workflow's subagents used up the interval and the tool
+  // call right after it, the first chance to actually tell Claude, said
+  // nothing because something had already "pulsed" two minutes ago.
+  const throttleKey = quiet ? (sessionId || '_') + '#subagent' : sessionId;
   // The cheap path, and the one taken almost every time.
-  if (!due(all, sessionId, now, every)) return '';
+  if (!due(all, throttleKey, now, every)) return '';
 
   // Claimed before the scan rather than after, so a slow scan cannot let a
   // second tool call start another one.
-  writeState(trim(all, sessionId, now));
+  writeState(trim(all, throttleKey, now));
 
   // A reading as old as the interval is replaced with the one Claude Code
   // would take for /usage, so a turn that runs for an hour is measured
@@ -151,7 +181,11 @@ async function run(now, hookInput) {
     // The reading on disk is still there.
   }
 
-  const data = await usage.report(now, { sessionId });
+  // Refreshing was the whole errand. The next prompt, or the next tool call on
+  // the main thread, reports the number this just brought up to date.
+  if (quiet) return '';
+
+  const data = await usage.report(now, { sessionId, budgetMs: SCAN_BUDGET_MS });
   const binding = data.binding;
   if (!binding) return '';
 

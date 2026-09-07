@@ -46,6 +46,9 @@ const POLL_FLOOR_MS = 15 * SECOND;
 const FILE_CHECK_MS = SECOND;
 const FRAME_MS = 100;
 const MIN_COLUMNS = 24;
+// The widest thing that follows a Codex bar, plus its space: "no reading" is
+// ten characters and "100% left" is nine.
+const CODEX_SUFFIX = 11;
 const TITLE = 'Claude usage';
 const LEVEL_RANK = { fill: 0, warning: 1, error: 2 };
 
@@ -157,7 +160,19 @@ async function snapshot(options) {
   // Stay with the session already being described, so two windows on the same
   // model at different efforts do not make the header flip back and forth.
   const slot = feed.stickySlot(slots, opts.sessionId, now);
-  const seen = onCodex ? { working: codexWorking(now), ultracode: false, model: null } : activity.summarise(activity.read(), now);
+  const marks = onCodex ? {} : activity.read();
+  const described = (slot && slot.sessionId) || opts.sessionId || null;
+  // The marks are machine-wide, and this panel describes ONE session. Reading
+  // the machine-wide summary here is what let a prompt in another window put
+  // ultrathink on this window's bars. When the session being described is
+  // known, its own mark is the only one that speaks for it.
+  const seen = onCodex
+    ? { working: codexWorking(now), ultracode: false, ultrathink: false, model: null }
+    : described
+      ? Object.assign(feed.ownState(marks, described, now), {
+          model: (marks[described] && marks[described].model) || null,
+        })
+      : activity.summarise(marks, now);
   const settings = onCodex ? {} : settingsFor();
 
   const built = view.build({
@@ -170,14 +185,15 @@ async function snapshot(options) {
     headersAt: slot ? slot.headersAt : null,
     model: (slot && slot.model) || seen.model || null,
     modelName: slot ? slot.modelName : null,
-    // The status line is told the effort by Claude Code itself; the setting is
-    // the fallback, and it is what says "ultracode" when no status line is
-    // installed.
-    effort:
-      (slot && slot.effort) ||
-      (collected.settings && collected.settings.effortLevel && collected.settings.effortLevel !== 'default'
-        ? collected.settings.effortLevel
-        : null),
+    // Whichever of the status line and the transcript spoke last. The setting
+    // is only the last resort: a panel beside a VS Code window has no status
+    // line to ask, and the setting there never moves, which is how it came to
+    // report xhigh through a session running at max.
+    effort: view.pickEffort(
+      slot && slot.effort ? { effort: slot.effort, at: slot.at } : null,
+      onCodex || !described ? null : usage.liveEffort(described),
+      collected.settings ? collected.settings.effortLevel : null
+    ),
     working: seen.working || feed.isWorking(slot, now),
     // Ultracode comes from the effort level above, not from here. Ultrathink
     // is a word in a prompt, and the hooks record it per session.
@@ -203,6 +219,28 @@ async function snapshot(options) {
   // the report, so it is taken with the readings, not with every frame; the
   // frames in between carry the last answer forward.
   built.pace = opts.pace !== undefined ? opts.pace : await paceOf(now);
+  // The other agent's meter, drawn under this one's.
+  //
+  // Read from Codex's own rollouts on disk and nothing else: no child process,
+  // no network, no waiting. Codex having nothing to say, or not being installed
+  // at all, must never be a reason the Claude panel is late or absent.
+  built.codex = null;
+  if (!onCodex && host.codexHasSessions()) {
+    try {
+      const other = codex.collect(now);
+      const block = view.buildCodex({
+        now,
+        utilization: other.utilization,
+        fetchedAtMs: other.snapshotFetchedAt,
+        windowSpecs: other.windowSpecs,
+        plan: other.plan,
+        windowless: other.windowless,
+      });
+      if (block.present) built.codex = block;
+    } catch (err) {
+      // An unreadable Codex is simply no Codex row.
+    }
+  }
   // Whether the panel is allowed the network at all, which is what the footer
   // reports. A frame rebuilt from disk between readings is not "network off".
   built.fetch = opts.network !== undefined ? Boolean(opts.network) : Boolean(opts.fetch);
@@ -301,6 +339,22 @@ function shortTitle(row) {
   if (row.key === 'five_hour') return 'Session';
   if (row.key === 'seven_day') return 'Week';
   return String(row.title).replace(/^Current week /, 'Week ').replace(/^Current /, '');
+}
+
+// Codex's own row titles are already short; these are for a very narrow pane.
+function shortCodexTitle(row) {
+  if (row.key === 'five_hour') return '5h';
+  if (row.key === 'seven_day') return 'Week';
+  return String(row.title).replace(/ limit$/, '');
+}
+
+// The Codex rows say "left", so their sublines have to as well, and they must
+// never point at a Claude Code command to fix a Codex reading.
+function codexSubline(row, mode, opts) {
+  if (row.stale) return bars.dim('window rolled over since Codex last ran', mode);
+  if (row.percentLeft === null) return bars.dim('no reading yet', mode);
+  const reset = bars.formatReset(row.msToReset, row.resetsAtMs, opts.now, { clock: opts.clock });
+  return reset ? bars.dim(reset, mode) : '';
 }
 
 function subline(row, mode, opts) {
@@ -406,6 +460,44 @@ function render(built, options) {
         subline(row, mode, { now, clock }),
       ].filter((line) => line !== ''),
     });
+  }
+
+  // The Codex block, in the same shapes and the same colours, counting the
+  // other way: Codex reports what is LEFT, so its bars drain as they are spent
+  // where Claude's fill. The mark is a plain hexagon rather than the Codex
+  // logo, which is OpenAI's Blossom and not ours to recolour.
+  if (built.codex && built.codex.rows.length) {
+    const block = built.codex;
+    const lines = [
+      bars.paint(bars.mark('codex', { ascii }), bars.THEME.codex, mode) +
+        ' ' +
+        bars.bold(bars.paint(block.title, bars.THEME.codex, mode), mode),
+    ];
+    // "85% left" is five characters wider than "85%", so the Codex bars get
+    // their own width. Sharing the Claude one clipped every Codex row.
+    const codexWidth = Math.max(6, Math.min(50, columns - CODEX_SUFFIX));
+    for (const row of block.rows) {
+      const percent =
+        row.level === 'fill' ? row.percentText : bars.paint(row.percentText, bars.levelColour(row.level), mode);
+      lines.push(bars.bold(columns < 34 ? shortCodexTitle(row) : row.title, mode));
+      lines.push(
+        (row.percentLeft === null
+          ? bars.paint((ascii ? '-' : '░').repeat(codexWidth), bars.THEME.empty, mode)
+          : // No ultracode or ultrathink styling here: those describe how this
+            // Claude is running and have nothing to do with the other agent.
+            bars.bar(row.percentLeft, codexWidth, { mode, level: row.level, ascii, tick, reduced })) +
+          ' ' +
+          percent
+      );
+      const sub = codexSubline(row, mode, { now, clock });
+      if (sub) lines.push(sub);
+    }
+    const tail = [];
+    if (block.plan) tail.push(block.plan);
+    if (block.note) tail.push(block.note);
+    else if (Number.isFinite(block.ageMs)) tail.push('reading from ' + since(block.ageMs) + ' ago');
+    if (tail.length) lines.push(bars.dim(tail.join(' · '), mode));
+    body.push({ lines });
   }
 
   // The other Claudes. One row each: what it runs, where, and whether it is

@@ -36,13 +36,27 @@ test('a corrupt or missing slot does not silence the ping', () => {
 });
 
 test('trim keeps the newest sessions and records this one', () => {
+  // More slots than the cap, so the trimming is actually exercised however
+  // many the cap allows. Two keys per session are written now - the spoken
+  // pulse and the quiet subagent refresh - so the cap moves with that.
+  const extra = 4;
+  const count = pulse.KEEP_SESSIONS + extra;
   const many = {};
-  for (let index = 0; index < 12; index += 1) many['s' + index] = { at: NOW - index * MINUTE };
+  for (let index = 0; index < count; index += 1) many['s' + index] = { at: NOW - index * MINUTE };
   const kept = pulse.trim(many, 'fresh', NOW + MINUTE);
 
   assert.strictEqual(Object.keys(kept).length, pulse.KEEP_SESSIONS);
   assert.strictEqual(kept.fresh.at, NOW + MINUTE);
-  assert.ok(!kept.s11, 'the oldest slot is dropped rather than growing the file');
+  assert.ok(!kept['s' + (count - 1)], 'the oldest slot is dropped rather than growing the file');
+  assert.ok(kept.s0, 'the newest of the old slots is kept');
+});
+
+test('the quiet subagent refresh keeps a throttle of its own', () => {
+  // A workflow's subagents must not use up the interval that the next tool
+  // call needs in order to say anything to Claude.
+  const state = pulse.trim({}, 'abc#subagent', NOW);
+  assert.strictEqual(pulse.due(state, 'abc#subagent', NOW, 2 * MINUTE), false);
+  assert.strictEqual(pulse.due(state, 'abc', NOW, 2 * MINUTE), true);
 });
 
 test('an unnamed session still gets a slot', () => {

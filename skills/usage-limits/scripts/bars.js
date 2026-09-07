@@ -34,6 +34,13 @@ const THEME = {
   permission: [177, 185, 249],
   ultra: [175, 135, 255],
   ultraShimmer: [208, 180, 255],
+  // The Codex row's mark, in the green OpenAI's own products have used, chosen
+  // because it sits at the same visual weight as Claude's orange rather than
+  // shouting over it: relative luminance 0.278 against Claude's 0.283, and a
+  // hue about 148 degrees away, so the two marks read as a pair on one line
+  // and neither one wins. The shimmer is the same lift the Claude one gets.
+  codex: [16, 163, 127],
+  codexShimmer: [36, 203, 167],
   rainbow: [
     [235, 95, 87],
     [245, 139, 87],
@@ -73,12 +80,62 @@ const EMPTY = '░';
 const FILL_ASCII = '#';
 const EMPTY_ASCII = '-';
 
+// The two marks: Claude Code's own six-pointed asterisk, and a plain hexagon
+// standing for Codex.
+//
+// The hexagon is deliberately NOT the Codex logo. Codex has no mark of its
+// own - it borrows OpenAI's Blossom - and OpenAI's brand guidelines say
+// outright "DON'T add any colors to the Blossom" and "do not incorporate the
+// logo into your own branding or design a similar logo". Painting their mark
+// in a terminal colour is the first of those and drawing a lookalike is the
+// second, so what goes here is an ordinary geometric shape in their green,
+// which says "the other agent" without borrowing anyone's trademark.
+//
+// U+2B22 was chosen over the prettier candidates because it is the only sort
+// that is safe in this file: East Asian Width N, so it is one column in every
+// terminal, and it carries no Emoji property, so nothing can promote it to
+// double width. visibleWidth() counts codepoints rather than display columns,
+// so a wide mark would silently push every bar on the line out of true.
+const CLAUDE_MARK = '✻';
+const CLAUDE_MARK_ASCII = '*';
+const CODEX_MARK = '⬢';
+const CODEX_MARK_ASCII = 'O';
+
+// The mark for a host, and the colour to paint it, so the status line, the
+// panel and the VS Code view cannot end up drawing different ones.
+function mark(which, options) {
+  const opts = options || {};
+  if (which === 'codex') return opts.ascii ? CODEX_MARK_ASCII : CODEX_MARK;
+  return opts.ascii ? CLAUDE_MARK_ASCII : CLAUDE_MARK;
+}
+
+function markColour(which) {
+  return which === 'codex' ? THEME.codex : THEME.claude;
+}
+
+function markShimmer(which) {
+  return which === 'codex' ? THEME.codexShimmer : THEME.claudeShimmer;
+}
+
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function level(percent) {
   if (!Number.isFinite(percent)) return 'fill';
   if (percent >= DANGER_AT) return 'error';
   if (percent >= WARN_AT) return 'warning';
+  return 'fill';
+}
+
+// The same two thresholds, read from the other end.
+//
+// Codex counts down: it reports what is LEFT, and its own status card says
+// "82% left" where Claude Code says "62% used". So the Codex rows are drawn
+// draining rather than filling, and the colours have to turn at the same real
+// moment: 80 percent used is 20 percent left, and 90 used is 10 left.
+function levelLeft(percentLeft) {
+  if (!Number.isFinite(percentLeft)) return 'fill';
+  if (percentLeft <= 100 - DANGER_AT) return 'error';
+  if (percentLeft <= 100 - WARN_AT) return 'warning';
   return 'fill';
 }
 
@@ -333,7 +390,15 @@ module.exports = {
   SPINNER,
   FRAMES,
   level,
+  levelLeft,
   levelColour,
+  CLAUDE_MARK,
+  CLAUDE_MARK_ASCII,
+  CODEX_MARK,
+  CODEX_MARK_ASCII,
+  mark,
+  markColour,
+  markShimmer,
   colourMode,
   to256,
   paint,

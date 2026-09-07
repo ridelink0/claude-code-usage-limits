@@ -389,6 +389,26 @@ afternoon, so there is no longer anything to buy by winding down.
 The one thing not to economise on is the handoff itself. Everything else can be
 picked up next session; a session that ends without one cannot.
 
+## Codex, seen from Claude Code
+
+When Codex is installed on the same machine, every display shows its meter
+underneath Claude's: the panel, the status line, the budget line before each
+prompt, the VS Code view and `check`. It is read from the rollouts Codex has
+already written — no child process, no network, and nothing at all if Codex is
+not installed.
+
+**It counts the other way, and that is not a bug.** Codex writes what it has
+*spent* but shows what is *left*: its own status card prints "82% left" where
+Claude Code prints "62% used". So the Codex rows report what remains, their
+bars drain as they are spent where Claude's fill, and every figure carries the
+word "left" so the two can never be read as the same kind of number. The
+colours turn at the same real moment either way — 80% used is 20% left is
+yellow, 90% used is 10% left is red.
+
+The mark beside it is a plain hexagon, not the Codex logo. Codex has no mark of
+its own; it uses OpenAI's Blossom, whose brand guidelines forbid recolouring it
+and forbid lookalikes.
+
 ## Running under Codex
 
 Everything above works the same. The numbers come from a different place and
@@ -436,6 +456,45 @@ allowance and never quotes a price, so the percentages are exactly what they
 say and there is no dollar figure to attach. `scripts/lowpower.js` is for Claude
 Code only: it writes Claude's `settings.json`, so it must not be run under
 Codex. Change model or effort through Codex's own controls instead.
+
+### The effort setting is the thing that empties the window
+
+On Codex this matters more than anywhere else, because the reasoning effort is
+set in `~/.codex/config.toml` and then applies to everything until it is
+changed:
+
+```toml
+model = "gpt-6-astra"
+model_reasoning_effort = "ultra"
+```
+
+A percentage and a turn count do not warn you about that, and it is the single
+most common way an allowance disappears. The headroom figure is built from what
+a turn has cost *on average*, and the average is dominated by whatever effort
+you were running last week. Move to a dearer one and every estimate is too
+generous until enough expensive turns have landed to drag the average up — and
+on a five-hour window on Plus there is no "enough", because the window is gone
+first. One ordinary task at `ultra` on Astra can take the lot while the report
+still says there is room.
+
+So the report measures each effort separately and prices the window at the one
+actually set. Two things surface it:
+
+- `node scripts/usage.js --host codex` prints **what each effort costs,
+  measured on this machine** — turns, output written per turn, and a `*` on the
+  one in force.
+- When the current effort is materially dearer than a cheaper one on record,
+  the budget line says so outright, with what the window really holds at this
+  setting rather than at the blend.
+
+The comparison is on **output tokens per turn**, not cost per turn. Cost per
+turn mostly tracks how big the context happened to be — measured that way,
+`low` turns on a huge context can look dearer than `ultra` ones on a short one,
+which is exactly backwards. Output is the part the effort setting controls.
+
+Act on it the same way as everything else here: keep the high effort where the
+work genuinely needs the thinking, and drop it where it does not. It changes
+what every turn costs, not how many turns you get.
 
 ## When to skip this skill
 

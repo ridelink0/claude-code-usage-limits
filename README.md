@@ -168,6 +168,50 @@ node skills/usage-limits/scripts/usage.js
 node skills/usage-limits/scripts/usage.js --json
 ```
 
+### Keeping it up to date
+
+Claude Code can update this for you, but **it will not by default**. Auto-update
+is a per-*marketplace* switch, and it defaults to on only for claude.ai-hosted
+marketplaces and a hard-coded list of official Anthropic ones. Every
+third-party GitHub marketplace, this one included, defaults to off.
+
+Turn it on once, either through `/plugin` → Marketplaces → usage-limits, or by
+adding one key to `~/.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "usage-limits": {
+      "source": { "source": "github", "repo": "ridelink0/claude-code-usage-limits" },
+      "autoUpdate": true
+    }
+  }
+}
+```
+
+Claude Code then refreshes the marketplace and updates the plugin in the
+background shortly after a session starts (with a random delay of up to ten
+minutes, so a running session keeps the version it launched with), and offers
+`/reload-plugins` when something changed. To update on the spot instead:
+
+```
+claude plugin update usage-limits
+```
+
+Note that the whole pass is skipped when Claude Code's own auto-updater is
+disabled, unless `FORCE_AUTOUPDATE_PLUGINS` is set.
+
+**Cloud and web sessions** never see `~/.claude`, so nothing installed on a
+laptop reaches them. Commit the same block to a repository's
+`.claude/settings.json`, alongside `enabledPlugins`, and any session opened on
+that repository installs the plugin at session start — always at the newest
+commit. This repository carries exactly that file if you want one to copy.
+
+The other two channels update themselves the ordinary way: the VS Code
+extension through the Marketplace, and the npm package on the next `npx
+claude-usage-limits` (a global install pins, so `npm i -g claude-usage-limits@latest`
+to move it).
+
 ## When another Claude is working too
 
 Two Claude Code windows share one limit, so headroom measured in turns is

@@ -439,6 +439,10 @@ function eventFrom(line, seen, project) {
   const parts = tokenParts(entry.message.usage);
   return {
     at,
+    // Carried on the event so the scan cache can dedup across files without
+    // re-parsing them: a resumed or forked session repeats earlier turns, and
+    // a cached file is never read again to find that out.
+    dedupId: id === '|' ? null : id,
     model: entry.message.model || '',
     effort: entry.effort || null,
     cost: costOf(entry.message.usage, entry.message.model),
@@ -479,9 +483,9 @@ function promptFrom(line) {
   return typed;
 }
 
-async function readEvents(since) {
-  if (isCodex()) return codex.readEvents(since);
-  return readClaudeEvents(since);
+async function readEvents(since, options) {
+  if (isCodex()) return codex.readEvents(since, options);
+  return readClaudeEvents(since, options);
 }
 
 // A file last touched before the window opened holds nothing useful.
@@ -529,7 +533,7 @@ function subagentTranscripts(dir, since, depth) {
   return files;
 }
 
-async function readClaudeEvents(since) {
+function claudeTranscriptFiles(since) {
   const root = path.join(configDir(), 'projects');
   let dirs = [];
   try {
@@ -564,26 +568,406 @@ async function readClaudeEvents(since) {
       files.push({ file, project: dir.name });
     }
   }
+  return files;
+}
+
+// ---------------------------------------------------------------------------
+// The effort level in force right now
+// ---------------------------------------------------------------------------
+//
+// Claude Code stamps `effort` on every assistant line it writes, which makes
+// the transcript the only source that is always current. It follows /effort
+// the moment the model answers; it exists for a session that has no status
+// line at all, which is every VS Code window; and it can say "max", which
+// settings.json is not allowed to hold at all.
+//
+// Reading it off settings.json instead is what made the panel insist on
+// "xhigh" through a whole session running at max, and made a session with no
+// status line show the setting rather than the session.
+//
+// Only the tail is read, and only whole lines from it are parsed, so a
+// megabyte is enough however long the transcript grows.
+const EFFORT_TAIL_BYTES = 1024 * 1024;
+const EFFORT_TAIL_LINES = 60;
+
+function sessionTranscriptFile(sessionId) {
+  if (!sessionId) return null;
+  const root = path.join(configDir(), 'projects');
+  let dirs = [];
+  try {
+    dirs = fs.readdirSync(root, { withFileTypes: true });
+  } catch (err) {
+    return null;
+  }
+  let best = null;
+  for (const dir of dirs) {
+    if (!dir.isDirectory()) continue;
+    const file = path.join(root, dir.name, sessionId + '.jsonl');
+    let stat;
+    try {
+      stat = fs.statSync(file);
+    } catch (err) {
+      continue;
+    }
+    // A session id is unique, but a resumed session can leave a copy under an
+    // older project directory; the one being written to is the live one.
+    if (!best || stat.mtimeMs > best.at) best = { file, at: stat.mtimeMs, size: stat.size };
+  }
+  return best;
+}
+
+// The newest effort this session ran at, with the time it was stamped, so a
+// caller holding a status-line reading can take whichever is newer.
+function liveEffort(sessionId) {
+  const found = sessionTranscriptFile(sessionId);
+  if (!found) return null;
+  const from = Math.max(0, found.size - EFFORT_TAIL_BYTES);
+  const text = readSlice(found.file, from, found.size).toString('utf8');
+  const lines = text.split('\n');
+  // The first line of a mid-file slice is a fragment, and the last is whatever
+  // was half-written when the read happened. Neither is parsed.
+  const start = Math.max(from > 0 ? 1 : 0, lines.length - EFFORT_TAIL_LINES);
+  for (let i = lines.length - 1; i >= start; i -= 1) {
+    const line = lines[i];
+    if (!line || line.indexOf('"effort"') === -1) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch (err) {
+      // A fragment, or the half-written tail.
+      continue;
+    }
+    if (!entry || typeof entry.effort !== 'string' || !entry.effort) continue;
+    const at = Date.parse(entry.timestamp);
+    return { effort: entry.effort, at: Number.isFinite(at) ? at : found.at };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// The scan cache
+// ---------------------------------------------------------------------------
+//
+// Reading every transcript from the start, every time, is what the scan used to
+// do, and it stopped being affordable the moment workflows arrived. One machine
+// here had 950 subagent transcripts totalling 114 MB inside the eight-day
+// window, and a full scan took 200 seconds. The prompt hook is given ten, so it
+// was killed on every prompt and the reported percentage froze at whatever a
+// cached view last said: 3% while the account was at 32%.
+//
+// Transcripts are append-only, and almost all of them are finished. So each
+// file's parsed events are kept, keyed by its size and mtime, and a file that
+// has grown is read only from where the last read stopped. The offset is
+// counted in bytes, at the last complete line, so a half-written tail is simply
+// read again next time.
+const SCAN_VERSION = 1;
+// A day wider than the widest window anything asks for, so a report never wants
+// an event the cache has just pruned.
+const SCAN_KEEP_MS = 9 * DAY;
+// Enough for weeks of heavy use; the oldest go first if it is ever reached.
+const SCAN_MAX_EVENTS = 250000;
+
+function scanFile() {
+  return path.join(configDir(), 'usage-limits-scan.json');
+}
+
+function readScanCache() {
+  const parsed = readJson(scanFile());
+  if (!parsed || parsed.version !== SCAN_VERSION || !parsed.files || typeof parsed.files !== 'object') {
+    return { version: SCAN_VERSION, files: {} };
+  }
+  return { version: SCAN_VERSION, files: parsed.files };
+}
+
+// Through a temporary file, so a hook killed mid-write cannot leave a cache
+// that fails to parse. Losing it costs one slow scan, never a wrong number.
+function writeScanCache(cache) {
+  const file = scanFile();
+  const temp = file + '.' + process.pid + '.usage-limits-tmp';
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(temp, JSON.stringify(cache), 'utf8');
+    fs.renameSync(temp, file);
+    return true;
+  } catch (err) {
+    try {
+      fs.unlinkSync(temp);
+    } catch (gone) {
+      // Nothing to clean up.
+    }
+    return false;
+  }
+}
+
+// A byte range of a file, without pulling the whole thing into memory.
+function readSlice(file, start, end) {
+  const length = Math.max(0, end - start);
+  if (!length) return Buffer.alloc(0);
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch (err) {
+    return Buffer.alloc(0);
+  }
+  try {
+    const buffer = Buffer.allocUnsafe(length);
+    let read = 0;
+    while (read < length) {
+      const got = fs.readSync(fd, buffer, read, length - read, start + read);
+      if (got <= 0) break;
+      read += got;
+    }
+    return read === length ? buffer : buffer.subarray(0, read);
+  } catch (err) {
+    return Buffer.alloc(0);
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch (err) {
+      // Already closed.
+    }
+  }
+}
+
+// Events are kept as tuples rather than objects, because in a file of ten
+// thousand of them the key names alone were two thirds of the bytes. The
+// project is a property of the file, so it is stored once on the entry and put
+// back on the way out.
+const ROW_TURN = 0;
+const ROW_REFUSAL = 1;
+
+function whole(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function packEvent(event) {
+  if (event.rejected) {
+    const rejected = event.rejected;
+    return [
+      ROW_REFUSAL,
+      event.at,
+      event.sessionId || '',
+      rejected.status || '',
+      rejected.key || '',
+      Number.isFinite(rejected.resetsAt) ? rejected.resetsAt : 0,
+    ];
+  }
+  const parts = event.parts || {};
+  return [
+    ROW_TURN,
+    event.at,
+    whole(event.cost),
+    whole(event.tokens),
+    whole(parts.input),
+    whole(parts.cacheWrite),
+    whole(parts.cacheRead),
+    whole(parts.output),
+    whole(parts.reasoning),
+    event.sidechain ? 1 : 0,
+    event.model || '',
+    event.sessionId || '',
+    event.effort || '',
+    event.dedupId || '',
+  ];
+}
+
+function unpackEvent(row, project) {
+  if (!Array.isArray(row)) return null;
+  if (row[0] === ROW_REFUSAL) {
+    return {
+      at: row[1],
+      model: '',
+      effort: null,
+      cost: 0,
+      tokens: 0,
+      parts: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, reasoning: 0 },
+      project: project || null,
+      sessionId: row[2] || null,
+      rejected: {
+        status: row[3] || null,
+        key: row[4] || null,
+        resetsAt: row[5] || null,
+      },
+    };
+  }
+  const parts = {
+    input: row[4],
+    cacheWrite: row[5],
+    cacheRead: row[6],
+    output: row[7],
+    reasoning: row[8],
+  };
+  return {
+    at: row[1],
+    dedupId: row[13] || null,
+    model: row[10] || '',
+    effort: row[12] || null,
+    cost: row[2],
+    tokens: row[3],
+    parts,
+    context: parts.input + parts.cacheRead + parts.cacheWrite,
+    project: project || null,
+    sessionId: row[11] || null,
+    sidechain: row[9] === 1,
+  };
+}
+
+// Split on newlines in the buffer itself rather than after decoding, because
+// the offset has to be a byte count: a transcript is full of characters that
+// are more than one byte, and counting them as one would drift the offset and
+// silently drop turns. A trailing partial line is left unconsumed.
+function parseSlice(buffer, project, baseOffset) {
+  const events = [];
+  let start = 0;
+  let consumed = 0;
+  for (let i = 0; i < buffer.length; i += 1) {
+    if (buffer[i] !== 0x0a) continue;
+    const event = eventFrom(buffer.toString('utf8', start, i), null, project);
+    if (event) events.push(event);
+    start = i + 1;
+    consumed = start;
+  }
+  return { events, offset: baseOffset + consumed };
+}
+
+// One file's events, reusing whatever the cache already holds of it.
+function eventsForFile(entry, cache, keepFrom) {
+  let stat;
+  try {
+    stat = fs.statSync(entry.file);
+  } catch (err) {
+    delete cache.files[entry.file];
+    return null;
+  }
+
+  const cached = cache.files[entry.file];
+  const usable =
+    cached &&
+    Array.isArray(cached.rows) &&
+    Number.isFinite(cached.offset) &&
+    Number.isFinite(cached.size) &&
+    // Appended to, or untouched. Anything else - a rewrite, a truncation, a
+    // clock that went backwards - is read again from the beginning, because
+    // the offset can no longer be trusted to point where it says.
+    stat.size >= cached.size &&
+    cached.offset <= stat.size;
+
+  if (usable && stat.size === cached.size && stat.mtimeMs === cached.mtimeMs) {
+    return { rows: cached.rows, project: cached.project || entry.project, changed: false };
+  }
+
+  const from = usable ? cached.offset : 0;
+  const parsed = parseSlice(readSlice(entry.file, from, stat.size), entry.project, from);
+  const rows = (usable ? cached.rows : [])
+    .concat(parsed.events.map(packEvent))
+    .filter((row) => row[1] >= keepFrom);
+  cache.files[entry.file] = {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    offset: parsed.offset,
+    project: entry.project,
+    rows,
+  };
+  return { rows, project: entry.project, changed: true };
+}
+
+async function readClaudeEvents(since, options) {
+  const opts = options || {};
+  const startedAt = Date.now();
+  const budgetMs = Number.isFinite(opts.budgetMs) && opts.budgetMs > 0 ? opts.budgetMs : null;
+  const keepFrom = Math.min(since, startedAt - SCAN_KEEP_MS);
+
+  const files = claudeTranscriptFiles(since);
+  // Newest first, so a scan that runs out of time has done the files that
+  // describe the window running now rather than the ones from last Tuesday.
+  const ordered = files
+    .map((entry) => {
+      let at = 0;
+      try {
+        at = fs.statSync(entry.file).mtimeMs;
+      } catch (err) {
+        at = 0;
+      }
+      return Object.assign({ at }, entry);
+    })
+    .sort((a, b) => b.at - a.at);
+
+  const cache = opts.cache === false ? { version: SCAN_VERSION, files: {} } : readScanCache();
+  const collected = [];
+  const alive = new Set();
+  let changed = false;
+  let partial = false;
+
+  for (const entry of ordered) {
+    if (budgetMs !== null && Date.now() - startedAt > budgetMs) {
+      partial = true;
+      break;
+    }
+    alive.add(entry.file);
+    const result = eventsForFile(entry, cache, keepFrom);
+    if (!result) {
+      changed = true;
+      continue;
+    }
+    if (result.changed) changed = true;
+    collected.push(result);
+  }
+
+  // Files that have gone cold or been deleted, and anything left over the cap.
+  if (opts.cache !== false) {
+    let total = 0;
+    for (const file of Object.keys(cache.files)) {
+      const held = cache.files[file];
+      if (!held || !Array.isArray(held.rows)) {
+        delete cache.files[file];
+        changed = true;
+        continue;
+      }
+      if (!alive.has(file) && !(Number.isFinite(held.mtimeMs) && held.mtimeMs >= keepFrom)) {
+        delete cache.files[file];
+        changed = true;
+        continue;
+      }
+      total += held.rows.length;
+    }
+    if (total > SCAN_MAX_EVENTS) {
+      const oldest = Object.keys(cache.files).sort(
+        (a, b) => (cache.files[a].mtimeMs || 0) - (cache.files[b].mtimeMs || 0)
+      );
+      for (const file of oldest) {
+        if (total <= SCAN_MAX_EVENTS) break;
+        total -= cache.files[file].rows.length;
+        delete cache.files[file];
+        changed = true;
+      }
+    }
+    // A partial scan has not seen every file, so it must not be the run that
+    // decides which cache entries are dead. It still saves what it did read.
+    if (changed) writeScanCache(cache);
+  }
 
   const seen = new Set();
   const events = [];
-  for (const entry of files) {
-    const stream = fs.createReadStream(entry.file, { encoding: 'utf8' });
-    const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
-    try {
-      for await (const line of lines) {
-        const event = eventFrom(line, seen, entry.project);
-        if (event && event.at >= since) events.push(event);
+  for (const held of collected) {
+    for (const row of held.rows) {
+      if (row[1] < since) continue;
+      const id = row[0] === ROW_TURN ? row[13] : '';
+      if (id) {
+        if (seen.has(id)) continue;
+        seen.add(id);
       }
-    } catch (err) {
-      // A half-written line at the tail of a live session is expected.
-    } finally {
-      lines.close();
-      stream.destroy();
+      const event = unpackEvent(row, held.project);
+      if (event) events.push(event);
     }
   }
 
   events.sort((a, b) => a.at - b.at);
+  if (partial) {
+    // Non-enumerable, so nothing that iterates or serialises the events can
+    // trip over it; the report reads it to say the correction may be short.
+    Object.defineProperty(events, 'partial', { value: true, enumerable: false });
+  }
   return events;
 }
 
@@ -706,6 +1090,141 @@ function dominantEffort(events) {
     if (!best || entry[1] > best[1]) best = entry;
   }
   return best ? best[0] : null;
+}
+
+// What a turn has actually cost at each effort level, measured separately.
+//
+// The blended cost per turn is the right answer to "what has this been
+// costing" and the wrong one the moment the effort changes. An account that
+// usually runs at medium and switches to ultra is priced at the medium rate
+// until enough ultra turns have landed to drag the average up - and on a plan
+// with a small window there is no "enough", because the window is gone first.
+//
+// That is not hypothetical either. A ChatGPT Plus account running gpt-6-astra
+// at ultra effort emptied a whole five-hour window on one ordinary task, with
+// this plugin reporting room the entire way, because every turn it had on
+// record was a cheaper one.
+//
+// Subagent calls are left out for the same reason turns leave them out: they
+// are errands, not turns, and averaging them in makes a turn look cheap.
+function effortRates(events) {
+  const rows = new Map();
+  for (const event of events || []) {
+    if (!event || event.rejected || event.sidechain) continue;
+    if (!event.effort) continue;
+    if (!rows.has(event.effort)) {
+      rows.set(event.effort, { effort: event.effort, turns: 0, cost: 0, tokens: 0, output: 0, reasoning: 0 });
+    }
+    const row = rows.get(event.effort);
+    const parts = event.parts || {};
+    row.turns += 1;
+    row.cost += Number.isFinite(event.cost) ? event.cost : 0;
+    row.tokens += Number.isFinite(event.tokens) ? event.tokens : 0;
+    row.output += Number.isFinite(parts.output) ? parts.output : 0;
+    row.reasoning += Number.isFinite(parts.reasoning) ? parts.reasoning : 0;
+  }
+  return [...rows.values()]
+    .map((row) =>
+      Object.assign(row, {
+        perTurn: row.turns ? row.cost / row.turns : null,
+        // What the effort setting actually moves. Cost per turn is dominated by
+        // how big the context happened to be, which is why measuring it that
+        // way can report "low" as dearer than "ultra": a small ultra turn on a
+        // short context really did cost less than a huge low-effort one. The
+        // output is the part the setting controls, and it is the dear part -
+        // eight times the weight of fresh input on Codex's own meter.
+        outputPerTurn: row.turns ? row.output / row.turns : null,
+        reasoningPerTurn: row.turns ? row.reasoning / row.turns : null,
+      })
+    )
+    .sort((a, b) => (a.outputPerTurn || 0) - (b.outputPerTurn || 0));
+}
+
+// Enough turns at one effort to believe the figure at all.
+const MIN_EFFORT_SAMPLE = 3;
+// Dearer than the cheapest measured effort by this much before it is worth
+// saying anything. Below it the setting is not what is spending the budget.
+const EFFORT_DEARER_BY = 1.5;
+// At or under this many turns left at the CURRENT effort, say so whether or
+// not a cheaper effort has ever been measured.
+const FEW_TURNS_AT_EFFORT = 12;
+
+// The other agent's meter, for the surfaces that draw both.
+//
+// view.js is required at call time rather than at the top of the file: it
+// requires this module back, and a cycle resolved at load time would hand it a
+// half-built exports object. By the time a report is being built both are
+// finished loading.
+function codexBlock(now) {
+  if (isCodex()) return null;
+  try {
+    if (!host.codexHasSessions()) return null;
+    const display = require('./view.js');
+    const other = codex.collect(now);
+    const block = display.buildCodex({
+      now,
+      utilization: other.utilization,
+      fetchedAtMs: other.snapshotFetchedAt,
+      windowSpecs: other.windowSpecs,
+      plan: other.plan,
+      windowless: other.windowless,
+    });
+    return block.present ? block : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+// The warning that would have caught that incident: what the window holds at
+// the effort actually set, rather than at the average of everything ever run.
+function effortWarning(events, current, window) {
+  if (!current || !window || window.stale) return null;
+  const rates = effortRates(events);
+  const here = rates.find((row) => row.effort === current);
+  if (!here || here.turns < MIN_EFFORT_SAMPLE || !here.perTurn || here.perTurn <= 0) return null;
+
+  // Compared on output per turn, because that is what the effort setting
+  // moves; cost per turn is mostly a fact about how long the context was.
+  const measure = (row) => (Number.isFinite(row.outputPerTurn) && row.outputPerTurn > 0 ? row.outputPerTurn : null);
+  const mine = measure(here);
+  const cheaper = mine
+    ? rates.find(
+        (row) =>
+          row.effort !== current &&
+          row.turns >= MIN_EFFORT_SAMPLE &&
+          measure(row) &&
+          mine / measure(row) >= EFFORT_DEARER_BY
+      )
+    : null;
+
+  const turnsLeft =
+    Number.isFinite(window.usdPerPercent) && window.usdPerPercent > 0 && Number.isFinite(window.percentLeft)
+      ? Math.max(0, Math.floor((window.percentLeft * window.usdPerPercent) / here.perTurn))
+      : null;
+
+  // Nothing to say when the effort is not the dear one and the window is not
+  // nearly out at it.
+  if (!cheaper && (turnsLeft === null || turnsLeft > FEW_TURNS_AT_EFFORT)) return null;
+
+  return {
+    effort: current,
+    perTurn: here.perTurn,
+    sample: here.turns,
+    turnsLeft,
+    blendedTurnsLeft: Number.isFinite(window.turnsLeft) ? window.turnsLeft : null,
+    outputPerTurn: here.outputPerTurn,
+    cheaper: cheaper
+      ? {
+          effort: cheaper.effort,
+          perTurn: cheaper.perTurn,
+          outputPerTurn: cheaper.outputPerTurn,
+          // How many times more the current setting writes per turn. This is
+          // the number worth saying out loud: "ultra writes 6x the output of
+          // medium" is what makes someone change it.
+          multiple: measure(cheaper) ? mine / measure(cheaper) : null,
+        }
+      : null,
+  };
 }
 
 // What the thinking actually cost, rather than what it is generally said to
@@ -1954,7 +2473,11 @@ async function report(now, options) {
   // A stale snapshot can put a window's start slightly further back than
   // seven days, so give the scan a day of slack.
   const earliest = now - 8 * DAY;
-  const all = await readEvents(earliest);
+  // A hook is given ten seconds; the panel and the CLI have all the time they
+  // want. A scan that runs out of its budget returns what it managed to read
+  // and says so, which is how the report knows its correction may be short.
+  const all = await readEvents(earliest, options && options.budgetMs ? { budgetMs: options.budgetMs } : undefined);
+  const scanPartial = Boolean(all && all.partial);
   // A refused request is a record of the limit, not a turn against it, so it is
   // kept apart from everything that measures spend or pace.
   const rejections = lastRejections(all);
@@ -2043,6 +2566,20 @@ async function report(now, options) {
   const recent = totals(recentEvents);
 
   const binding = bindingWindow(windows);
+
+  // The effort the next turn will run at. Codex states it outright in
+  // config.toml; Claude Code stamps it on every assistant line, which is the
+  // only source that follows /effort mid-session. The setting is last.
+  let effortNow = (options && options.effort) || null;
+  if (!effortNow && !isCodex() && options && options.sessionId) {
+    const seen = liveEffort(options.sessionId);
+    if (seen && seen.effort) effortNow = seen.effort;
+  }
+  if (!effortNow) {
+    const configured = base.settings && base.settings.effortLevel;
+    if (configured && configured !== 'default') effortNow = configured;
+  }
+  if (!effortNow) effortNow = dominantEffort(recentEvents) || null;
   const scopeStart = binding ? binding.windowStart : now - 7 * DAY;
   const scoped = events.filter((event) => event.at >= scopeStart && event.at <= now);
   const scopedTotals = totals(scoped);
@@ -2086,6 +2623,17 @@ async function report(now, options) {
     },
     measuredTurns: mainThread(events).length,
     subagentTurns: events.length - mainThread(events).length,
+    // The effort the NEXT turn will run at, and what a turn has cost at each
+    // effort on record. Codex states it in config.toml; Claude Code stamps it
+    // on every line of the transcript.
+    effortNow,
+    effortRates: effortRates(events),
+    effortWarning: effortWarning(events, effortNow, binding),
+    codex: codexBlock(now),
+    // True when the scan hit its time budget before it had read everything, so
+    // the spend since the snapshot is a floor rather than a total. Anything
+    // that warns on the number says "at least" when this is set.
+    scanPartial,
   });
 }
 
@@ -2335,6 +2883,26 @@ function render(data) {
   }
   lines.push('');
 
+  // The other agent, directly under this one's windows and counting the other
+  // way: Codex reports what is LEFT, so every figure here says "left" and none
+  // of them can be read as a percentage spent.
+  if (data.codex && data.codex.rows.length) {
+    lines.push('  Codex usage' + (data.codex.plan ? '   ' + data.codex.plan : ''));
+    lines.push('  Window           Left   Resets in');
+    for (const row of data.codex.rows) {
+      lines.push(
+        '  ' + pad(row.title, 15) +
+          padLeft(row.percentLeft === null ? (row.stale ? 'rolled' : '-') : row.percentLeft + '%', 6) +
+          padLeft(row.stale ? '-' : formatDuration(row.msToReset), 12)
+      );
+    }
+    if (data.codex.note) lines.push('    ' + data.codex.note);
+    else if (Number.isFinite(data.codex.ageMs)) {
+      lines.push('    reading from ' + formatDuration(data.codex.ageMs) + ' ago, out of the rollouts Codex writes');
+    }
+    lines.push('');
+  }
+
   // How much room is left is only half the question. The other half is what
   // that room buys, and the answer is different for every model: the same
   // weekly holds a few hundred Fable turns or several thousand Sonnet ones.
@@ -2475,6 +3043,48 @@ function render(data) {
     '  Measured      ' + formatCount(data.measuredTurns) + ' turns of local transcript' +
       (data.subagentTurns > 0 ? ' (+' + formatCount(data.subagentTurns) + ' subagent calls)' : '')
   );
+
+  // What a turn costs at each effort, when more than one has been measured.
+  // The single most useful line for anyone wondering where the budget went:
+  // effort changes the price of every turn rather than how many there are.
+  const rates = (data.effortRates || []).filter((row) => row.turns >= MIN_EFFORT_SAMPLE && row.outputPerTurn);
+  if (rates.length > 1) {
+    lines.push('');
+    lines.push('  What each effort costs, measured on this machine');
+    lines.push('    Effort        Turns   Output/turn' + (money ? '   Per turn' : ''));
+    for (const row of rates) {
+      lines.push(
+        '    ' +
+          String(row.effort + (row.effort === data.effortNow ? ' *' : '')).padEnd(12) +
+          padLeft(formatCount(row.turns), 7) +
+          padLeft(formatCount(Math.round(row.outputPerTurn)), 14) +
+          (money ? padLeft(formatUSD(row.perTurn), 11) : '')
+      );
+    }
+    if (data.effortNow) lines.push('    * the effort set now');
+    lines.push('    Output per turn is the part the effort setting controls; cost per turn');
+    lines.push('    also moves with how big the context happened to be.');
+  }
+
+  if (data.effortWarning) {
+    const warning = data.effortWarning;
+    lines.push('');
+    if (Number.isFinite(warning.turnsLeft)) {
+      lines.push(
+        '  Careful       at ' + warning.effort + ' effort this window holds about ' +
+          formatCount(warning.turnsLeft) + ' more turns' +
+          (Number.isFinite(warning.blendedTurnsLeft) && warning.blendedTurnsLeft > warning.turnsLeft
+            ? ', not the ' + formatCount(warning.blendedTurnsLeft) + ' above'
+            : '')
+      );
+    }
+    if (warning.cheaper && Number.isFinite(warning.cheaper.multiple)) {
+      lines.push(
+        '                ' + warning.effort + ' writes about ' + warning.cheaper.multiple.toFixed(1) +
+          'x the output per turn that ' + warning.cheaper.effort + ' does'
+      );
+    }
+  }
 
   if (data.windows.some((window) => window.adjusted)) {
     lines.push(
@@ -2850,7 +3460,18 @@ module.exports = {
   preferLive,
   accountUuid,
   subagentTranscripts,
+  claudeTranscriptFiles,
   readClaudeEvents,
+  SCAN_VERSION,
+  SCAN_KEEP_MS,
+  SCAN_MAX_EVENTS,
+  sessionTranscriptFile,
+  liveEffort,
+  EFFORT_TAIL_BYTES,
+  scanFile,
+  readScanCache,
+  writeScanCache,
+  parseSlice,
   RATES,
   WINDOWS,
   rateFor,
@@ -2892,6 +3513,12 @@ module.exports = {
   calibrationFile,
   CRITICAL_PERCENT,
   dominantEffort,
+  effortRates,
+  codexBlock,
+  effortWarning,
+  MIN_EFFORT_SAMPLE,
+  EFFORT_DEARER_BY,
+  FEW_TURNS_AT_EFFORT,
   typicalTurnCost,
   activeSessions,
   sessionSpend,

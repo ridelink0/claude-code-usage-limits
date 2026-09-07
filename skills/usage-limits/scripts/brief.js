@@ -59,6 +59,13 @@ const DEFAULTS = {
 // A hook has ten seconds; the reading gets four of them at most.
 const REFRESH_TIMEOUT_MS = 4000;
 
+// The hook is given ten seconds, and a live reading may take four of them, so
+// the transcript scan gets five and the last second is slack. A warm scan
+// takes about a quarter of a second; this is the guard for the first run on a
+// machine with months of transcripts, where the alternative is the hook being
+// killed and Claude being told nothing at all.
+const SCAN_BUDGET_MS = 5000;
+
 // Past this much of a per-model week, say how to free it. Below it the advice
 // is noise: there is room, and the model in use is the right one.
 const HALF_SPENT = 50;
@@ -356,6 +363,41 @@ function count(value, word) {
   return value + ' ' + word + (Math.abs(value) === 1 ? '' : 's');
 }
 
+// The other agent's meter, in one clause.
+//
+// Codex reports what is LEFT where Claude reports what is USED, so every
+// figure here carries the word "left" - a bare percentage next to Claude's
+// would be read as the same kind of number and mean the opposite thing.
+//
+// Read from Codex's rollouts on disk. Nothing spawns Codex, nothing waits on
+// it, and a machine without it pays one stat call.
+function codexSummary(now) {
+  try {
+    if (usage.isCodex() || !host.codexHasSessions()) return null;
+    const display = require('./view.js');
+    const codex = require('./codex.js');
+    const other = codex.collect(now);
+    const block = display.buildCodex({
+      now,
+      utilization: other.utilization,
+      fetchedAtMs: other.snapshotFetchedAt,
+      windowSpecs: other.windowSpecs,
+      plan: other.plan,
+      windowless: other.windowless,
+    });
+    if (!block.present) return null;
+    const names = { five_hour: '5-hour', seven_day: 'weekly' };
+    const bits = block.rows
+      .filter((row) => row.percentLeft !== null)
+      .map((row) => (names[row.key] || row.title) + ' ' + Math.floor(row.percentLeft) + '% left');
+    if (!bits.length) return null;
+    return { plan: block.plan, bits, stale: block.state !== 'live' };
+  } catch (err) {
+    // An unreadable Codex is simply no Codex clause.
+    return null;
+  }
+}
+
 function describeWindow(window) {
   if (!window) return null;
   if (window.stale) return window.label + ' rolling over';
@@ -459,6 +501,51 @@ function briefText(parts) {
       'This limit refused work ' + parts.refusedAgo + ' ago, so treat the room above as ' +
         'the amount that ran out last time, not a fresh allowance.'
     );
+  }
+  // The other agent, when there is one on this machine. Its own budget, its
+  // own direction: Codex counts down.
+  if (parts.codex && parts.codex.bits.length) {
+    sentences.push(
+      'Codex' + (parts.codex.plan ? ' (' + parts.codex.plan + ')' : '') + ' has ' +
+        parts.codex.bits.join(' and ') +
+        (parts.codex.stale ? ', from the last reading it wrote' : '') + '.'
+    );
+  }
+  // The effort setting changes the PRICE of a turn rather than how many there
+  // are, and the blended headroom above hides that completely: an account that
+  // has just moved to a dearer effort goes on being priced at the old one until
+  // enough dear turns have landed to drag the average up, and on a small window
+  // there is no "enough" - the window is gone first.
+  //
+  // A ChatGPT Plus account running gpt-6-astra at ultra effort emptied a whole
+  // five-hour window on one ordinary task while this hook reported room the
+  // entire way. Saying it here is what turns "plenty of room" into "about
+  // twenty turns" before the window is spent rather than after.
+  if (parts.effortWarning) {
+    const warning = parts.effortWarning;
+    const bits = [];
+    if (Number.isFinite(warning.turnsLeft)) {
+      const blended = warning.blendedTurnsLeft;
+      bits.push(
+        'at ' + warning.effort + ' effort this window holds about ' + count(warning.turnsLeft, 'turn') +
+          (Number.isFinite(blended) && blended > warning.turnsLeft
+            ? ', not the ' + blended + ' the headroom above suggests'
+            : '')
+      );
+    }
+    if (warning.cheaper && Number.isFinite(warning.cheaper.multiple)) {
+      bits.push(
+        warning.effort + ' writes about ' + warning.cheaper.multiple.toFixed(1) +
+          ' times the output per turn that ' + warning.cheaper.effort + ' does'
+      );
+    }
+    if (bits.length) {
+      sentences.push(
+        'The effort setting is what is spending this: ' + bits.join(', and ') +
+          '. Keep it where the work genuinely needs the thinking and drop it where it ' +
+          'does not; it changes what every turn costs, not how many you get.'
+      );
+    }
   }
   // A per-model weekly is the one window effort cannot help with. Nothing you
   // do more cheaply on this model frees it; only running a different model
@@ -699,7 +786,7 @@ async function run(now, hookInput) {
   if (!view || !view.binding) {
     // One call, shared with the report. Building the view twice is how the
     // snapshot correction reached the report and never reached the hook.
-    const data = await usage.report(now, { sessionId });
+    const data = await usage.report(now, { sessionId, budgetMs: SCAN_BUDGET_MS });
     const binding = data.binding;
     view = {
       at: now,
@@ -716,6 +803,7 @@ async function run(now, hookInput) {
       })),
       snapshotAge: usage.formatDuration(data.snapshotAgeMs),
       binding: cacheableBinding(binding),
+      effortWarning: data.effortWarning || null,
     };
     writeCache(mergeCache(all, sessionId, view, KEEP_SESSIONS));
   }
@@ -754,6 +842,10 @@ async function run(now, hookInput) {
         : null,
     othersSummary: view.othersSummary,
     turnsLeft: view.turnsLeft,
+    effortWarning: view.effortWarning || null,
+    // Outside the cache: it is cheap, and it belongs to the other agent's
+    // clock rather than this session's.
+    codex: codexSummary(now),
     resetsIn:
       binding && !binding.stale && Number.isFinite(binding.resetsAt)
         ? usage.formatDuration(binding.resetsAt - now)
@@ -803,6 +895,7 @@ module.exports = {
   describeWindow,
   summariseOthers,
   briefText,
+  codexSummary,
   tallyContext,
   LARGE_CONTEXT_TOKENS,
   settings,

@@ -44,6 +44,17 @@
           }
         ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/usage-limits/scripts/pulse.js\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

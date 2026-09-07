@@ -102,6 +102,137 @@ function row(key, title, family, picked, now) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// The Codex block
+// ---------------------------------------------------------------------------
+//
+// The other agent's meter, drawn under Claude's in the same visual language and
+// counting the other way.
+//
+// Codex reports what it has SPENT on the wire - every rollout carries
+// `used_percent`, rising - but it shows the user what is LEFT: its own status
+// card computes `100 - used_percent` and prints "82% left". Claude Code does
+// the opposite and says "62% used". Both are right about their own product, and
+// a plugin that reported one product in the other's direction would be
+// misreading a number every time it was checked against the real thing.
+//
+// So the Codex rows carry both figures and every display draws `percentLeft`:
+// the bar drains rather than fills, and the colours turn at the same real
+// moment as Claude's because levelLeft() mirrors level() exactly.
+//
+// The titles are Codex's own, from its status card.
+const CODEX_TITLES = { five_hour: '5h limit', seven_day: 'Weekly limit' };
+const CODEX_TITLE = 'Codex usage';
+
+function codexRow(key, title, picked, now) {
+  const used = picked && Number.isFinite(picked.percent) ? picked.percent : null;
+  const resetsAtMs = picked && Number.isFinite(picked.resetsAtMs) ? picked.resetsAtMs : null;
+  const msToReset = resetsAtMs === null ? null : resetsAtMs - now;
+  const stale = msToReset !== null && msToReset <= 0;
+  // A window past its reset has turned over, so the figure describes an
+  // allowance that no longer exists. Drawing "6% left" in red from it would
+  // claim Codex is nearly out when it has just been given a fresh window, so
+  // the remaining figure is dropped and the row draws as unknown.
+  const left = used === null || stale ? null : Math.min(100, Math.max(0, 100 - used));
+  return {
+    key,
+    title,
+    family: null,
+    // The spent figure is kept because it is what came off the wire and what
+    // the arithmetic elsewhere is written in; percentLeft is what is drawn.
+    percent: used,
+    percentLeft: left,
+    remaining: true,
+    percentText: stale ? 'rolling' : left === null ? 'no reading' : Math.floor(left) + '% left',
+    resetsAtMs,
+    msToReset,
+    level: bars.levelLeft(left),
+    source: picked ? picked.source : null,
+    at: picked ? picked.at : null,
+    stale,
+    idle: false,
+    unreported: false,
+  };
+}
+
+// Built from whatever codex.collect() returned, which is the newest meter Codex
+// has written to disk. Nothing here spawns Codex or touches the network.
+function buildCodex(input) {
+  const opts = input || {};
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const utilization = opts.utilization && typeof opts.utilization === 'object' ? opts.utilization : null;
+  const fetchedAtMs = Number.isFinite(opts.fetchedAtMs) ? opts.fetchedAtMs : null;
+  const source = opts.source === 'api' || opts.source === 'live' ? 'api' : 'cache';
+
+  const rows = [];
+  const specs = Array.isArray(opts.windowSpecs) && opts.windowSpecs.length
+    ? opts.windowSpecs
+    : [{ key: 'five_hour', label: '5-hour' }, { key: 'seven_day', label: 'weekly' }];
+  for (const spec of specs) {
+    if (!spec || !spec.key) continue;
+    const picked = fromSnapshot(spec.key, utilization, fetchedAtMs, source);
+    if (!picked) continue;
+    const title = CODEX_TITLES[spec.key] || 'Current ' + (spec.label || spec.key) + ' window';
+    rows.push(codexRow(spec.key, title, picked, now));
+  }
+
+  const ageMs = fetchedAtMs === null ? null : Math.max(0, now - fetchedAtMs);
+  const hasData = rows.some((item) => item.percentLeft !== null);
+  const state = !hasData ? 'none' : ageMs !== null && ageMs < LIVE_AGE_MS ? 'live' : 'cached';
+
+  let note = null;
+  if (opts.windowless) {
+    note = 'this plan meters no rolling window';
+  } else if (!hasData) {
+    // Codex only writes its meter when it makes a request, so a machine that
+    // has Codex installed but has not run it has nothing to report, and that
+    // is not an error.
+    note = 'no reading yet, run Codex once';
+  } else if (rows.every((item) => item.stale)) {
+    note = 'every window has rolled over since Codex last ran';
+  }
+
+  return {
+    host: 'codex',
+    title: CODEX_TITLE,
+    rows,
+    plan: opts.plan || null,
+    windowless: Boolean(opts.windowless),
+    // What every surface checks before drawing anything at all.
+    present: rows.length > 0 || Boolean(opts.windowless),
+    state,
+    ageMs,
+    note,
+    now,
+  };
+}
+
+// Which effort a display should report.
+//
+// Two sources say what a session is running at, and they fail in different
+// ways. The status line is told by Claude Code itself and is exact, but only
+// for a session that HAS a status line, and a VS Code window has none. The
+// transcript is stamped with `effort` on every assistant line, so it is always
+// current and it exists for every session, but only once the model has
+// answered once. Whichever was written later is the truer one.
+//
+// The setting is the last resort, and only a resort: it says what the NEXT
+// session will start at, not what this one is doing, it does not move when
+// /effort does, and it is not even allowed to hold "max". Showing it as though
+// it were the live value is what made the panel report xhigh through a whole
+// session running at max.
+function pickEffort(fromLine, fromTranscript, setting) {
+  let best = null;
+  for (const item of [fromLine, fromTranscript]) {
+    if (!item || typeof item.effort !== 'string' || !item.effort) continue;
+    const at = Number.isFinite(item.at) ? item.at : 0;
+    if (!best || at >= best.at) best = { effort: item.effort, at };
+  }
+  if (best) return best.effort;
+  const named = typeof setting === 'string' ? setting.trim() : '';
+  return named && named !== 'default' ? named : null;
+}
+
 function ageText(ageMs) {
   return Number.isFinite(ageMs) ? 'showing the reading from ' + usage.formatDuration(ageMs) + ' ago' : 'no reading yet';
 }
@@ -232,6 +363,11 @@ module.exports = {
   TITLES,
   LIVE_AGE_MS,
   scopedTitle,
+  CODEX_TITLES,
+  CODEX_TITLE,
+  codexRow,
+  buildCodex,
+  pickEffort,
   epochMs,
   build,
   noteFor,

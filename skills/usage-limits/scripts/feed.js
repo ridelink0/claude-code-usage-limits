@@ -44,6 +44,10 @@ const STATUSLINE_MARGIN = 4;
 const SHORT = { five_hour: 'session', seven_day: 'week', spend_limit: 'spend' };
 // When even that is too wide.
 const SHORTER = { five_hour: '5h', seven_day: 'wk', spend_limit: 'spend' };
+// Codex names its own windows "5h limit" and "Weekly limit"; on one line they
+// are the same two abbreviations Claude's get.
+const SHORT_CODEX = { five_hour: '5h', seven_day: 'week' };
+const SHORTER_CODEX = { five_hour: '5h', seven_day: 'wk' };
 
 function configDir() {
   return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
@@ -218,17 +222,52 @@ function line(built, options) {
     { width: 0, head: false, shorter: true },
     { width: 0, head: false, shorter: true, gap: ' ' },
   ];
+
+  // The Codex tail.
+  //
+  // It always says "left", and if that does not fit it is not shown at all.
+  // Codex reports what remains and Claude reports what is spent, so a bare
+  // "85%" sitting beside a bare "15%" would be read as the same kind of
+  // number when they run in opposite directions - which is precisely the
+  // confusion this row exists to remove.
+  const codexTail = (attempt) => {
+    if (!built.codex || !Array.isArray(built.codex.rows) || !built.codex.rows.length) return [];
+    const parts = [];
+    for (const row of built.codex.rows) {
+      if (row.percentLeft === null) continue;
+      const label = (attempt.shorter ? SHORTER_CODEX : SHORT_CODEX)[row.key] || row.key;
+      const text = Math.floor(row.percentLeft) + '% left';
+      const painted = row.level === 'fill' ? text : bars.paint(text, bars.levelColour(row.level), mode);
+      const drawn = attempt.width
+        ? bars.bar(row.percentLeft, attempt.width, { mode, level: row.level, ascii, tick, reduced }) + ' '
+        : '';
+      parts.push(label + ' ' + drawn + painted);
+    }
+    if (!parts.length) return [];
+    return [bars.paint(bars.mark('codex', { ascii }), bars.THEME.codex, mode) + ' ' + parts.join('  ')];
+  };
   // Another Claude spending the same budget is worth a word on the line.
   const others =
     Number.isFinite(built.othersWorking) && built.othersWorking > 0
       ? bars.paint('+' + built.othersWorking + ' working', bars.THEME.claude, mode)
       : '';
-  let text = '';
-  for (const attempt of attempts) {
+  const compose = (attempt, withCodex) => {
     const parts = built.rows.map((row) => segment(row, attempt.width, attempt.shorter));
     if (others) parts.push(others);
     if (attempt.head) parts.unshift(head);
-    text = parts.join(attempt.gap || '  ');
+    const tail = withCodex ? codexTail(attempt) : [];
+    return parts.concat(tail).join(attempt.gap || '  ');
+  };
+
+  // Narrower bars are a smaller loss than dropping the other agent's meter
+  // entirely, so every width is tried WITH Codex before any is tried without.
+  let text = '';
+  for (const attempt of attempts) {
+    text = compose(attempt, true);
+    if (bars.visibleWidth(text) <= columns) return text;
+  }
+  for (const attempt of attempts) {
+    text = compose(attempt, false);
     if (bars.visibleWidth(text) <= columns) return text;
   }
   return text;
@@ -361,12 +400,46 @@ async function main(argv) {
       headersAt: slot ? slot.headersAt : null,
       model: slot ? slot.model : null,
       modelName: slot ? slot.modelName : null,
-      effort: slot ? slot.effort : null,
+      // Claude Code hands this line the effort outright, so the slot is
+      // already current and nothing else need be read. It is only when the
+      // slot has none - the very first update of a session, or a build that
+      // does not send it - that the transcript is worth a look.
+      effort:
+        slot && slot.effort
+          ? slot.effort
+          : view.pickEffort(
+              null,
+              usage.liveEffort(mine || (slot && slot.sessionId) || null),
+              collected.settings ? collected.settings.effortLevel : null
+            ),
       working: own.working || (gapMeansWorking(settings) && isWorking(slot, now)),
       ultrathink: Boolean(own.ultrathink),
       settingsModel: collected.settings ? collected.settings.model : null,
       env,
     });
+    // The other agent's meter, from its rollouts on disk. Required lazily and
+    // guarded by a single stat, so a machine without Codex pays nothing, and
+    // wrapped because a status line must never fail over an optional row.
+    // USAGE_LIMITS_CODEX_ROW=off turns it off.
+    built.codex = null;
+    if (String(env.USAGE_LIMITS_CODEX_ROW || '').toLowerCase() !== 'off' && host.codexHasSessions()) {
+      try {
+        const codex = require('./codex.js');
+        const other = codex.collect(now);
+        const block = view.buildCodex({
+          now,
+          utilization: other.utilization,
+          fetchedAtMs: other.snapshotFetchedAt,
+          windowSpecs: other.windowSpecs,
+          plan: other.plan,
+          windowless: other.windowless,
+        });
+        if (block.present) built.codex = block;
+      } catch (err) {
+        // No Codex row, and the Claude line is unaffected.
+      }
+    }
+
     const text = line(built, {
       columns: Math.max(20, (Number(env.COLUMNS) || 80) - STATUSLINE_MARGIN),
       // Claude Code captures the output, so stdout is never a TTY here, and

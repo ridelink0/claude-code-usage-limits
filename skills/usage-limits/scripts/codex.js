@@ -599,31 +599,81 @@ function latestMeter(events) {
   return null;
 }
 
+// The meter is written next to every request, so the newest one is always near
+// the END of a rollout. Only the tail is read.
+//
+// This used to read whole files, and a rollout on this machine reaches 32 MB;
+// twelve of those is a third of a gigabyte pulled through a string on a path
+// that the status line takes every few hundred milliseconds. A megabyte of
+// tail holds hundreds of token_count lines, which is far more than enough.
+const TAIL_BYTES = 1024 * 1024;
+
+function readTail(file, bytes) {
+  let size = 0;
+  try {
+    size = fs.statSync(file).size;
+  } catch (err) {
+    return null;
+  }
+  const from = Math.max(0, size - bytes);
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch (err) {
+    return null;
+  }
+  try {
+    const length = size - from;
+    if (length <= 0) return { text: '', partial: false };
+    const buffer = Buffer.allocUnsafe(length);
+    let read = 0;
+    while (read < length) {
+      const got = fs.readSync(fd, buffer, read, length - read, from + read);
+      if (got <= 0) break;
+      read += got;
+    }
+    return { text: buffer.toString('utf8', 0, read), partial: from > 0 };
+  } catch (err) {
+    return null;
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch (err) {
+      // Already closed.
+    }
+  }
+}
+
+function meterFromLines(text, partial) {
+  const lines = text.split('\n');
+  // The first line of a tail is a fragment of whatever it landed in the middle
+  // of, so it is never parsed.
+  const floor = partial ? 1 : 0;
+  for (let index = lines.length - 1; index >= floor; index -= 1) {
+    const line = lines[index];
+    if (!line || line.indexOf('"token_count"') === -1) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch (err) {
+      continue;
+    }
+    const meter = parsed && parsed.payload && parsed.payload.rate_limits;
+    const at = Date.parse(parsed && parsed.timestamp);
+    if (meter && Number.isFinite(at)) return { meter, at };
+  }
+  return null;
+}
+
 // Scanning only the newest few rollouts, for the meter alone. `collect` runs on
 // the status-line path where a full scan would be far too slow.
 function meterFromDisk() {
   const files = rolloutFiles(NaN).slice(-12).reverse();
   for (const entry of files) {
-    let raw;
-    try {
-      raw = fs.readFileSync(entry.file, 'utf8');
-    } catch (err) {
-      continue;
-    }
-    const lines = raw.split('\n');
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      const line = lines[index];
-      if (!line || line.indexOf('"token_count"') === -1) continue;
-      let parsed;
-      try {
-        parsed = JSON.parse(line);
-      } catch (err) {
-        continue;
-      }
-      const meter = parsed && parsed.payload && parsed.payload.rate_limits;
-      const at = Date.parse(parsed && parsed.timestamp);
-      if (meter && Number.isFinite(at)) return { meter, at };
-    }
+    const tail = readTail(entry.file, TAIL_BYTES);
+    if (!tail) continue;
+    const found = meterFromLines(tail.text, tail.partial);
+    if (found) return found;
   }
   return null;
 }
@@ -948,6 +998,9 @@ module.exports = {
   planFrom,
   latestMeter,
   meterFromDisk,
+  readTail,
+  meterFromLines,
+  TAIL_BYTES,
   liveFile,
   attemptFile,
   readLiveMeter,

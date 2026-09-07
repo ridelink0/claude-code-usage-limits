@@ -64,6 +64,32 @@ function prepare(built, clock) {
     ultracode: Boolean(row.ultracode),
     agoMs: Math.max(0, now - (row.lastAt || now)),
   }));
+  // The other agent's block, counting the other way. Every figure says "left",
+  // and the bar is drawn from what remains, so it drains where Claude's fills.
+  const codex =
+    built.codex && Array.isArray(built.codex.rows) && built.codex.rows.length
+      ? {
+          title: built.codex.title,
+          plan: built.codex.plan || '',
+          note: built.codex.note || '',
+          freshness: Number.isFinite(built.codex.ageMs) ? 'reading from ' + since(built.codex.ageMs) + ' ago' : '',
+          rows: built.codex.rows.map((row) => ({
+            title: row.title,
+            percentLeft: row.percentLeft,
+            percentText: row.percentText,
+            level: row.level,
+            colour: levelColour(row.level),
+            sub: row.stale
+              ? 'window rolled over since Codex last ran'
+              : row.percentLeft === null
+                ? 'no reading yet'
+                : bars
+                  ? bars.formatReset(row.msToReset, row.resetsAtMs, now, { clock })
+                  : '',
+          })),
+        }
+      : null;
+
   let freshness;
   if (built.state === 'none') freshness = 'no reading yet';
   else if (built.state === 'live') freshness = 'live, updated ' + since(built.ageMs) + ' ago';
@@ -77,6 +103,7 @@ function prepare(built, clock) {
     // The bars carry the animation: "rainbow" for ultrathink and max effort,
     // "ultra" for the ultracode effort level. The title never changes colour.
     style: built.style || '',
+    codex,
     ultrathink: Boolean(built.ultrathink),
     note: built.note,
     noteKind: built.outcome && !built.outcome.ok ? built.outcome.kind : null,
@@ -113,6 +140,7 @@ function html(webview, nonce) {
   const shimmer = theme ? rgb(theme.claudeShimmer) : '#eb9f7f';
   const empty = theme ? rgb(theme.empty) : '#505370';
   const ultra = theme ? rgb(theme.ultra) : '#af87ff';
+  const codexColour = theme ? rgb(theme.codex) : '#10a37f';
   const rainbow = theme ? theme.rainbow.map(rgb).join(',') : '#eb5f57,#f58b57,#fac35f,#91c882,#82aadc,#9b82c8,#c882b4';
   return [
     '<!DOCTYPE html><html><head><meta charset="utf-8">',
@@ -143,6 +171,15 @@ function html(webview, nonce) {
     '.sessions .where{opacity:.6;}',
     '.sessions .state{margin-left:auto;opacity:.75;}',
     '.sessions .on .state{color:' + claude + ';opacity:1;}',
+    '.codex{margin-top:16px;}',
+    '.codex .ctitle{color:' + codexColour + ';font-weight:600;display:flex;align-items:center;gap:6px;margin-bottom:8px;}',
+    // A plain hexagon, not the Codex logo. Codex has no mark of its own: it
+    // uses OpenAI\'s Blossom, whose brand guidelines forbid recolouring it and
+    // forbid lookalikes, and a third-party extension shipping it recoloured
+    // would be doing both.
+    '.cx{width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round;flex:none;}',
+    // "100% left" needs more room than "100%".
+    '.pct.wide{min-width:5.4em;}',
     '.note{margin-top:10px;}',
     '.note.warn{color:' + (theme ? rgb(theme.warning) : '#ffc107') + ';}',
     '.note.bad{color:' + (theme ? rgb(theme.error) : '#ff6b80') + ';}',
@@ -154,6 +191,9 @@ function html(webview, nonce) {
     '<script nonce="' + nonce + '">',
     'const vscode = acquireVsCodeApi();',
     'const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c]));',
+    // The Codex mark: an ordinary hexagon drawn in currentColor, so it takes
+    // the block\'s green and needs no image, no CDN and no trademark.
+    'const CX = \'<svg class="cx" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6 20.4 7.35v9.3L12 21.4 3.6 16.65v-9.3Z"/></svg>\';',
     'function render(v){',
     '  const cls = (v.style ? v.style + " " : "") + (v.working ? "working" : "idle");',
     '  let h = `<div class="${cls}"><div class="title"><span class="spin"></span><span class="text">Claude usage</span></div>`;',
@@ -161,6 +201,17 @@ function html(webview, nonce) {
     '  for (const r of v.rows) {',
     '    const w = r.percent == null ? 0 : Math.max(r.percent > 0 ? 2 : 0, Math.min(100, r.percent));',
     '    h += `<div class="row"><h4>${esc(r.title)}</h4><div class="bar"><div class="track"><div class="fill" style="width:${w}%;background:${r.colour}"></div></div><span class="pct" style="${r.level === "fill" ? "" : "color:" + r.colour}">${esc(r.percentText)}</span></div>${r.sub ? `<div class="sub">${esc(r.sub)}</div>` : ""}</div>`;',
+    '  }',
+    '  if (v.codex) {',
+    '    h += `<div class="codex"><div class="ctitle">${CX}<span>${esc(v.codex.title)}</span>${v.codex.plan ? `<span class="where">${esc(v.codex.plan)}</span>` : ""}</div>`;',
+    '    for (const r of v.codex.rows) {',
+    // Drawn from what is LEFT, so the bar empties as Codex is spent.
+    '      const w = r.percentLeft == null ? 0 : Math.max(r.percentLeft > 0 ? 2 : 0, Math.min(100, r.percentLeft));',
+    '      h += `<div class="row"><h4>${esc(r.title)}</h4><div class="bar"><div class="track"><div class="fill" style="width:${w}%;background:${r.colour}"></div></div><span class="pct wide" style="${r.level === "fill" ? "" : "color:" + r.colour}">${esc(r.percentText)}</span></div>${r.sub ? `<div class="sub">${esc(r.sub)}</div>` : ""}</div>`;',
+    '    }',
+    '    const tail = v.codex.note || v.codex.freshness;',
+    '    if (tail) h += `<div class="sub">${esc(tail)}</div>`;',
+    '    h += `</div>`;',
     '  }',
     '  if (v.sessions.length) {',
     '    h += `<div class="sessions"><h4>Sessions <span class="where">· ${esc(v.sessionsSummary)}</span></h4>`;',
