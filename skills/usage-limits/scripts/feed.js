@@ -202,7 +202,10 @@ function line(built, options) {
       : effort.shimmer && built.working
         ? bars.shimmer(effortName, tick, effort.rgb, effort.shimmer, { mode, reduced })
         : bars.paint(effortName, effort.rgb, mode);
-  const head = glyph + ' ' + built.modelLabel + (effortText ? ' ' + bars.dim('·', mode) + ' ' + effortText : '');
+  // The word, in the rainbow, the way Claude Code paints it in the prompt.
+  const thinking = built.ultrathink ? ' ' + bars.dim('·', mode) + ' ' + bars.rainbow('ultrathink', tick, { mode, reduced }) : '';
+  const head =
+    glyph + ' ' + built.modelLabel + (effortText ? ' ' + bars.dim('·', mode) + ' ' + effortText : '') + thinking;
 
   const segment = (row, width, shorter) => {
     const label = shortLabel(row, shorter);
@@ -414,6 +417,7 @@ async function main(argv) {
             ),
       working: own.working || (gapMeansWorking(settings) && isWorking(slot, now)),
       ultrathink: Boolean(own.ultrathink),
+      ultracode: Boolean(own.ultracode) || settings.ultracode === true,
       settingsModel: collected.settings ? collected.settings.model : null,
       env,
     });

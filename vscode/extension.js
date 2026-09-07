@@ -159,6 +159,9 @@ function html(webview, nonce) {
     '@keyframes sweep{0%{background-position:100% 0}100%{background-position:-100% 0}}',
     '.who{opacity:.75;margin:2px 0 10px;}',
     '.effort{color:' + ultra + ';}',
+    // The word ultrathink in the rainbow, as Claude Code paints it. Only the
+    // word: the bars keep their own colour under ultrathink.
+    '.think{background:linear-gradient(90deg,' + rainbow + ');background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:slide 3s linear infinite;}',
     '.row{margin:0 0 10px;}',
     '.row h4{margin:0 0 4px;font-weight:600;font-size:inherit;}',
     '.bar{display:flex;align-items:center;gap:8px;}',
@@ -197,7 +200,7 @@ function html(webview, nonce) {
     'function render(v){',
     '  const cls = (v.style ? v.style + " " : "") + (v.working ? "working" : "idle");',
     '  let h = `<div class="${cls}"><div class="title"><span class="spin"></span><span class="text">Claude usage</span></div>`;',
-    '  h += `<div class="who">${esc(v.modelLabel)}${v.effort ? ` · <span class="effort">${esc(v.effort)}</span>` : ""} · ${v.working ? "working" : "idle"}</div>`;',
+    '  h += `<div class="who">${esc(v.modelLabel)}${v.effort ? ` · <span class="effort">${esc(v.effort)}</span>` : ""}${v.ultrathink ? ` · <span class="think">ultrathink</span>` : ""} · ${v.working ? "working" : "idle"}</div>`;',
     '  for (const r of v.rows) {',
     '    const w = r.percent == null ? 0 : Math.max(r.percent > 0 ? 2 : 0, Math.min(100, r.percent));',
     '    h += `<div class="row"><h4>${esc(r.title)}</h4><div class="bar"><div class="track"><div class="fill" style="width:${w}%;background:${r.colour}"></div></div><span class="pct" style="${r.level === "fill" ? "" : "color:" + r.colour}">${esc(r.percentText)}</span></div>${r.sub ? `<div class="sub">${esc(r.sub)}</div>` : ""}</div>`;',

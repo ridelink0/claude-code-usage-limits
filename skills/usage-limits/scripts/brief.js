@@ -730,15 +730,22 @@ async function run(now, hookInput) {
   activity.mark(
     'working',
     sessionId,
-    {
-      // Only ultrathink, and only as a whole word: it is a real directive in
-      // the prompt. Ultracode is an effort level, read from the setting the
-      // agent reports, never from the text - the word turns up in ordinary
-      // requests, and these marks are read by every panel on the machine.
-      ultrathink: Boolean(
-        hookInput && typeof hookInput.prompt === 'string' && /\bultrathink\b/i.test(hookInput.prompt)
-      ),
-    },
+    Object.assign(
+      {
+        // Whole words only: both are real directives in the prompt. Ultrathink
+        // is per prompt, so it is set true or false every time.
+        ultrathink: Boolean(
+          hookInput && typeof hookInput.prompt === 'string' && /\bultrathink\b/i.test(hookInput.prompt)
+        ),
+      },
+      // Ultracode is Claude Code's own keyword trigger and it sticks for the
+      // session once used, so it is only ever set on here and otherwise
+      // carried forward. It is safe to read from the text now that every
+      // display reads the mark of the one session it describes.
+      hookInput && typeof hookInput.prompt === 'string' && /\bultracode\b/i.test(hookInput.prompt)
+        ? { ultracode: true }
+        : {}
+    ),
     now
   );
 

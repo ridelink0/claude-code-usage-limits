@@ -197,7 +197,14 @@ test('render paints the working state, the ultracode rainbow and the note colour
   const thinking = view.build({ now: NOW, utilization: account(NOW).cachedUsageUtilization.utilization, fetchedAtMs: NOW, source: 'api', model: 'claude-opus-5', working: true, effort: 'xhigh', ultrathink: true });
   const painted = panel.render(thinking, { columns: 40, mode: 'truecolor', tick: 3, now: NOW });
   const bodyText = painted.slice(2).join('\n');
-  assert.ok(rainbowCodes.filter((code) => bodyText.indexOf(code) !== -1).length >= 3, 'the bars run rainbow under ultrathink');
+  // Only the word is rainbow. Every bar line keeps its own level colour.
+  const barLines = painted.filter((line) => line.indexOf('█') !== -1 || line.indexOf('░') !== -1);
+  assert.ok(barLines.length > 0, 'there are bars to check');
+  for (const line of barLines) {
+    assert.strictEqual(rainbowCodes.filter((code) => line.indexOf(code) !== -1).length, 0, 'the bars are not rainbow under ultrathink');
+  }
+  assert.ok(rainbowCodes.filter((code) => painted[1].indexOf(code) !== -1).length >= 3, 'the word ultrathink is painted in the rainbow');
+  void bodyText;
   assert.strictEqual(rainbowCodes.filter((code) => painted[0].indexOf(code) !== -1).length, 0, 'the title is never rainbow');
   assert.ok(painted[0].indexOf('38;2;215;119;87') !== -1 || painted[0].indexOf('38;2;235;159;127') !== -1, 'the title stays Claude orange');
   assert.match(bars.stripAnsi(painted[1]), /xhigh/, 'the effort is still xhigh');

@@ -201,20 +201,23 @@ test('state and note describe what the reader is looking at', () => {
 });
 
 test('ultracode is the effort level, ultrathink is the word, and each paints the bars its own way', () => {
-  // Extra high with the word "ultracode" somewhere in a prompt is NOT
-  // ultracode: the level says so, nothing else. This is the reported bug.
+  // Ultracode is a session mode: Claude Code keeps reporting the level as
+  // xhigh while it is on, so the mark (or the setting) is the signal, and it
+  // gives the bars the effort picker's purple shimmer.
   const xhigh = view.build({ now: NOW, effort: 'xhigh', working: true, ultracode: true });
   assert.strictEqual(xhigh.effort, 'xhigh');
   assert.strictEqual(xhigh.working, true);
-  assert.strictEqual(xhigh.ultracode, false);
-  assert.strictEqual(xhigh.style, null, 'plain bars at xhigh');
+  assert.strictEqual(xhigh.ultracode, true);
+  assert.strictEqual(xhigh.style, 'ultra', 'the purple shimmer under ultracode');
+  assert.strictEqual(view.build({ now: NOW, effort: 'xhigh' }).style, null, 'plain bars at plain xhigh');
 
-  // Extra high plus ultrathink: rainbow bars, and the effort is still xhigh.
+  // Ultrathink paints THE WORD in the rainbow and nothing else: the bars keep
+  // their own colour, and the effort is still xhigh.
   const thinking = view.build({ now: NOW, effort: 'xhigh', ultrathink: true });
   assert.strictEqual(thinking.ultrathink, true);
   assert.strictEqual(thinking.ultracode, false);
   assert.strictEqual(thinking.effort, 'xhigh');
-  assert.strictEqual(thinking.style, 'rainbow');
+  assert.strictEqual(thinking.style, null, 'the bars are never rainbow for ultrathink');
 
   // The ultracode level: purple bars, the colour the effort picker uses.
   const ultra = view.build({ now: NOW, effort: 'ultracode' });
@@ -224,8 +227,9 @@ test('ultracode is the effort level, ultrathink is the word, and each paints the
   // Max effort is the other level Claude Code animates in the rainbow.
   assert.strictEqual(view.build({ now: NOW, effort: 'max' }).style, 'rainbow');
   assert.strictEqual(view.build({ now: NOW, effort: 'max' }).ultracode, false);
-  // Both at once: the rainbow wins, so the two are never mixed on one bar.
-  assert.strictEqual(view.build({ now: NOW, effort: 'ultracode', ultrathink: true }).style, 'rainbow');
+  // Both at once: ultrathink only ever paints the word, so the bars are the
+  // ultracode shimmer and the two are never mixed on one bar.
+  assert.strictEqual(view.build({ now: NOW, effort: 'ultracode', ultrathink: true }).style, 'ultra');
   assert.strictEqual(view.build({ now: NOW }).style, null);
   assert.strictEqual(view.build({ now: NOW }).working, false);
 });

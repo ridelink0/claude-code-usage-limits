@@ -159,18 +159,31 @@ async function snapshot(options) {
   const slots = onCodex ? {} : feed.readFeed();
   // Stay with the session already being described, so two windows on the same
   // model at different efforts do not make the header flip back and forth.
-  const slot = feed.stickySlot(slots, opts.sessionId, now);
   const marks = onCodex ? {} : activity.read();
-  const described = (slot && slot.sessionId) || opts.sessionId || null;
+  // The session to describe: the one this display was already describing,
+  // else the newest mark. Every session writes a mark, but only a terminal
+  // session writes a feed slot, so choosing from the feed meant a VS Code
+  // window with no status line was never the one described and its own
+  // ultrathink never showed.
+  const freshest = Object.keys(marks)
+    .filter((key) => key !== '_' && marks[key] && Number.isFinite(marks[key].at) && now - marks[key].at <= activity.STALE_MS)
+    .sort((a, b) => marks[b].at - marks[a].at)[0];
+  const sticky = opts.sessionId && marks[opts.sessionId] && now - marks[opts.sessionId].at <= feed.STICKY_QUIET_MS;
+  const described = (sticky ? opts.sessionId : null) || freshest || opts.sessionId || null;
+  const slot = (described && slots[described]) || feed.stickySlot(slots, opts.sessionId, now);
   // The marks are machine-wide, and this panel describes ONE session. Reading
   // the machine-wide summary here is what let a prompt in another window put
   // ultrathink on this window's bars. When the session being described is
   // known, its own mark is the only one that speaks for it.
+  // A panel that was given a session speaks for that session alone. A panel
+  // with none of its own is the machine's, and there the newest working
+  // session's word is the one shown - two windows in different modes would
+  // otherwise make it depend on whose tool call landed last.
   const seen = onCodex
     ? { working: codexWorking(now), ultracode: false, ultrathink: false, model: null }
-    : described
-      ? Object.assign(feed.ownState(marks, described, now), {
-          model: (marks[described] && marks[described].model) || null,
+    : opts.sessionId && marks[opts.sessionId]
+      ? Object.assign(feed.ownState(marks, opts.sessionId, now), {
+          model: (marks[opts.sessionId] && marks[opts.sessionId].model) || null,
         })
       : activity.summarise(marks, now);
   const settings = onCodex ? {} : settingsFor();
@@ -198,12 +211,13 @@ async function snapshot(options) {
     // Ultracode comes from the effort level above, not from here. Ultrathink
     // is a word in a prompt, and the hooks record it per session.
     ultrathink: Boolean(seen.ultrathink),
+    ultracode: Boolean(seen.ultracode) || settings.ultracode === true,
     settingsModel: collected.settings ? collected.settings.model : null,
     outcome,
     env,
   });
   built.now = now;
-  built.sessionId = slot && slot.sessionId ? slot.sessionId : null;
+  built.sessionId = described || (slot && slot.sessionId) || null;
   built.host = onCodex ? 'codex' : 'claude';
   built.title = onCodex ? 'Codex usage' : TITLE;
   built.plan = collected.plan || null;

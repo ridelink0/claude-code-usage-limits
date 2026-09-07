@@ -332,15 +332,21 @@ function build(input) {
   // appears in ordinary requests, and the marks are machine-wide, so one
   // session mentioning it turned every panel purple while the effort was
   // xhigh.
-  const ultracode = effort === 'ultracode';
-  // Ultrathink is a word in the prompt, and Claude Code paints that word in
-  // the rainbow, so the bars do the same.
+  // Ultracode is a session mode, not a level: Claude Code reports its effort
+  // as "xhigh" while it is on, so the level alone can never say. It comes
+  // from the `ultracode` setting (a real settings.json key) or from the
+  // session's own mark, written when the prompt used the keyword - which is
+  // Claude Code's own trigger for it. The level is kept for any build that
+  // does report it that way.
+  const ultracode = effort === 'ultracode' || Boolean(opts.ultracode);
+  // Ultrathink is a word in the prompt. Claude Code paints THE WORD in the
+  // rainbow and nothing else, so the display shows the word that way and the
+  // bars stay their own colour.
   const ultrathink = Boolean(opts.ultrathink);
-  // What the bars do: the rainbow for ultrathink and for max effort, the
-  // purple gradient of the effort picker for ultracode, their own level
-  // colour otherwise. The title is never painted in either; it stays the
-  // Claude orange, because the bar is the thing being reported on.
-  const style = ultrathink || effort === 'max' ? 'rainbow' : ultracode ? 'ultra' : null;
+  // What the bars do: the purple shimmer of the effort picker under ultracode,
+  // the rainbow for max effort, their own level colour otherwise. The title is
+  // never painted in either.
+  const style = ultracode ? 'ultra' : effort === 'max' ? 'rainbow' : null;
 
   return {
     rows,
