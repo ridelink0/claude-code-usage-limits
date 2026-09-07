@@ -61,12 +61,17 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--dry-run') args.dryRun = true;
+    else if (arg === '--host') args.host = argv[++i];
+    else if (arg.startsWith('--host=')) args.host = arg.slice(7);
     else if (arg === '--effort') args.effort = argv[++i];
     else if (arg === '--model') args.model = argv[++i];
     else if (arg.startsWith('--effort=')) args.effort = arg.slice('--effort='.length);
     else if (arg.startsWith('--model=')) args.model = arg.slice('--model='.length);
-    else if (!args.command) args.command = arg;
+    else if (!args.command && !arg.startsWith('-')) args.command = arg;
+    else throw new Error('Unknown argument: ' + arg);
+    if (['--host', '--effort', '--model'].includes(arg) && (!argv[i] || argv[i].startsWith('--'))) throw new Error('Missing value for ' + arg);
   }
+  for (const key of ['host', 'effort', 'model']) if (Object.hasOwn(args, key) && args[key] === '') throw new Error('Missing value for --' + key);
   if (!args.command) args.command = 'status';
   return args;
 }
@@ -166,6 +171,9 @@ function describe(settings, state) {
 
 function main(argv) {
   const args = parseArgs(argv);
+  const host = require('./host.js');
+  if (args.host && !['codex', 'claude'].includes(args.host)) throw new Error('Expected --host codex or --host claude');
+  if ((args.host || host.detect(argv)) === host.CODEX) return require('./codex-lowpower.js').main(args);
   const file = settingsFile();
   const settings = readJson(file) || {};
   const state = readJson(stateFile());
@@ -214,7 +222,7 @@ function main(argv) {
     return 0;
   }
 
-  process.stderr.write('usage: lowpower.js [status|on|off] [--effort level] [--model name] [--dry-run]\n');
+  process.stderr.write('usage: lowpower.js [status|on|off] [--host claude|codex] [--effort level] [--model name] [--dry-run]\n');
   return 1;
 }
 

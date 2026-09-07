@@ -29,6 +29,7 @@ const HELP = `claude-usage-limits - how much agent usage is left, and whether th
   claude-usage-limits lowpower status     show the current effort setting
   claude-usage-limits lowpower on         lower effortLevel, remembering the old value
   claude-usage-limits lowpower on --effort medium --model sonnet
+  claude-usage-limits lowpower on --host codex --effort low
   claude-usage-limits lowpower off        put back exactly what was there
 
   claude-usage-limits codex-hook status   is the Codex prompt hook installed

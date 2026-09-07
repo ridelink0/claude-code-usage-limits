@@ -537,3 +537,7 @@ stop.
 | `scripts/live.js` | The usage reading itself, taken the way Claude Code takes it for `/usage`, kept in `usage-limits-live.json` where `collect()` prefers it when newer than the cache. |
 | `scripts/view.js`, `scripts/bars.js`, `scripts/activity.js` | The display model, the drawing in Claude's colours, and the working/idle marks the hooks leave for the panel. Not meant to be called by hand. |
 | `references/how-it-works.md` | Where the numbers come from and where they are soft. |
+
+## Codex controls
+
+Under Codex, use `node scripts/lowpower.js on --host codex --effort low` to save defaults for new sessions, optionally adding `--model <supported-model-id>`. `off --host codex` restores them; `--dry-run` previews them. These writes cannot change an active task. Use host controls for its current model and effort; do not prescribe Claude models or /effort in Codex. Headroom is an estimate shared with other account activity, not reserved capacity.

@@ -5,3 +5,5 @@
 # package published from such a checkout fails to exec on Linux and macOS
 # while working fine on the machine that published it.
 * text=auto eol=lf
+
+bin/cli.js text eol=lf

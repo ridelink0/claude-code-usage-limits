@@ -129,12 +129,14 @@ test('currentEffort prefers the setting, then the measured effort, then xhigh', 
   assert.strictEqual(recommend.currentEffort({}, null), 'xhigh');
 });
 
-test('under Codex the settings command is withheld and explained', () => {
+test('under Codex the command saves Codex defaults without Claude model advice', () => {
   const decision = recommend.decide(
     inputs({ binding: binding({ percentLeft: 10 }), codex: true })
   );
-  assert.strictEqual(decision.apply.next, null);
-  assert.ok(decision.notes.some((note) => /Codex's own controls/.test(note)));
+  assert.match(decision.apply.next, /--host codex/);
+  assert.strictEqual(decision.model.delegate, null);
+  assert.strictEqual(decision.apply.delegate, null);
+  assert.ok(decision.notes.some((note) => /not the running task/.test(note)));
 });
 
 test("a current effort of max is warned about, and never written to settings", () => {

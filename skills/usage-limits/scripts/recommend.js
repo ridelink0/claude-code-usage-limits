@@ -19,7 +19,7 @@
 // judgement in it costs more in rework than it saves; the ladder loses height
 // a step at a time and 'critical' is the only posture that goes straight to
 // the floor.
-const NEXT_LOWER = { max: 'high', xhigh: 'medium', high: 'medium', medium: 'low', low: 'low' };
+const NEXT_LOWER = { ultra: 'xhigh', none: 'none', minimal: 'minimal', max: 'high', xhigh: 'medium', high: 'medium', medium: 'low', low: 'low' };
 
 // Below this share of output, reasoning is not where the money is going, and
 // turning effort down would trade quality for a saving that is not there.
@@ -187,7 +187,7 @@ function decide(inputs) {
       'reasoning is only ' + Math.round(share * 100) +
       '% of output, so effort is not where the money is going';
   } else {
-    const target = base.posture === 'critical' ? 'low' : NEXT_LOWER[effortNow] || 'medium';
+    const target = base.posture === 'critical' ? (['none', 'minimal'].includes(effortNow) ? effortNow : 'low') : NEXT_LOWER[effortNow] || 'medium';
     if (target !== effortNow) {
       base.effort.target = target;
       base.effort.changes = true;
@@ -198,6 +198,19 @@ function decide(inputs) {
     } else {
       base.effort.why = 'already at the floor for this posture';
     }
+  }
+
+  if (inputs.codex) {
+    // Claude's family ladder and slash commands do not describe Codex.
+    base.model.why = 'Keep the current Codex model; select another supported model in the host controls when needed.';
+    if (base.effort.changes) {
+      base.apply.now = 'use the Codex model and effort controls and select ' + base.effort.target;
+      base.apply.next = 'node scripts/lowpower.js on --host codex --effort ' + base.effort.target;
+    }
+    base.notes.push('Saved defaults affect new sessions, not the running task. Profiles and CLI overrides take precedence.');
+    if (Number.isFinite(inputs.sessions) && inputs.sessions > 1)
+      base.notes.push(inputs.sessions + ' sessions share this account budget.');
+    return base;
   }
 
   // The main model is only worth flipping when things are critical, and even
@@ -321,7 +334,7 @@ function renderRecommend(data, turns) {
     lines.push('            new sessions: ' + decision.apply.next);
   }
   lines.push('  Model     ' + decision.model.why);
-  lines.push('            ' + decision.apply.delegate);
+  if (decision.apply.delegate) lines.push('            ' + decision.apply.delegate);
   if (decision.model.nextSession) {
     lines.push('            new sessions: main model to ' + decision.model.nextSession + ' until the window resets');
   }
