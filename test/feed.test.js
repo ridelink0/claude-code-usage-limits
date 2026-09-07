@@ -47,13 +47,52 @@ function tempConfig(withSnapshot) {
   return dir;
 }
 
+// CODEX_HOME is pinned at an empty directory by default, so these assert on the
+// Claude line alone. Without it the status line grew a second line on any
+// machine that happens to have Codex installed and stayed one line on CI, so
+// the same test passed or failed depending on whose laptop ran it.
 function run(dir, input, env) {
   return spawnSync(process.execPath, [script], {
     input: typeof input === 'string' ? input : JSON.stringify(input),
     encoding: 'utf8',
     timeout: 15000,
-    env: Object.assign({ NO_COLOR: '1', COLUMNS: '120' }, process.env, { CLAUDE_CONFIG_DIR: dir }, env || {}),
+    env: Object.assign(
+      { NO_COLOR: '1', COLUMNS: '120' },
+      process.env,
+      // The host is stated outright: CODEX_HOME is one of the things
+      // host.detect() reads as "this is Codex", and pointing it at a fixture
+      // would otherwise silence the Claude line entirely.
+      { CLAUDE_CONFIG_DIR: dir, USAGE_LIMITS_HOST: 'claude', CODEX_HOME: path.join(dir, 'no-codex') },
+      env || {}
+    ),
   });
+}
+
+// A Codex home with one rollout in it, carrying the meter Codex writes beside
+// every request: 15% of the week spent, which the display shows as 85% left.
+function codexHome(usedPercent) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-codexhome-'));
+  const day = path.join(dir, 'sessions', '2026', '09', '06');
+  fs.mkdirSync(day, { recursive: true });
+  const at = new Date().toISOString();
+  const resets = Math.floor(Date.now() / 1000) + 6 * 24 * 60 * 60;
+  fs.writeFileSync(
+    path.join(day, 'rollout-2026-09-06T14-06-29-01a0781d-6c98-7da2-830d-314b05b7ed61.jsonl'),
+    JSON.stringify({
+      timestamp: at,
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: { last_token_usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5, total_tokens: 15 } },
+        rate_limits: {
+          limit_id: 'codex',
+          secondary: { used_percent: usedPercent, window_minutes: 10080, resets_at: resets },
+          plan_type: 'plus',
+        },
+      },
+    }) + '\n'
+  );
+  return dir;
 }
 
 function statusInput(model, extra) {
@@ -275,4 +314,54 @@ test('a display sticks to one session instead of flipping between two', () => {
   // A held session that has gone away is not held.
   assert.strictEqual(feed.stickySlot(all, 'gone', NOW + 1000).sessionId, 'b');
   assert.strictEqual(feed.stickySlot({}, 'a', NOW), null);
+});
+
+test('Codex gets a line of its own, underneath, counting down', () => {
+  const dir = tempConfig();
+  const result = run(dir, statusInput('claude-opus-5'), { CODEX_HOME: codexHome(15) });
+  const lines = result.stdout.trim().split('\n');
+  assert.strictEqual(lines.length, 2, 'the Claude line, then Codex below it: ' + result.stdout);
+  assert.match(lines[0], /session/, 'Claude stays on the first line');
+  assert.doesNotMatch(lines[0], /left/, 'and carries none of the Codex figures');
+  // 15 per cent spent on the wire is 85 per cent left on screen.
+  assert.match(lines[1], /85% left/);
+  assert.match(lines[1], /ChatGPT Plus/);
+  assert.ok(bars.visibleWidth(lines[1]) <= 120);
+});
+
+test('the Codex line is dropped, not blanked, when there is nothing to report', () => {
+  const dir = tempConfig();
+  const result = run(dir, statusInput('claude-opus-5'));
+  assert.strictEqual(result.stdout.trim().split('\n').length, 1, 'no Codex, no second line');
+});
+
+test('the Codex line fits whatever width it is given', () => {
+  const dir = tempConfig();
+  const home = codexHome(94);
+  for (const columns of [120, 60, 38, 24]) {
+    const result = run(dir, statusInput('claude-opus-5'), { COLUMNS: String(columns), CODEX_HOME: home });
+    const lines = result.stdout.trim().split('\n');
+    assert.strictEqual(lines.length, 2, columns + ' columns lost the Codex line');
+    for (const one of lines) {
+      assert.ok(bars.visibleWidth(one) <= columns, columns + ' columns: ' + one);
+    }
+    // Nearly spent, so it must say so rather than reading as nearly full.
+    assert.match(lines[1], /6% left/);
+  }
+});
+
+test('Claude Code handing over its own status JSON settles the host', () => {
+  // CODEX_HOME is what a Codex user has set globally; it must not silence the
+  // Claude status line.
+  const dir = tempConfig();
+  const result = spawnSync(process.execPath, [script], {
+    input: JSON.stringify(statusInput('claude-opus-5')),
+    encoding: 'utf8',
+    timeout: 15000,
+    env: Object.assign({ NO_COLOR: '1', COLUMNS: '120' }, process.env, {
+      CLAUDE_CONFIG_DIR: dir,
+      CODEX_HOME: path.join(dir, 'no-codex'),
+    }),
+  });
+  assert.match(result.stdout, /session .*42%/, 'the Claude line survives CODEX_HOME');
 });

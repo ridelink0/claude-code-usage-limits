@@ -233,44 +233,77 @@ function line(built, options) {
   // "85%" sitting beside a bare "15%" would be read as the same kind of
   // number when they run in opposite directions - which is precisely the
   // confusion this row exists to remove.
-  const codexTail = (attempt) => {
-    if (!built.codex || !Array.isArray(built.codex.rows) || !built.codex.rows.length) return [];
-    const parts = [];
-    for (const row of built.codex.rows) {
-      if (row.percentLeft === null) continue;
-      const label = (attempt.shorter ? SHORTER_CODEX : SHORT_CODEX)[row.key] || row.key;
-      const text = Math.floor(row.percentLeft) + '% left';
-      const painted = row.level === 'fill' ? text : bars.paint(text, bars.levelColour(row.level), mode);
-      const drawn = attempt.width
-        ? bars.bar(row.percentLeft, attempt.width, { mode, level: row.level, ascii, tick, reduced }) + ' '
-        : '';
-      parts.push(label + ' ' + drawn + painted);
-    }
-    if (!parts.length) return [];
-    return [bars.paint(bars.mark('codex', { ascii }), bars.THEME.codex, mode) + ' ' + parts.join('  ')];
-  };
   // Another Claude spending the same budget is worth a word on the line.
   const others =
     Number.isFinite(built.othersWorking) && built.othersWorking > 0
       ? bars.paint('+' + built.othersWorking + ' working', bars.THEME.claude, mode)
       : '';
-  const compose = (attempt, withCodex) => {
+  let text = '';
+  for (const attempt of attempts) {
     const parts = built.rows.map((row) => segment(row, attempt.width, attempt.shorter));
     if (others) parts.push(others);
     if (attempt.head) parts.unshift(head);
-    const tail = withCodex ? codexTail(attempt) : [];
-    return parts.concat(tail).join(attempt.gap || '  ');
-  };
-
-  // Narrower bars are a smaller loss than dropping the other agent's meter
-  // entirely, so every width is tried WITH Codex before any is tried without.
-  let text = '';
-  for (const attempt of attempts) {
-    text = compose(attempt, true);
+    text = parts.join(attempt.gap || '  ');
     if (bars.visibleWidth(text) <= columns) return text;
   }
+  return text;
+}
+
+// The Codex line, drawn UNDERNEATH the Claude one.
+//
+// It began as a tail on the same line, and that was wrong twice over. It read
+// as one more Claude window when it is a different account with a different
+// budget, and being last it was the first thing the width ladder dropped, so on
+// an ordinary terminal it was simply never there. A line of its own is what the
+// panel already does and what was asked for.
+//
+// Every figure says "left", because Codex counts down where Claude counts up.
+function codexLine(built, options) {
+  const opts = options || {};
+  const columns = Number.isFinite(opts.columns) && opts.columns > 0 ? opts.columns : 80;
+  const mode = opts.mode || 'none';
+  const tick = Number.isFinite(opts.tick) ? opts.tick : 0;
+  const reduced = Boolean(opts.reduced);
+  const ascii = Boolean(opts.ascii);
+
+  const block = built && built.codex;
+  if (!block || !Array.isArray(block.rows) || !block.rows.length) return '';
+  // Nothing readable at all is silence, not a line of dashes.
+  if (!block.rows.some((row) => row.percentLeft !== null)) return '';
+
+  const glyph = bars.paint(bars.mark('codex', { ascii }), bars.THEME.codex, mode);
+  const plan = block.plan ? bars.paint(String(block.plan), bars.THEME.codex, mode) : '';
+
+  const segment = (row, width, shorter) => {
+    const label = (shorter ? SHORTER_CODEX : SHORT_CODEX)[row.key] || row.key;
+    // A window whose reading has rolled over says so rather than vanishing: on
+    // a line of its own there is room, and dropping it silently would read as
+    // "Codex has one window" when it has two.
+    if (row.percentLeft === null) return label + ' ' + bars.dim(row.percentText, mode);
+    const text = Math.floor(row.percentLeft) + '% left';
+    const painted = row.level === 'fill' ? text : bars.paint(text, bars.levelColour(row.level), mode);
+    if (!width) return label + ' ' + painted;
+    return (
+      label + ' ' + bars.bar(row.percentLeft, width, { mode, level: row.level, ascii, tick, reduced }) + ' ' + painted
+    );
+  };
+
+  const attempts = [
+    { width: 10, head: true },
+    { width: 8, head: true },
+    { width: 6, head: true },
+    { width: 6, head: false },
+    { width: 4, head: false },
+    { width: 0, head: false },
+    { width: 0, head: false, shorter: true },
+    { width: 0, head: false, shorter: true, gap: ' ' },
+  ];
+
+  let text = '';
   for (const attempt of attempts) {
-    text = compose(attempt, false);
+    const gap = attempt.gap || '  ';
+    const body = block.rows.map((row) => segment(row, attempt.width, attempt.shorter)).join(gap);
+    text = (attempt.head && plan ? glyph + ' ' + plan + gap : glyph + ' ') + body;
     if (bars.visibleWidth(text) <= columns) return text;
   }
   return text;
@@ -359,6 +392,12 @@ async function main(argv) {
       input = null;
     }
     if (input && typeof input !== 'object') input = null;
+    // Claude Code handing this its own status-line JSON settles which agent is
+    // running, and it beats any guess made from the environment. Anyone with
+    // CODEX_HOME set for their Codex install was otherwise detected as Codex
+    // here and got a blank status line under Claude Code, with nothing to say
+    // why - detection is only meant to be the fallback for a hand-run script.
+    if (input && (input.session_id || input.model)) usage.setHost(host.CLAUDE);
 
     const state = statusline.readState();
     if (state && state.chain && state.previous && state.previous.type === 'command' && state.previous.command) {
@@ -444,7 +483,7 @@ async function main(argv) {
       }
     }
 
-    const text = line(built, {
+    const drawn = {
       columns: Math.max(20, (Number(env.COLUMNS) || 80) - STATUSLINE_MARGIN),
       // Claude Code captures the output, so stdout is never a TTY here, and
       // ANSI is supported all the same.
@@ -453,8 +492,12 @@ async function main(argv) {
       reduced: motionOff(settings, env),
       ascii: String(env.USAGE_LIMITS_ASCII || '') === '1',
       clock: clockFor(settings, env),
-    });
-    await out((chained ? chained + '\n' : '') + text + '\n');
+    };
+    const text = line(built, drawn);
+    // Underneath, on its own line. Claude Code draws every line the status
+    // line prints, which is how a chained status line already works.
+    const other = codexLine(built, drawn);
+    await out((chained ? chained + '\n' : '') + text + (other ? '\n' + other : '') + '\n');
     return 0;
   } catch (err) {
     if (chained) await out(chained + '\n');
@@ -478,6 +521,7 @@ module.exports = {
   gapMeansWorking,
   ownState,
   line,
+  codexLine,
   runPrevious,
   clockFor,
   motionOff,

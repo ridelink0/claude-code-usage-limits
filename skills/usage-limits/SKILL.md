@@ -405,9 +405,11 @@ word "left" so the two can never be read as the same kind of number. The
 colours turn at the same real moment either way — 80% used is 20% left is
 yellow, 90% used is 10% left is red.
 
-The mark beside it is a plain hexagon, not the Codex logo. Codex has no mark of
-its own; it uses OpenAI's Blossom, whose brand guidelines forbid recolouring it
-and forbid lookalikes.
+The mark beside it is OpenAI's Blossom, which is what Codex uses for itself. The
+VS Code view draws the real logo; a terminal has one monospaced cell, so there
+it is the nearest rosette Unicode has (U+273F), chosen because it is narrow
+everywhere and carries no emoji property — a double-width mark would push every
+bar on the line out of true.
 
 ## Running under Codex
 

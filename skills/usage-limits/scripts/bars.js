@@ -80,25 +80,24 @@ const EMPTY = '░';
 const FILL_ASCII = '#';
 const EMPTY_ASCII = '-';
 
-// The two marks: Claude Code's own six-pointed asterisk, and a plain hexagon
-// standing for Codex.
+// The two marks: Claude Code's own six-pointed asterisk, and a florette for
+// Codex, which is as near to OpenAI's Blossom as one character gets.
 //
-// The hexagon is deliberately NOT the Codex logo. Codex has no mark of its
-// own - it borrows OpenAI's Blossom - and OpenAI's brand guidelines say
-// outright "DON'T add any colors to the Blossom" and "do not incorporate the
-// logo into your own branding or design a similar logo". Painting their mark
-// in a terminal colour is the first of those and drawing a lookalike is the
-// second, so what goes here is an ordinary geometric shape in their green,
-// which says "the other agent" without borrowing anyone's trademark.
+// The mark is there to say whose meter the row belongs to, and a terminal has
+// exactly one monospaced cell to say it in. There is no Blossom codepoint in
+// Unicode, so this is the closest rosette to it; the VS Code view is not
+// limited to a character and draws the real logo.
 //
-// U+2B22 was chosen over the prettier candidates because it is the only sort
-// that is safe in this file: East Asian Width N, so it is one column in every
-// terminal, and it carries no Emoji property, so nothing can promote it to
-// double width. visibleWidth() counts codepoints rather than display columns,
-// so a wide mark would silently push every bar on the line out of true.
+// The candidates were narrowed on two hard constraints before looks. East
+// Asian Width N, so the mark is one column in every terminal, and no Emoji
+// property, so nothing can promote it to double width: visibleWidth() counts
+// codepoints rather than display columns, so a wide mark would silently push
+// every bar on the line out of true. U+273F satisfies both, and it lives in
+// Segoe UI Symbol - which is the same font fallback Claude's own U+273B
+// already depends on here, Consolas carrying neither.
 const CLAUDE_MARK = '✻';
 const CLAUDE_MARK_ASCII = '*';
-const CODEX_MARK = '⬢';
+const CODEX_MARK = '✿';
 const CODEX_MARK_ASCII = 'O';
 
 // The mark for a host, and the colour to paint it, so the status line, the
