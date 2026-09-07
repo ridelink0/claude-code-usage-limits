@@ -405,11 +405,12 @@ word "left" so the two can never be read as the same kind of number. The
 colours turn at the same real moment either way — 80% used is 20% left is
 yellow, 90% used is 10% left is red.
 
-The mark beside it is OpenAI's Blossom, which is what Codex uses for itself. The
-VS Code view draws the real logo; a terminal has one monospaced cell, so there
-it is the nearest rosette Unicode has (U+273F), chosen because it is narrow
-everywhere and carries no emoji property — a double-width mark would push every
-bar on the line out of true.
+There is no mark beside it, only the word "Codex" in OpenAI's green. Codex has
+no mark of its own — it uses OpenAI's Blossom, and there is no Blossom codepoint
+in Unicode, so a terminal cannot draw one. The nearest rosette is a flower, and
+a flower in the slot where a logo should be is not the logo; the word is
+unambiguous and cannot come out as something else in a font that has never heard
+of it.
 
 ## Running under Codex
 

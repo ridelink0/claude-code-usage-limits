@@ -124,17 +124,21 @@ test('the freshness of the Codex reading is judged on its own clock', () => {
   assert.strictEqual(view.buildCodex(meter({ fetchedAtMs: NOW - 15 * HOUR })).state, 'cached');
 });
 
-test('the Codex mark is one narrow column', () => {
-  // visibleWidth counts codepoints, not display columns, so a wide or
-  // multi-codepoint mark would silently push every bar out of line.
-  assert.strictEqual(Array.from(bars.CODEX_MARK).length, 1);
-  assert.strictEqual(bars.visibleWidth(bars.CODEX_MARK), 1);
-  assert.strictEqual(bars.CODEX_MARK.codePointAt(0), 0x273f, 'the florette nearest the Blossom');
-  assert.strictEqual(bars.mark('codex'), bars.CODEX_MARK);
-  assert.strictEqual(bars.mark('codex', { ascii: true }), 'O');
-  assert.strictEqual(bars.mark('claude'), bars.CLAUDE_MARK);
-  // The two marks must not be the same glyph, or the blocks are unreadable.
-  assert.notStrictEqual(bars.CODEX_MARK, bars.CLAUDE_MARK);
+test('Codex is labelled by name, because no font can draw its logo', () => {
+  // There is no Blossom codepoint in Unicode, and the nearest rosette is a
+  // flower - a different picture in the slot where the logo should be, which
+  // is worse than none. So there is no Codex glyph to get wrong.
+  assert.strictEqual(bars.CODEX_LABEL, 'Codex');
+  assert.strictEqual(bars.CODEX_MARK, undefined, 'no Codex glyph is exported');
+  assert.strictEqual(bars.CODEX_MARK_ASCII, undefined);
+
+  // Claude keeps its mark, and it stays one narrow column: visibleWidth counts
+  // codepoints rather than display columns, so a wide one would silently push
+  // every bar on the line out of true.
+  assert.strictEqual(Array.from(bars.CLAUDE_MARK).length, 1);
+  assert.strictEqual(bars.visibleWidth(bars.CLAUDE_MARK), 1);
+  assert.strictEqual(bars.mark(), bars.CLAUDE_MARK);
+  assert.strictEqual(bars.mark({ ascii: true }), '*');
 });
 
 test('the two marks are painted in different colours', () => {

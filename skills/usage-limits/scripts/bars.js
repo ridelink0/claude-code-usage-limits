@@ -80,31 +80,24 @@ const EMPTY = '░';
 const FILL_ASCII = '#';
 const EMPTY_ASCII = '-';
 
-// The two marks: Claude Code's own six-pointed asterisk, and a florette for
-// Codex, which is as near to OpenAI's Blossom as one character gets.
-//
-// The mark is there to say whose meter the row belongs to, and a terminal has
-// exactly one monospaced cell to say it in. There is no Blossom codepoint in
-// Unicode, so this is the closest rosette to it; the VS Code view is not
-// limited to a character and draws the real logo.
-//
-// The candidates were narrowed on two hard constraints before looks. East
-// Asian Width N, so the mark is one column in every terminal, and no Emoji
-// property, so nothing can promote it to double width: visibleWidth() counts
-// codepoints rather than display columns, so a wide mark would silently push
-// every bar on the line out of true. U+273F satisfies both, and it lives in
-// Segoe UI Symbol - which is the same font fallback Claude's own U+273B
-// already depends on here, Consolas carrying neither.
+// Claude Code's own six-pointed asterisk, in the two forms.
 const CLAUDE_MARK = '✻';
 const CLAUDE_MARK_ASCII = '*';
-const CODEX_MARK = '✿';
-const CODEX_MARK_ASCII = 'O';
 
-// The mark for a host, and the colour to paint it, so the status line, the
-// panel and the VS Code view cannot end up drawing different ones.
-function mark(which, options) {
+// Codex is labelled with its name, not a mark.
+//
+// It has no mark of its own: it uses OpenAI's Blossom, and there is no Blossom
+// codepoint in Unicode, so a terminal cannot draw one. The nearest rosette is
+// a flower, and a flower standing in for a logo is not the logo - it is a
+// different picture in the same slot, which is worse than no picture at all.
+// The word is unambiguous, costs five columns, and cannot come out as
+// something else in a font that has never heard of it.
+const CODEX_LABEL = 'Codex';
+
+// Claude's mark, in the two forms, so the status line, the panel and the VS
+// Code view cannot end up drawing different ones.
+function mark(options) {
   const opts = options || {};
-  if (which === 'codex') return opts.ascii ? CODEX_MARK_ASCII : CODEX_MARK;
   return opts.ascii ? CLAUDE_MARK_ASCII : CLAUDE_MARK;
 }
 
@@ -393,8 +386,7 @@ module.exports = {
   levelColour,
   CLAUDE_MARK,
   CLAUDE_MARK_ASCII,
-  CODEX_MARK,
-  CODEX_MARK_ASCII,
+  CODEX_LABEL,
   mark,
   markColour,
   markShimmer,

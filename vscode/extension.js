@@ -176,12 +176,6 @@ function html(webview, nonce) {
     '.sessions .on .state{color:' + claude + ';opacity:1;}',
     '.codex{margin-top:16px;}',
     '.codex .ctitle{color:' + codexColour + ';font-weight:600;display:flex;align-items:center;gap:6px;margin-bottom:8px;}',
-    // A plain hexagon, not the Codex logo. Codex has no mark of its own: it
-    // uses OpenAI\'s Blossom, whose brand guidelines forbid recolouring it and
-    // forbid lookalikes, and a third-party extension shipping it recoloured
-    // would be doing both.
-    '.cx{width:1em;height:1em;fill:currentColor;flex:none;}',
-    // "100% left" needs more room than "100%".
     '.pct.wide{min-width:5.4em;}',
     '.note{margin-top:10px;}',
     '.note.warn{color:' + (theme ? rgb(theme.warning) : '#ffc107') + ';}',
@@ -194,9 +188,9 @@ function html(webview, nonce) {
     '<script nonce="' + nonce + '">',
     'const vscode = acquireVsCodeApi();',
     'const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c]));',
-    // The Codex mark: an ordinary hexagon drawn in currentColor, so it takes
+
     // the block\'s green and needs no image, no CDN and no trademark.
-    'const CX = \'<svg class="cx" viewBox="0 0 24 24" aria-hidden="true"><path d="M13.798 23.976a5.7 5.7 0 0 1-2.26-.456 6.1 6.1 0 0 1-1.903-1.27 5.7 5.7 0 0 1-1.88.311 5.75 5.75 0 0 1-2.95-.79 6.2 6.2 0 0 1-2.188-2.159q-.81-1.366-.809-3.045 0-.695.19-1.51a6.4 6.4 0 0 1-1.475-2.038A5.95 5.95 0 0 1 0 10.573Q0 9.278.547 8.08q.547-1.2 1.523-2.062a5.5 5.5 0 0 1 2.307-1.223A5.7 5.7 0 0 1 5.472 2.35 6.1 6.1 0 0 1 7.565.623 5.8 5.8 0 0 1 10.206 0q1.19 0 2.26.456a6.1 6.1 0 0 1 1.903 1.27 5.7 5.7 0 0 1 1.88-.311q1.594 0 2.95.79a6 6 0 0 1 2.165 2.159q.832 1.366.832 3.045 0 .695-.19 1.51a6.3 6.3 0 0 1 1.475 2.062q.523 1.15.523 2.422a5.9 5.9 0 0 1-.547 2.493q-.547 1.2-1.546 2.086a5.4 5.4 0 0 1-2.284 1.199 5.56 5.56 0 0 1-1.118 2.445 5.9 5.9 0 0 1-2.07 1.727 5.8 5.8 0 0 1-2.64.623m-5.876-2.997q1.19 0 2.07-.504l4.472-2.589a.53.53 0 0 0 .238-.455v-2.062L8.945 18.7a.96.96 0 0 1-1.047 0l-4.496-2.613a.7.7 0 0 1-.024.168v.287q0 1.224.571 2.254a4.24 4.24 0 0 0 1.642 1.583q1.047.6 2.331.599m.238-3.908a.6.6 0 0 0 .262.072q.118 0 .238-.072l1.784-1.031-5.734-3.357q-.522-.312-.523-.935V6.545a4.3 4.3 0 0 0-1.903 1.63 4.25 4.25 0 0 0-.714 2.398q0 1.176.595 2.254.594 1.08 1.546 1.63zm5.638 5.323q1.26 0 2.284-.576a4.3 4.3 0 0 0 1.618-1.582q.595-1.008.595-2.254v-5.179a.47.47 0 0 0-.238-.431l-1.808-1.055v6.689q0 .624-.524.935l-4.496 2.613a4.3 4.3 0 0 0 2.57.84m.904-8.776v-3.26l-2.688-1.535-2.712 1.535v3.26l2.712 1.535zM7.756 5.97q0-.623.523-.935l4.496-2.613a4.3 4.3 0 0 0-2.569-.84q-1.26 0-2.284.576A4.3 4.3 0 0 0 6.304 3.74q-.57 1.008-.57 2.254v5.155q0 .287.237.455l1.785 1.055zM19.84 17.43a4.16 4.16 0 0 0 1.88-1.63 4.33 4.33 0 0 0 .713-2.397q0-1.176-.595-2.254-.594-1.08-1.546-1.63l-4.449-2.59q-.143-.096-.261-.072a.46.46 0 0 0-.238.072L13.56 7.936l5.758 3.38a.9.9 0 0 1 .38.384q.143.216.143.528zM15.059 5.25q.524-.335 1.047 0l4.52 2.662V7.48q0-1.15-.57-2.181A4.14 4.14 0 0 0 18.46 3.62q-1.023-.623-2.379-.623-1.19 0-2.07.503L9.54 6.09a.53.53 0 0 0-.238.455v2.062z"/></svg>\';',
+
     'function render(v){',
     '  const cls = (v.style ? v.style + " " : "") + (v.working ? "working" : "idle");',
     '  let h = `<div class="${cls}"><div class="title"><span class="spin"></span><span class="text">Claude usage</span></div>`;',
@@ -206,7 +200,7 @@ function html(webview, nonce) {
     '    h += `<div class="row"><h4>${esc(r.title)}</h4><div class="bar"><div class="track"><div class="fill" style="width:${w}%;background:${r.colour}"></div></div><span class="pct" style="${r.level === "fill" ? "" : "color:" + r.colour}">${esc(r.percentText)}</span></div>${r.sub ? `<div class="sub">${esc(r.sub)}</div>` : ""}</div>`;',
     '  }',
     '  if (v.codex) {',
-    '    h += `<div class="codex"><div class="ctitle">${CX}<span>${esc(v.codex.title)}</span>${v.codex.plan ? `<span class="where">${esc(v.codex.plan)}</span>` : ""}</div>`;',
+    '    h += `<div class="codex"><div class="ctitle"><span>${esc(v.codex.title)}</span>${v.codex.plan ? `<span class="where">${esc(v.codex.plan)}</span>` : ""}</div>`;',
     '    for (const r of v.codex.rows) {',
     // Drawn from what is LEFT, so the bar empties as Codex is spent.
     '      const w = r.percentLeft == null ? 0 : Math.max(r.percentLeft > 0 ? 2 : 0, Math.min(100, r.percentLeft));',

@@ -271,8 +271,9 @@ function codexLine(built, options) {
   // Nothing readable at all is silence, not a line of dashes.
   if (!block.rows.some((row) => row.percentLeft !== null)) return '';
 
-  const glyph = bars.paint(bars.mark('codex', { ascii }), bars.THEME.codex, mode);
-  const plan = block.plan ? bars.paint(String(block.plan), bars.THEME.codex, mode) : '';
+  // The name, not a mark: there is no ChatGPT logo a terminal font can draw.
+  const glyph = bars.paint(bars.CODEX_LABEL, bars.THEME.codex, mode);
+  const plan = block.plan ? bars.dim(String(block.plan), mode) : '';
 
   const segment = (row, width, shorter) => {
     const label = (shorter ? SHORTER_CODEX : SHORT_CODEX)[row.key] || row.key;
@@ -309,7 +310,10 @@ function codexLine(built, options) {
     const rows = attempt.readable ? block.rows.filter((row) => row.percentLeft !== null) : block.rows;
     if (!rows.length) continue;
     const body = rows.map((row) => segment(row, attempt.width, attempt.shorter)).join(gap);
-    text = (attempt.head && plan ? glyph + ' ' + plan + gap : glyph + ' ') + body;
+    // "Codex · ChatGPT Plus", the way the Claude line separates its model from
+    // its effort. Without the dot the two ran together as "Codex ChatGPT Plus".
+    const label = attempt.head && plan ? glyph + ' ' + bars.dim('·', mode) + ' ' + plan + gap : glyph + ' ';
+    text = label + body;
     if (bars.visibleWidth(text) <= columns) return text;
   }
   return text;

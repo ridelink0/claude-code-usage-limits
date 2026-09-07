@@ -483,9 +483,7 @@ function render(built, options) {
   if (built.codex && built.codex.rows.length) {
     const block = built.codex;
     const lines = [
-      bars.paint(bars.mark('codex', { ascii }), bars.THEME.codex, mode) +
-        ' ' +
-        bars.bold(bars.paint(block.title, bars.THEME.codex, mode), mode),
+      bars.bold(bars.paint(block.title, bars.THEME.codex, mode), mode),
     ];
     // "85% left" is five characters wider than "85%", so the Codex bars get
     // their own width. Sharing the Claude one clipped every Codex row.
