@@ -297,12 +297,18 @@ function codexLine(built, options) {
     { width: 0, head: false },
     { width: 0, head: false, shorter: true },
     { width: 0, head: false, shorter: true, gap: ' ' },
+    // Last of all, only the windows that have a number. "5h rolling" is ten
+    // columns saying nothing a figure would not, and in a pane this narrow it
+    // is the difference between the line fitting and being clipped.
+    { width: 0, head: false, shorter: true, gap: ' ', readable: true },
   ];
 
   let text = '';
   for (const attempt of attempts) {
     const gap = attempt.gap || '  ';
-    const body = block.rows.map((row) => segment(row, attempt.width, attempt.shorter)).join(gap);
+    const rows = attempt.readable ? block.rows.filter((row) => row.percentLeft !== null) : block.rows;
+    if (!rows.length) continue;
+    const body = rows.map((row) => segment(row, attempt.width, attempt.shorter)).join(gap);
     text = (attempt.head && plan ? glyph + ' ' + plan + gap : glyph + ' ') + body;
     if (bars.visibleWidth(text) <= columns) return text;
   }

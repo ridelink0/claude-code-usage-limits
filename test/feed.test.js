@@ -338,7 +338,9 @@ test('the Codex line is dropped, not blanked, when there is nothing to report', 
 test('the Codex line fits whatever width it is given', () => {
   const dir = tempConfig();
   const home = codexHome(94);
-  for (const columns of [120, 60, 38, 24]) {
+  // 24 and 20 are where it used to run four columns over: the rolled-over
+  // window was still being drawn in a pane with no room for it.
+  for (const columns of [120, 60, 38, 24, 20]) {
     const result = run(dir, statusInput('claude-opus-5'), { COLUMNS: String(columns), CODEX_HOME: home });
     const lines = result.stdout.trim().split('\n');
     assert.strictEqual(lines.length, 2, columns + ' columns lost the Codex line');
