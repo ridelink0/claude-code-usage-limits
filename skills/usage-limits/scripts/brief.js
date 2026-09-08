@@ -19,6 +19,7 @@ const tally = require('./tally.js');
 const activity = require('./activity.js');
 const live = require('./live.js');
 const relay = require('./relay.js');
+const reading = require('./reading.js');
 const voice = require('./voice.js');
 
 const SECOND = 1000;
@@ -936,6 +937,12 @@ async function run(now, hookInput) {
   } catch (err) {
     // Style is not worth a failed hook.
   }
+  // This hook has just paid for a transcript scan, so the corrected figure is
+  // in hand. Leave it where the status line can read it: that line redraws far
+  // too often to scan for itself, and without this it shows the raw snapshot,
+  // which during a heavy session is wrong by tens of points in the flattering
+  // direction.
+  reading.record(binding, now, usage.isCodex() ? require('./codex.js').homeDir() : null);
   const carry = relayState(now, hookInput, binding, sessionId);
   // An instruction the user typed at /usage-limits:voice set. The learned
   // traits are for writing AS them and stay out of the way; this is them

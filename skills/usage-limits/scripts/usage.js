@@ -24,6 +24,7 @@ const readline = require('readline');
 const host = require('./host.js');
 const codex = require('./codex.js');
 const live = require('./live.js');
+const reading = require('./reading.js');
 
 // Which agent's meter to read. Resolved once from the command line or the
 // environment, because a process that changed its mind halfway through would
@@ -2793,9 +2794,16 @@ function statusLine(collected) {
     if (!snapshot || typeof snapshot.utilization !== 'number') continue;
     const resetsAt = snapshot.resets_at ? Date.parse(snapshot.resets_at) : null;
     const msToReset = Number.isFinite(resetsAt) ? resetsAt - now : null;
+    // The snapshot is what the account last said; the spend since then is
+    // measured by a transcript scan this line can never afford. When a hook has
+    // already paid for that scan recently, use its answer. Measured on a real
+    // session, the difference was 13 per cent here against 73 in the report,
+    // and the flattering one was the one on screen.
+    const corrected = reading.correctedFor(spec.key, now, collected.snapshotFetchedAt);
     parts.push({
       label: SHORT_LABELS[spec.key] || spec.label,
-      percent: snapshot.utilization,
+      percent: corrected ? corrected.percentUsed : snapshot.utilization,
+      adjusted: Boolean(corrected && corrected.adjusted),
       msToReset,
       // A per-model weekly for a model that is not running is shown - hiding a
       // limit outright is the one failure worse than over-reporting one, and

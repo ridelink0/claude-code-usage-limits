@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 
 const usage = require('./usage.js');
+const reading = require('./reading.js');
 const brief = require('./brief.js');
 const host = require('./host.js');
 const activity = require('./activity.js');
@@ -203,6 +204,9 @@ async function run(now, hookInput) {
   const data = await usage.report(now, { sessionId, budgetMs: SCAN_BUDGET_MS });
   const binding = data.binding;
   if (!binding) return '';
+  // This turn paid for the scan, so leave the corrected figure where the
+  // status line and --status can read it without paying for one.
+  reading.record(binding, now, usage.isCodex() ? require('./codex.js').homeDir() : null);
 
   // The same count and the same split as the brief, so the two lines never
   // disagree about how many sessions there are or how much of the budget is
