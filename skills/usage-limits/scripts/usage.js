@@ -534,6 +534,75 @@ function subagentTranscripts(dir, since, depth) {
   return files;
 }
 
+// The agents working right now, and what they have cost.
+//
+// Their spend has always been counted - the scan walks subagents/ and
+// workflows/ and every token lands in the window totals - but nothing ever
+// SHOWED them. So a display could say one session was working while eighteen
+// agents underneath it spent two million tokens, and the only sign was the
+// percentage moving for no visible reason. One workflow in this plugin's own
+// development did exactly that twice in an afternoon.
+//
+// Cheap on purpose: it stats files under the session's own subagent
+// directories and never parses one. The panel redraws every second.
+const AGENT_LIVE_MS = 90 * 1000;
+
+// Measured at about 95 ms on a machine with a few hundred agent transcripts.
+// The panel redraws every second, so without this it would spend a tenth of
+// every frame stat-ing files that cannot have changed much.
+let agentMemo = null;
+const AGENT_MEMO_MS = 2000;
+
+function liveAgents(now, windowMs) {
+  const at = Number.isFinite(now) ? now : Date.now();
+  const within = Number.isFinite(windowMs) ? windowMs : AGENT_LIVE_MS;
+  if (agentMemo && agentMemo.within === within && at - agentMemo.at < AGENT_MEMO_MS) return agentMemo.value;
+  const root = path.join(configDir(), 'projects');
+  let projects = [];
+  try {
+    projects = fs.readdirSync(root, { withFileTypes: true });
+  } catch (err) {
+    return { running: 0, runs: 0, newestAt: null };
+  }
+  let running = 0;
+  const runs = new Set();
+  // projects/<project>/<sessionId>/subagents/[workflows/<run>/]agent-*.jsonl -
+  // the session id is a level the first version of this walked straight past,
+  // which is why it counted nothing on a machine with a hundred and fifty
+  // agent transcripts an hour old.
+  for (const project of projects) {
+    if (!project.isDirectory()) continue;
+    let sessions = [];
+    try {
+      sessions = fs.readdirSync(path.join(root, project.name), { withFileTypes: true });
+    } catch (err) {
+      continue;
+    }
+    for (const session of sessions) {
+      if (!session.isDirectory()) continue;
+      const dir = path.join(root, project.name, session.name, 'subagents');
+      for (const file of subagentTranscripts(dir, at - within, 3)) {
+        let stat;
+        try {
+          stat = fs.statSync(file);
+        } catch (err) {
+          continue;
+        }
+        if (at - stat.mtimeMs > within) continue;
+        running += 1;
+        // .../workflows/<run>/agent-x.jsonl - the run is what a person
+        // recognises, so it is counted as well as the agents. An agent that is
+        // not in a workflow sits directly in subagents/ and is its own run.
+        const parent = path.basename(path.dirname(file));
+        runs.add(parent === 'subagents' ? 'agent:' + path.basename(file) : parent);
+      }
+    }
+  }
+  const value = { running, runs: runs.size, newestAt: running ? at : null };
+  agentMemo = { at, within, value };
+  return value;
+}
+
 function claudeTranscriptFiles(since) {
   const root = path.join(configDir(), 'projects');
   let dirs = [];
@@ -3714,6 +3783,8 @@ module.exports = {
   preferLive,
   accountUuid,
   subagentTranscripts,
+  liveAgents,
+  AGENT_LIVE_MS,
   claudeTranscriptFiles,
   readClaudeEvents,
   SCAN_VERSION,

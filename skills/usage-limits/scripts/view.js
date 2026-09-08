@@ -352,6 +352,9 @@ function build(input) {
     rows,
     fable,
     hidden,
+    // The agents underneath this session. They spend the same window and had
+    // no voice on any display until now.
+    agents: opts.agents && Number.isFinite(opts.agents.running) ? opts.agents : { running: 0, runs: 0 },
     model,
     modelLabel: opts.modelName || bars.prettyModel(model),
     effort,

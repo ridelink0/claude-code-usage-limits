@@ -228,3 +228,34 @@ test('an escape with no command names the lever and invents no syntax', () => {
   assert.doesNotMatch(text, /undefined|null/);
   assert.match(text, /switching model retires it/);
 });
+
+// Agents spend the same window and had no voice on any display: a fan-out
+// emptied half a five-hour window in five minutes while the line showed one
+// session working.
+test('live agents are counted, cached, and shown on the line', () => {
+  const view = require('../skills/usage-limits/scripts/view.js');
+  const feed = require('../skills/usage-limits/scripts/feed.js');
+  const base = {
+    now: NOW,
+    utilization: { five_hour: { utilization: 40, resets_at: new Date(NOW + 3.6e6).toISOString() } },
+    fetchedAtMs: NOW, source: 'cache', working: true,
+  };
+  assert.deepStrictEqual(view.build(base).agents, { running: 0, runs: 0 }, 'absent means none, never undefined');
+  const many = view.build(Object.assign({}, base, { agents: { running: 6, runs: 2 } }));
+  const plain = (s) => s.replace(/\u001b\[[0-9;]*m/g, '');
+  assert.match(plain(feed.line(many, { columns: 120, mode: 'ansi' })), /\+6 agents \(2 runs\)/);
+  const one = view.build(Object.assign({}, base, { agents: { running: 1, runs: 1 } }));
+  assert.match(plain(feed.line(one, { columns: 120, mode: 'ansi' })), /\+1 agent(?!s)/, 'singular, and no run count for one run');
+  // Narrow terminals drop it: a percentage nobody can see is worse than a
+  // count nobody can see.
+  assert.doesNotMatch(plain(feed.line(many, { columns: 30, mode: 'ansi' })), /agent/);
+  assert.doesNotMatch(plain(feed.line(view.build(base), { columns: 120, mode: 'ansi' })), /agent/);
+});
+
+test('the agent scan is cheap enough for a display that redraws every second', () => {
+  const first = usage.liveAgents(Date.now());
+  assert.ok(Number.isFinite(first.running) && first.running >= 0);
+  const started = Date.now();
+  for (let i = 0; i < 20; i += 1) usage.liveAgents(Date.now());
+  assert.ok(Date.now() - started < 200, 'twenty calls must come off the memo, not the disk');
+});

@@ -238,10 +238,25 @@ function line(built, options) {
     Number.isFinite(built.othersWorking) && built.othersWorking > 0
       ? bars.paint('+' + built.othersWorking + ' working', bars.THEME.claude, mode)
       : '';
+  // Agents spend the same window and were the one thing on it with no voice.
+  // A fan-out can empty half a five-hour window in five minutes while the line
+  // shows one session working, so the count goes on the line whenever any are
+  // live - and it is dropped first when the terminal is too narrow, because a
+  // percentage the user cannot see is worse than a count they cannot see.
+  const agents =
+    built.agents && built.agents.running > 0
+      ? bars.paint(
+          '+' + built.agents.running + ' agent' + (built.agents.running === 1 ? '' : 's') +
+            (built.agents.runs > 1 ? ' (' + built.agents.runs + ' runs)' : ''),
+          bars.THEME.claude,
+          mode
+        )
+      : '';
   let text = '';
   for (const attempt of attempts) {
     const parts = built.rows.map((row) => segment(row, attempt.width, attempt.shorter));
     if (others) parts.push(others);
+    if (agents && !attempt.shorter) parts.push(agents);
     if (attempt.head) parts.unshift(head);
     text = parts.join(attempt.gap || '  ');
     if (bars.visibleWidth(text) <= columns) return text;
@@ -445,6 +460,7 @@ async function main(argv) {
       .filter((row) => row.state === 'working' && row.sessionId !== mine).length;
     const built = view.build({
       now,
+      agents: usage.liveAgents(now),
       utilization: collected.utilization,
       fetchedAtMs: collected.snapshotFetchedAt,
       source: collected.snapshotSource,
