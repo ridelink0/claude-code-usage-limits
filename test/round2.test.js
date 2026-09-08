@@ -331,3 +331,46 @@ test('the fit sentence names all three levers and asks for the judgement', () =>
   // It fires with the window at 12 per cent: the trigger is the setting.
   assert.match(text, /get on with the work/);
 });
+
+// "The usage thingy still thinks I'm on xhigh and not ultra." It was not
+// misreading: Claude Code's own words are "ultracode: xhigh + dynamic workflow
+// orchestration (this session only)". Ultracode IS xhigh effort, and the mode
+// is never written to disk, so settings and the transcript both say xhigh and
+// neither can name the mode.
+test('effort is read from the freshest source available, and says which', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-effort-'));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  const beforeEnv = process.env.CLAUDE_CODE_EFFORT_LEVEL;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  delete process.env.CLAUDE_CODE_EFFORT_LEVEL;
+  try {
+    fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ effortLevel: 'xhigh' }));
+    assert.deepStrictEqual(usage.effortNow(), { effort: 'xhigh', source: 'settings', live: false });
+
+    // The one case nothing can see: /effort ultracode typed in the session.
+    assert.strictEqual(usage.writeEffortOverride('ultracode', Date.now()).ok, true);
+    const byHand = usage.effortNow();
+    assert.strictEqual(byHand.effort, 'ultracode');
+    assert.strictEqual(byHand.source, 'set by hand');
+    assert.strictEqual(byHand.live, true);
+
+    // Claude Code's own session override outranks a hand-set one.
+    process.env.CLAUDE_CODE_EFFORT_LEVEL = 'medium';
+    assert.deepStrictEqual(usage.effortNow(), { effort: 'medium', source: 'environment', live: true });
+    process.env.CLAUDE_CODE_EFFORT_LEVEL = 'banana';
+    assert.strictEqual(usage.effortNow().effort, 'ultracode', 'nonsense in the environment is ignored');
+    delete process.env.CLAUDE_CODE_EFFORT_LEVEL;
+
+    // A hand-set override describes one session and must not outlive it.
+    usage.writeEffortOverride('ultracode', Date.now() - 13 * 60 * 60 * 1000);
+    assert.strictEqual(usage.effortNow().source, 'settings', 'a stale override expires');
+
+    assert.strictEqual(usage.writeEffortOverride('banana', Date.now()).ok, false);
+    usage.writeEffortOverride(null);
+    assert.strictEqual(usage.readEffortOverride(), null);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = before;
+    if (beforeEnv === undefined) delete process.env.CLAUDE_CODE_EFFORT_LEVEL; else process.env.CLAUDE_CODE_EFFORT_LEVEL = beforeEnv;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

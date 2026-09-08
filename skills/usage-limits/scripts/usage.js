@@ -2160,6 +2160,85 @@ function criticalOthers(windows, bindingKey, threshold) {
   );
 }
 
+// What effort is ACTUALLY running, and how we know.
+//
+// This looked like a plugin bug and is not one. Ultracode is not a separate
+// effort level: Claude Code's own words are "ultracode: xhigh + dynamic
+// workflow orchestration (this session only)". So a session in ultracode has
+// effortLevel xhigh in settings.json and writes effort "xhigh" into every
+// transcript line - both correct, and both unable to say which MODE is on.
+// "This session only" means it is never written to disk at all.
+//
+// So the honest answer is a chain, and every reading says where it came from,
+// because "xhigh" from a stale settings file and "xhigh" from a live override
+// deserve different confidence:
+//
+//   1. CLAUDE_CODE_EFFORT_LEVEL - Claude Code's own session override. Hooks
+//      inherit the environment, so this is live and authoritative.
+//   2. An override recorded here by hand, for the one case nothing can see:
+//      /effort ultracode typed in the UI, which touches neither disk nor env.
+//   3. settings.effortLevel - the persisted default.
+//   4. The transcript - stamped at session start and never re-stamped.
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'ultracode'];
+
+function effortOverrideFile() {
+  return path.join(configDir(), 'usage-limits-effort.json');
+}
+
+function readEffortOverride() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(effortOverrideFile(), 'utf8'));
+    if (!parsed || !EFFORT_LEVELS.includes(parsed.effort)) return null;
+    // A hand-set override describes one session. Left lying around it would
+    // outlive the session it was true for, so it expires.
+    if (!Number.isFinite(parsed.at) || Date.now() - parsed.at > 12 * 60 * 60 * 1000) return null;
+    return parsed;
+  } catch (err) {
+    return null;
+  }
+}
+
+function writeEffortOverride(level, now) {
+  if (level === null) {
+    try {
+      fs.unlinkSync(effortOverrideFile());
+    } catch (err) {
+      // Already gone is the outcome asked for.
+    }
+    return { ok: true, cleared: true };
+  }
+  if (!EFFORT_LEVELS.includes(level)) return { ok: false, error: 'effort must be one of: ' + EFFORT_LEVELS.join(', ') };
+  try {
+    fs.mkdirSync(configDir(), { recursive: true });
+    writeJsonAtomic(effortOverrideFile(), { effort: level, at: Number.isFinite(now) ? now : Date.now() });
+    return { ok: true, effort: level };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+function effortNow(sessionId, env) {
+  const environment = env || process.env;
+  const fromEnv = String(environment.CLAUDE_CODE_EFFORT_LEVEL || '').trim().toLowerCase();
+  if (EFFORT_LEVELS.includes(fromEnv)) return { effort: fromEnv, source: 'environment', live: true };
+
+  const override = readEffortOverride();
+  if (override) return { effort: override.effort, source: 'set by hand', live: true };
+
+  let configured = null;
+  try {
+    configured = collect(Date.now()).settings;
+  } catch (err) {
+    configured = null;
+  }
+  const level = configured && configured.effortLevel;
+  if (EFFORT_LEVELS.includes(level)) return { effort: level, source: 'settings', live: false };
+
+  const seen = liveEffort(sessionId);
+  if (seen && EFFORT_LEVELS.includes(seen.effort)) return { effort: seen.effort, source: 'transcript', live: false };
+  return null;
+}
+
 // Is the setting bigger than the work needs?
 //
 // Everything else here is budget-triggered: it speaks when a window is filling.
@@ -3794,6 +3873,42 @@ async function main(argv) {
     }
     return 0;
   }
+  // `--effort ultracode` records what nothing on the machine can see: the
+  // picker's choice is session-only and touches neither disk nor environment.
+  // `--effort clear` forgets it again.
+  const effortAt = argv.indexOf('--effort');
+  if (effortAt !== -1) {
+    const wanted = String(argv[effortAt + 1] || '').trim().toLowerCase();
+    const say = (text) => {
+      process.stdout.write(text + '\n');
+      return 0;
+    };
+    if (!wanted) {
+      const found = effortNow();
+      if (!found) return say('No effort reading available.');
+      const guess = found.source === 'settings' || found.source === 'transcript';
+      return say(
+        'Effort reads as ' + found.effort + ' (' + found.source + ').' +
+          (guess
+            ? '\nIf you picked ultracode in the session, nothing on disk says so - Claude Code calls it' +
+              ' "xhigh + dynamic workflow orchestration (this session only)".' +
+              ' Tell this: usage.js --effort ultracode'
+            : '')
+      );
+    }
+    if (wanted === 'clear' || wanted === 'off') {
+      writeEffortOverride(null);
+      return say('Effort override cleared; back to the environment, then settings.');
+    }
+    const done = writeEffortOverride(wanted, Date.now());
+    return say(
+      done.ok
+        ? 'Effort recorded as ' + done.effort +
+          '. It expires after twelve hours, and CLAUDE_CODE_EFFORT_LEVEL still wins.'
+        : done.error
+    );
+  }
+
   const recommendAt = argv.indexOf('--recommend');
   if (recommendAt !== -1) {
     // The turn count is optional: with one the verdict is about that job,
@@ -3886,6 +4001,11 @@ module.exports = {
   criticalOthers,
   escapeRoute,
   settingFit,
+  effortNow,
+  readEffortOverride,
+  writeEffortOverride,
+  effortOverrideFile,
+  EFFORT_LEVELS,
   levers,
   betterCalibration,
   calibrationForPlan,
