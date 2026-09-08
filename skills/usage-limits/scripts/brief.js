@@ -556,7 +556,12 @@ function briefText(parts) {
   // do more cheaply on this model frees it; only running a different model
   // does, and that has to be said, because the obvious move at 90 percent is
   // to drop the effort and keep going, which spends the same window slower.
-  if (parts.family) {
+  // Suppressed when the escape line below fires: that one says the same thing
+  // and names the model to switch to, where this one only ever managed
+  // "Use /model (or ...". Two sentences making one point is a cost paid on
+  // every prompt.
+  const namesTheSwitch = parts.escape && parts.escape.kind === 'model';
+  if (parts.family && !namesTheSwitch) {
     sentences.push(
       'That window counts ' + parts.family + ' turns only, so lowering effort does not free it: ' +
         'switching model does. Use /model (or scripts/lowpower.js on --model <other>) for work ' +

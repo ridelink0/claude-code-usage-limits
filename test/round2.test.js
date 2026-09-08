@@ -169,3 +169,15 @@ test('at the wall with an escape, the instruction is switch and carry on - not s
   assert.match(text, /77 per cent/);
   assert.doesNotMatch(text, /nothing further will run/);
 });
+
+test('the older family sentence steps aside for the line that names the model', () => {
+  const brief = require('../skills/usage-limits/scripts/brief.js');
+  const binding = { key: 'f', label: 'weekly (Fable)', family: 'fable', percentUsed: 89, stale: false, resetsAt: null };
+  const escape = { kind: 'model', frees: 'weekly (Fable)', family: 'fable', nextLabel: 'weekly', nextPercent: 76, suggest: 'opus' };
+  const both = brief.briefText({ binding, family: 'Fable', escape, pressure: 'roomy', sessions: 1, critical: [] });
+  assert.doesNotMatch(both, /counts Fable turns only/, 'one point, one sentence');
+  assert.match(both, /\/model opus/);
+  // With no escape to name, the original sentence is still the only warning there is.
+  const alone = brief.briefText({ binding, family: 'Fable', escape: null, pressure: 'roomy', sessions: 1, critical: [] });
+  assert.match(alone, /counts Fable turns only/);
+});
