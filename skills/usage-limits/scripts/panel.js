@@ -301,10 +301,65 @@ function codexWorking(now) {
   }
 }
 
-// The sessions this machine has heard from lately, from every file the hooks
-// and the status line keep. The tally is required lazily: it requires usage.js
-// back, and this module is loaded by the VS Code extension too.
+// Codex runs no hooks on this machine, so it writes no marks, and its sessions
+// never appeared beside the Claudes. Its rollout files say what a mark would:
+// a rollout appended in the last half minute is a session at work, one touched
+// within the stale window is one idling. The first line of a rollout is the
+// session's meta record - its id, its working directory, what launched it.
+function codexSessions(now, opts) {
+  const o = opts || {};
+  const stale = Number.isFinite(o.staleMs) ? o.staleMs : activity.STALE_MS;
+  const busyMs = Number.isFinite(o.busyMs) ? o.busyMs : 30 * SECOND;
+  let files = [];
+  try {
+    files = Array.isArray(o.files) ? o.files : codex.rolloutFiles(now - stale);
+  } catch (err) {
+    return [];
+  }
+  const rows = [];
+  for (const entry of files) {
+    if (!entry || !Number.isFinite(entry.at) || entry.at < now - stale) continue;
+    let meta = null;
+    try {
+      const fd = fs.openSync(entry.file, 'r');
+      const buf = Buffer.alloc(4096);
+      const n = fs.readSync(fd, buf, 0, 4096, 0);
+      fs.closeSync(fd);
+      const first = buf.toString('utf8', 0, n).split(String.fromCharCode(10))[0];
+      const parsed = JSON.parse(first);
+      meta = parsed && parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : null;
+    } catch (err) {
+      meta = null;
+    }
+    const id = (meta && (meta.session_id || meta.id)) || path.basename(entry.file, '.jsonl');
+    rows.push({
+      key: 'codex:' + id,
+      id,
+      host: 'codex',
+      state: entry.at >= now - busyMs ? 'working' : 'idle',
+      stateAt: entry.at,
+      lastAt: entry.at,
+      model: null,
+      modelName: 'Codex' + (meta && meta.originator ? ' (' + String(meta.originator) + ')' : ''),
+      cwd: meta && meta.cwd ? String(meta.cwd) : null,
+      ultracode: false,
+      ultrathink: false,
+    });
+  }
+  rows.sort((x, y) => y.lastAt - x.lastAt);
+  return rows;
+}
+
+// Every session this machine has heard from lately: the Claudes from the
+// files the hooks and the status line keep, and the Codexes from their own
+// rollouts.
 function loadSessions(now) {
+  return claudeSessions(now).concat(codexSessions(now));
+}
+
+// The tally is required lazily: it requires usage.js back, and this module is
+// loaded by the VS Code extension too.
+function claudeSessions(now) {
   let tallyList = [];
   try {
     const tally = require('./tally.js');
@@ -905,6 +960,7 @@ async function main(argv) {
 }
 
 module.exports = {
+  codexSessions,
   HELP,
   TITLE,
   MIN_COLUMNS,
