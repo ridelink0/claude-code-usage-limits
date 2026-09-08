@@ -470,7 +470,7 @@ function scheduleWindows(when, argv, name, cwd) {
     const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], {
       encoding: 'utf8',
       windowsHide: true,
-      timeout: 30000,
+      timeout: 8000,
     });
     if (run.status === 0 && /registered/.test(run.stdout || '')) return { ok: true, how: 'ScheduledTasks' };
     // schtasks cannot express StartWhenAvailable, so this path is a worse

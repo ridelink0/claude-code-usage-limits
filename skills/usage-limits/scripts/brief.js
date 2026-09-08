@@ -69,6 +69,10 @@ const REFRESH_TIMEOUT_MS = 4000;
 // killed and Claude being told nothing at all.
 const SCAN_BUDGET_MS = 5000;
 
+// How far into the hook arming may still start. See relayState: the task
+// registration is about a second and the hook is allowed ten.
+const ARM_DEADLINE_MS = 5000;
+
 // Past this much of a per-model week, say how to free it. Below it the advice
 // is noise: there is room, and the model in use is the right one.
 const HALF_SPENT = 50;
@@ -800,6 +804,14 @@ function relayState(now, hookInput, binding, sessionId) {
     const work = relay.detectWork(hookInput && hookInput.transcript_path, {});
     const able = relay.armable({ config, binding, sessionId, work });
     if (!able.ok) return { enabled: true, why: able.why, config, last: recent, work };
+    // Registering a scheduled task measured 936 ms, and this hook has ten
+    // seconds of which the live reading may take four and the scan five. A
+    // hook that is killed tells Claude nothing at all, which is far worse than
+    // a relay that arms on the next prompt instead of this one - and if there
+    // is no next prompt, the session ended and there was nothing to carry.
+    if (Date.now() - now > ARM_DEADLINE_MS) {
+      return { enabled: true, why: 'no time left in this hook; arming on the next prompt', config, last: recent, work };
+    }
     const armed = relay.arm({
       now,
       config,
