@@ -116,3 +116,56 @@ test('relay and reading state files are written whole or not at all', () =>
     assert.strictEqual(fs.readdirSync(dir).filter((name) => name.endsWith('.tmp')).length, 0, 'no temp file is left behind');
     assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'usage-limits-relay.json'), 'utf8')).config.enabled, true);
   }));
+
+// The session that ended for no reason: the Fable weekly at 89 per cent was
+// binding, the line said the budget was nearly gone, and the work stopped -
+// with the five-hour window at 46 and every other model untouched. A per-model
+// weekly is one model's budget, not the account's, and a switch retires it.
+test('a model-scoped wall names the switch that clears it', () => {
+  const fable = { key: 'seven_day_scoped:fable', label: 'weekly (Fable)', family: 'fable', percentUsed: 89, stale: false, applies: true };
+  const five = { key: 'five_hour', label: '5-hour', family: null, percentUsed: 46, stale: false, applies: true };
+  const week = { key: 'seven_day', label: 'weekly', family: null, percentUsed: 77, stale: false, applies: true };
+  const opus = { key: 'seven_day_opus', label: 'weekly (Opus)', family: 'opus', percentUsed: 12, stale: false, applies: false };
+  const out = usage.escapeRoute([fable, five, week, opus], fable, null);
+  assert.strictEqual(out.kind, 'model');
+  assert.strictEqual(out.nextLabel, 'weekly');
+  assert.strictEqual(out.nextPercent, 77);
+  assert.strictEqual(out.suggest, 'opus', 'name the emptiest other model, not just "switch"');
+});
+
+test('a lateral move is not an escape, and neither is a guess', () => {
+  const fable = { key: 'f', label: 'weekly (Fable)', family: 'fable', percentUsed: 89, stale: false };
+  // 89 -> 87 buys nothing.
+  assert.strictEqual(usage.escapeRoute([fable, { key: 'w', label: 'weekly', family: null, percentUsed: 87, stale: false }], fable, null), null);
+  // With no other readable window there is no evidence a switch helps.
+  assert.strictEqual(usage.escapeRoute([fable], fable, null), null);
+  assert.strictEqual(usage.escapeRoute([], fable, null), null);
+  // A stale window is not evidence either.
+  assert.strictEqual(usage.escapeRoute([fable, { key: 'w', label: 'weekly', family: null, percentUsed: 10, stale: true }], fable, null), null);
+});
+
+test('a shared window follows the account, so effort is the only lever', () => {
+  const five = { key: 'five_hour', label: '5-hour', family: null, percentUsed: 92, stale: false, applies: true };
+  const week = { key: 'seven_day', label: 'weekly', family: null, percentUsed: 40, stale: false, applies: true };
+  assert.strictEqual(usage.escapeRoute([five, week], five, null), null, 'no cheaper effort measured, so nothing to promise');
+  const withEffort = usage.escapeRoute([five, week], five, { effort: 'ultra', cheaper: { effort: 'medium', multiple: 6 } });
+  assert.strictEqual(withEffort.kind, 'effort');
+  assert.strictEqual(withEffort.to, 'medium');
+  assert.strictEqual(withEffort.multiple, 6);
+});
+
+test('at the wall with an escape, the instruction is switch and carry on - not stop', () => {
+  const brief = require('../skills/usage-limits/scripts/brief.js');
+  const binding = { key: 'f', label: 'weekly (Fable)', family: 'fable', percentUsed: 89, stale: false, resetsAt: null };
+  const text = brief.briefText({
+    binding,
+    pressure: 'tight',
+    escape: { kind: 'model', frees: 'weekly (Fable)', family: 'fable', nextLabel: 'weekly', nextPercent: 77, suggest: 'opus' },
+    sessions: 1,
+    critical: [],
+  });
+  assert.match(text, /must\s+not stop as though you were/);
+  assert.match(text, /\/model opus/);
+  assert.match(text, /77 per cent/);
+  assert.doesNotMatch(text, /nothing further will run/);
+});

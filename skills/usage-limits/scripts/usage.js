@@ -2091,6 +2091,64 @@ function criticalOthers(windows, bindingKey, threshold) {
   );
 }
 
+// The way out that is not stopping.
+//
+// This exists because of a session that ended for no reason. The Fable weekly
+// was at 89 per cent and binding, the line said the budget was nearly gone, and
+// the work stopped - while the five-hour window sat at 46 and every other model
+// on the account was untouched. A per-model weekly is not the account's budget.
+// It is one model's, and switching model retires it outright.
+//
+// So: when the window that binds is scoped to a model, say which window would
+// bind after a switch and how full it is. When it is shared, a model switch
+// changes nothing and the lever is effort instead. Either way the point is the
+// same - being at the wall is not the same as being out of budget, and an agent
+// that cannot tell the difference stops early and calls it caution.
+function escapeRoute(windows, binding, effortNote) {
+  if (!binding || binding.percentUsed === null || binding.percentUsed === undefined) return null;
+  const live = (windows || []).filter(
+    (w) => w && w.percentUsed !== null && w.percentUsed !== undefined && !w.stale && w.key !== binding.key
+  );
+
+  if (binding.family) {
+    // Everything that would still apply once this model is no longer the one
+    // running: the shared windows, plus any other model's weekly.
+    const after = live.filter((w) => w.family !== binding.family);
+    const next = after.length
+      ? after.reduce((worst, w) => (w.percentUsed > worst.percentUsed ? w : worst))
+      : null;
+    // Only worth calling an escape if what replaces it is meaningfully emptier.
+    // Trading an 89 for an 87 is not a way out, it is a lateral move. And with
+    // no other readable window there is no evidence a switch helps at all: it
+    // is true that the scoped window would retire, but "you have room" is a
+    // claim, and a claim with nothing behind it is the thing not to make.
+    if (!next || next.percentUsed >= binding.percentUsed - 10) return null;
+    const roomier = after
+      .filter((w) => w.family && w.family !== binding.family)
+      .sort((a, b) => a.percentUsed - b.percentUsed)[0] || null;
+    return {
+      kind: 'model',
+      frees: binding.label || binding.key,
+      family: binding.family,
+      nextLabel: next ? next.label || next.key : null,
+      nextPercent: next ? Math.round(next.percentUsed) : null,
+      suggest: roomier && roomier.family ? roomier.family : null,
+    };
+  }
+
+  // A shared window follows the account wherever the model goes, so the only
+  // lever left is how dear a turn is.
+  if (effortNote && effortNote.cheaper && effortNote.cheaper.effort) {
+    return {
+      kind: 'effort',
+      from: effortNote.effort || null,
+      to: effortNote.cheaper.effort,
+      multiple: Number.isFinite(effortNote.cheaper.multiple) ? effortNote.cheaper.multiple : null,
+    };
+  }
+  return null;
+}
+
 // The window that will stop the work first.
 function bindingWindow(windows) {
   // A per-model weekly for a model that is not running cannot be the window
@@ -3681,6 +3739,7 @@ module.exports = {
   lastRejections,
   bindingWindow,
   criticalOthers,
+  escapeRoute,
   betterCalibration,
   calibrationForPlan,
   stampPlan,

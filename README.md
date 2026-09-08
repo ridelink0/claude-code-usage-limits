@@ -1010,3 +1010,33 @@ licence is there for. Do not wait on me to add something for you.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## The wall is not the end of the budget
+
+A full window is not always a reason to stop, and the plugin now says which.
+
+A **per-model weekly** counts turns by that model only. It is not your budget,
+it is that model's: lowering effort frees nothing, and switching model retires
+the window outright while every other window carries on. A **shared window**
+follows the account wherever the model goes, so a switch buys nothing and
+effort is the lever instead.
+
+Once the binding window is half gone the budget line names the lever that
+applies, which window would bind after the switch and how full it is, and the
+command:
+
+```
+This window is scoped to one model, so it is not the account's budget:
+switching model retires it. After a switch the binding window would be weekly
+at 77 per cent. Use /model opus.
+```
+
+At the wall it goes further and says outright that you are not out of budget
+and must not stop as though you were. It refuses to claim an escape it cannot
+evidence: trading an 89 for an 87 is a lateral move, not a way out, and with no
+other readable window there is nothing behind the claim, so it says nothing.
+
+This exists because of a real session. The Fable weekly hit 89 per cent, the
+line said the budget was nearly gone, and the work stopped - with the 5-hour
+window at 46 and every other model untouched. One command would have carried it
+on.

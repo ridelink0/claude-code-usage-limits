@@ -370,7 +370,39 @@ effort setting does not control any of it:
 `references/tactics.md` has the full list and the billing reasons behind each
 one.
 
-## 5. Checkpoint before the wall
+## 5. The wall is not the end of the budget: switch, do not stop
+
+Before treating a full window as a reason to stop, check what kind of window it
+is. There are two, and only one of them is the account's budget.
+
+- **A per-model weekly** (`weekly (Fable)`, `weekly (Opus)`, `weekly (Sonnet)`)
+  counts turns by *that model only*. It is not your budget, it is that model's.
+  Lowering effort does not free a single point of it. **Switching model retires
+  it outright** - `/model opus`, `/model sonnet`, or
+  `node scripts/lowpower.js on --model <id>`. Every other window carries on
+  exactly as before.
+- **A shared window** (the 5-hour, the all-models weekly) follows the account
+  wherever the model goes, so a switch buys nothing. Here the lever is
+  **effort**: `/effort medium` measured six times cheaper a turn than ultra on
+  this account. `node scripts/usage.js --recommend` names both levers with the
+  commands.
+
+The budget line does this arithmetic for you. Once the binding window is half
+gone it says which lever applies, and at the wall it says outright that you are
+not out of budget and must not stop as though you were. When it does, the
+sequence is: switch, say in one line that you switched and why, carry on with
+the whole request at full quality.
+
+This is written down because it was got wrong. A session ended with the Fable
+weekly at 89 per cent and the line saying the budget was nearly gone - while the
+5-hour sat at 46 and every other model on the account was untouched. One command
+would have carried it on. Stopping there was not caution; it was quitting with a
+reason that sounded like one.
+
+Only when the switch is genuinely unavailable - no other window has room, or the
+user has ruled it out - does the checkpoint below apply.
+
+## 6. Checkpoint before the wall
 
 When the binding window is under roughly 10 percent, or under about ten turns
 of headroom, keep working and start keeping the work landable:
@@ -389,7 +421,7 @@ afternoon, so there is no longer anything to buy by winding down.
 The one thing not to economise on is the handoff itself. Everything else can be
 picked up next session; a session that ends without one cannot.
 
-## 6. The relay: when the handoff picks itself up
+## 7. The relay: when the handoff picks itself up
 
 If a relay is armed, the budget line says so, and the shape of the last hour
 changes. The handoff stops being a note for a person to find and becomes the

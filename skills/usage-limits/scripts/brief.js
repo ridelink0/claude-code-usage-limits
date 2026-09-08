@@ -565,6 +565,26 @@ function briefText(parts) {
   }
   if (parts.othersSummary) sentences.push('Other windows: ' + parts.othersSummary + '.');
 
+  // Being at the wall and being out of budget are different things, and the
+  // difference is a command. Said as soon as the window is half gone, so it is
+  // already known by the time it matters.
+  const escape = parts.escape;
+  const escapeText =
+    escape && escape.kind === 'model'
+      ? 'This window is scoped to one model, so it is not the account\'s budget: switching model retires it. ' +
+        (escape.nextLabel
+          ? 'After a switch the binding window would be ' + escape.nextLabel + ' at ' + escape.nextPercent + ' per cent. '
+          : '') +
+        'Use /model ' + (escape.suggest || '<another model>') + ' (or scripts/lowpower.js on --model <id>).'
+      : escape && escape.kind === 'effort'
+        ? 'A model switch does not free this window - it follows the account - but effort does: ' +
+          escape.to + ' measured ' + (escape.multiple ? escape.multiple + 'x ' : '') + 'cheaper a turn than ' +
+          (escape.from || 'the current effort') + '. Use /effort ' + escape.to + '.'
+        : null;
+  if (escapeText && parts.binding && Number.isFinite(parts.binding.percentUsed) && parts.binding.percentUsed >= HALF_SPENT) {
+    sentences.push(escapeText);
+  }
+
   // A window that is not binding can still be the expensive one to exhaust.
   if (parts.critical && parts.critical.length) {
     for (const other of parts.critical) {
@@ -668,7 +688,18 @@ function briefText(parts) {
   // go, keep a note of where things stand - not to shrink the work until it is
   // guaranteed to fit.
   const instruction =
-    parts.pressure === 'gone'
+    // The escape outranks everything below it. A session that stops while a
+    // command would have carried it on has not been careful, it has quit - and
+    // that is a real session: the Fable weekly hit 89 per cent, the line said
+    // the budget was nearly gone, and the work ended with the five-hour window
+    // at 46 and every other model untouched.
+    escapeText && (parts.pressure === 'tight' || parts.pressure === 'gone')
+      ? 'This window is nearly gone, but you are not out of budget and you must ' +
+        'not stop as though you were. ' + escapeText + ' Do that, say in one ' +
+        'line that you switched and why, and carry on with the whole request at ' +
+        'full quality. Only if the switch is impossible or the user has ruled it ' +
+        'out: save the work, write the handoff, and say what is left.'
+      : parts.pressure === 'gone'
       ? 'The budget is gone, so nothing further will run. Save what exists and ' +
         'write the handoff: what is finished, what is next and in what order, ' +
         'which files are mid-change, and when the window resets.' +
@@ -917,6 +948,9 @@ async function run(now, hookInput) {
       turnsLeft: binding && Number.isFinite(binding.turnsLeft) ? binding.turnsLeft : null,
       session: data.session,
       othersSummary: summariseOthers(data.windows, binding && binding.key),
+      // The way out that is not stopping. Cached with the rest of the view
+      // because it is derived from the same one pass over the windows.
+      escape: usage.escapeRoute(data.windows, binding, data.effortWarning || null),
       // Every window, trimmed to the cacheable fields, so the corrected reading
       // can be recorded for all three columns of the status line on a cache
       // hit too. Recording the binding window alone left the other two at
@@ -996,6 +1030,7 @@ async function run(now, hookInput) {
         ? familyLabel(binding.family)
         : null,
     othersSummary: view.othersSummary,
+    escape: view.escape || null,
     turnsLeft: view.turnsLeft,
     effortWarning: view.effortWarning || null,
     // Outside the cache: it is cheap, and it belongs to the other agent's
