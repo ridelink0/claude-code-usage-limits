@@ -18,6 +18,8 @@ const host = require('./host.js');
 const tally = require('./tally.js');
 const activity = require('./activity.js');
 const live = require('./live.js');
+const relay = require('./relay.js');
+const voice = require('./voice.js');
 
 const SECOND = 1000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -611,6 +613,47 @@ function briefText(parts) {
     );
   }
 
+  if (parts.voiceNote) sentences.push('How this user wants to be written to: ' + parts.voiceNote);
+
+  // What the relay changes about all of this.
+  //
+  // With a wake booked, the end of the window stops being the end of the work,
+  // and the instruction at the wall changes shape: the handoff is no longer a
+  // note somebody has to find and read, it is the prompt this conversation
+  // will be handed back. That is worth two minutes of writing, and it is worth
+  // saying plainly, because a session told only "you are about to be cut off"
+  // spends its last turns hedging.
+  const carry = parts.relay;
+  if (carry && carry.armed) {
+    const wake = new Date(carry.armed.wakeAt);
+    sentences.push(
+      'A relay is armed: ' + (carry.justArmed ? 'booked just now' : 'booked') + ' for ' +
+        wake.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ', ' +
+        carry.config.graceMinutes + ' minutes after this window resets, and it will ' +
+        (carry.armed.mode === 'resume' ? 'hand your continuation straight back to this conversation' : 'notify the user with your continuation ready to open') +
+        '.' + (carry.armed.warning ? ' Caveat: ' + carry.armed.warning + '.' : '')
+    );
+    if (!carry.armed.continuation) {
+      sentences.push(
+        'Nothing has been written for it yet. Before this session ends, run ' +
+          'node "$CLAUDE_PLUGIN_ROOT/skills/usage-limits/scripts/relay.js" note "<what you would tell yourself>" ' +
+          'with what is done, what is next in order, which files are mid-change and what must be verified first. ' +
+          'That text is the prompt the relay delivers, so write it to be acted on, not read.'
+      );
+    }
+  }
+  if (carry && carry.last) {
+    sentences.push(
+      'The last relay ' +
+        (carry.last.outcome === 'resumed'
+          ? 'picked this work back up automatically after the previous reset (' + (carry.last.detail || 'resumed') + '); check what it did before repeating it'
+          : carry.last.outcome === 'notified'
+            ? 'left a notification after the previous reset rather than starting anything'
+            : 'ended as "' + carry.last.outcome + '"' + (carry.last.detail ? ' - ' + carry.last.detail : '')) +
+        '.'
+    );
+  }
+
   // Three states, and only the last one stops anything.
   //
   // The middle one is the one that keeps being got wrong. Near the wall the
@@ -623,7 +666,19 @@ function briefText(parts) {
     parts.pressure === 'gone'
       ? 'The budget is gone, so nothing further will run. Save what exists and ' +
         'write the handoff: what is finished, what is next and in what order, ' +
-        'which files are mid-change, and when the window resets.'
+        'which files are mid-change, and when the window resets.' +
+        (parts.relay && parts.relay.armed
+          ? ' Write it into the relay note as well as into your reply - that is ' +
+            'the copy that gets acted on when the window reopens.'
+          : '')
+      : parts.pressure === 'tight' && parts.relay && parts.relay.armed
+        ? 'The budget is nearly gone and the relay has it: being cut off now ' +
+          'costs the wait, not the work. So do not wind down, do not narrow the ' +
+          'request, and do not stop to ask whether to go on. Carry on at full ' +
+          'quality, save at clean boundaries, and put everything the next turn ' +
+          'needs into the relay note rather than into a summary for a person to ' +
+          'read. Say in one line what will land after the reset instead of ' +
+          'before it, then keep working until the window actually ends.'
       : parts.pressure === 'tight'
         ? 'The budget is nearly gone, so make being cut off cheap rather than ' +
           'doing less. Carry on with the whole request at full quality: this is ' +
@@ -714,6 +769,54 @@ function tallyContext(all, sessionId, now) {
       endedAgo: Number.isFinite(ended) ? usage.formatDuration(now - ended) : null,
     },
   };
+}
+
+// The relay, decided once per prompt.
+//
+// Two things happen here and neither of them slows the work down. Above the
+// arming threshold, with a plan or an unfinished todo list to carry, a one-shot
+// wake is booked for a few minutes after the reset - a scheduled task costs
+// nothing and changes nothing about the turn in progress. And once a wake
+// exists, what the hook tells Claude at the wall changes: the handoff is no
+// longer a note for a person to find, it is the thing that will be handed back
+// automatically, so it is worth writing properly.
+//
+// It also reports what happened last time. A relay that fired while nobody was
+// watching is exactly the sort of thing a session should not have to be asked
+// about.
+function relayState(now, hookInput, binding, sessionId) {
+  try {
+    const state = relay.read();
+    const config = relay.settings(state);
+    const last = state.history[state.history.length - 1];
+    const recent = last && Number.isFinite(last.endedAt) && now - last.endedAt < 6 * 60 * 60 * 1000 ? last : null;
+    if (!config.enabled) return recent ? { enabled: false, last: recent } : null;
+
+    // Already armed for this session: nothing to decide, just say so.
+    if (state.armed && state.armed.id === sessionId) {
+      return { enabled: true, armed: state.armed, config, last: recent };
+    }
+    const work = relay.detectWork(hookInput && hookInput.transcript_path, {});
+    const able = relay.armable({ config, binding, sessionId, work });
+    if (!able.ok) return { enabled: true, why: able.why, config, last: recent, work };
+    const armed = relay.arm({
+      now,
+      config,
+      sessionId,
+      binding,
+      work,
+      resetsAt: binding.resetsAt,
+      cwd: (hookInput && hookInput.cwd) || process.cwd(),
+      project: path.basename((hookInput && hookInput.cwd) || process.cwd()),
+      hostName: usage.currentHost(),
+    });
+    return armed.ok
+      ? { enabled: true, armed: armed.record, justArmed: true, config, last: recent, work }
+      : { enabled: true, error: armed.error, config, last: recent, work };
+  } catch (err) {
+    // Nothing about carrying work forward is worth breaking the prompt for.
+    return null;
+  }
 }
 
 async function run(now, hookInput) {
@@ -825,7 +928,27 @@ async function run(now, hookInput) {
     binding.headroomMs <= RUNWAY_MENTION_MS;
   // Outside the cache on purpose: the tally moves after every reply.
   const found = tallyContext(tally.readState(), sessionId, now);
+  // Learning how the user writes, from the prompt that just arrived. Counters
+  // only, no model call, and it never speaks: what it knows is read back by
+  // /usage-limits:voice and used when the relay writes as them.
+  try {
+    if (hookInput && typeof hookInput.prompt === 'string') voice.observe(hookInput.prompt, now);
+  } catch (err) {
+    // Style is not worth a failed hook.
+  }
+  const carry = relayState(now, hookInput, binding, sessionId);
+  // An instruction the user typed at /usage-limits:voice set. The learned
+  // traits are for writing AS them and stay out of the way; this is them
+  // saying how they want to be talked to, so it is said every time.
+  let voiceNote = null;
+  try {
+    voiceNote = voice.read().note;
+  } catch (err) {
+    voiceNote = null;
+  }
   return briefText({
+    relay: carry,
+    voiceNote,
     lastReply: found.lastReply,
     context: found.context,
     lastSession: found.lastSession,

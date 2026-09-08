@@ -308,6 +308,87 @@ The skill also requires Claude to say up front when a job will not fit in what
 is left, name what it is doing now, what it is leaving, and when the rest can
 happen, rather than starting and stopping halfway through an edit.
 
+## The relay: carrying a project across the reset
+
+The handoff has always had the same flaw. It gets written, and then it sits in
+a closed terminal until somebody comes back and reads it. Everything the
+session knew — the files it had open, the half-made decision, the reason the
+second approach was abandoned — expires with the window.
+
+The relay closes that gap. Once the binding window passes a threshold you set,
+**and** the session has an unfinished todo list or an approved plan to carry,
+it books a one-shot wake for a few minutes after the reset. Arming costs
+nothing and changes nothing about the work in progress; that is the point,
+because nobody should slow down to prepare for a wall. Then, at the wake, it
+re-checks the meter and hands your continuation back.
+
+```
+/usage-limits:relay on
+/usage-limits:relay mode resume
+/usage-limits:relay permission acceptEdits
+```
+
+What changes while it is armed is what Claude is told at the wall. Instead of
+"write the handoff and stop", the budget line says the relay has it, that being
+cut off now costs the wait rather than the work, and that the continuation is a
+prompt to be acted on rather than a summary for a person to read.
+
+| | |
+| --- | --- |
+| **Off by default** | Scheduling an agent to run while nobody is watching is a decision you make on purpose, not one a plugin makes for you. |
+| **Only with work to carry** | It reads the session's own todo list and approved plan out of the transcript. An idle chat is not a project and never arms. |
+| **`notify` by default** | It raises a notification with the continuation ready to open, and starts nothing. `mode resume` is the opt-in that runs the CLI itself. |
+| **It re-checks the meter** | The reset time is a prediction; the meter is the fact. If the window has not actually turned over it books another wake rather than spending the first minute of a fresh window on a refusal. |
+| **It survives sleep** | Registered through the ScheduledTasks module with `StartWhenAvailable` and `WakeToRun`, so a machine asleep at the moment fires on wake instead of missing it silently. |
+| **It cleans up after itself** | The task carries an expiry, and the wake unregisters it once the outcome is recorded. |
+| **Codex too** | `codex queue --thread` puts the continuation into a live session; `codex exec resume` revives a dead one. |
+
+Two honest limits:
+
+- **It cannot type into your terminal.** If Computer Use is installed the relay
+  uses it to tell whether you are at the keyboard — and if you are, it leaves a
+  notification instead of starting a second agent in the directory you are
+  working in. It does not send keystrokes to a shell or an editor, because that
+  plugin refuses to on purpose and routing around a safety rule because it is
+  inconvenient is how safety rules stop meaning anything.
+- **Claude Code's own `autoContinueAtUsageLimit` is better where it applies.**
+  It waits inside the open session, so the process never dies and no context is
+  reconstructed. It is documented not to offer the wait for `-p` runs or
+  background sessions, and it cannot help a terminal that has been closed or a
+  machine that slept — and it sends a fixed prompt of its own rather than the
+  plan your session actually wrote. That is the gap this fills.
+
+`/usage-limits:relay` on its own reports where it stands: whether it is on,
+what is armed, when it wakes, what is available on this machine, and what the
+last relay actually did.
+
+## Voice: so the prompt it writes sounds like you
+
+The prompt that restarts your work is written by the plugin, not by you. A
+prompt that reads like a form letter gets a reply that reads like a form
+letter, so the plugin keeps a small profile of how you write and uses it there.
+
+It is counters — message length, how often you start lowercase, whether you end
+with a full stop, dropped apostrophes, capitals for emphasis, how you open —
+plus at most two short lines of your own text kept as examples. No model call
+is involved, nothing leaves the machine, and it says nothing at all until it
+has seen a dozen prompts, because style measured on less than that is noise.
+
+```
+/usage-limits:voice                       what it knows, including the kept lines
+/usage-limits:voice set "blunt, no preamble"
+/usage-limits:voice forget                deletes it outright
+```
+
+`set` is the other half, and the more useful one: it is not what the plugin
+learned about you, it is you saying how you want to be talked to. It goes in
+front of every prompt and it wins over anything learned.
+
+One deliberate omission: misspellings. They are the most individual thing in
+anyone's writing and the worst thing to put in a prompt — told that somebody
+makes mistakes, a model makes mistakes everywhere. Only patterns that are
+choices are recorded, and the card says outright not to introduce errors.
+
 ## Releasing
 
 ```

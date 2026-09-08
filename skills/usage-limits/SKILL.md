@@ -389,6 +389,59 @@ afternoon, so there is no longer anything to buy by winding down.
 The one thing not to economise on is the handoff itself. Everything else can be
 picked up next session; a session that ends without one cannot.
 
+## 6. The relay: when the handoff picks itself up
+
+If a relay is armed, the budget line says so, and the shape of the last hour
+changes. The handoff stops being a note for a person to find and becomes the
+prompt this conversation will be handed back a few minutes after the window
+reopens. So do not wind down, do not narrow the request, and do not stop to
+ask whether to carry on — write the continuation properly and keep working
+until the window actually ends.
+
+Write it with:
+
+```
+node "$CLAUDE_PLUGIN_ROOT/skills/usage-limits/scripts/relay.js" note "<text>"
+```
+
+Write it to be **acted on**, not read: what is done, what is next in order,
+which files are mid-change, what must be verified before anything is built on
+it. It is delivered as a prompt, so an instruction beats a summary. If nothing
+is written, the relay falls back to the outstanding todo list, which is worse.
+
+The relay is off unless the user turned it on, and it only arms while there is
+an unfinished todo list or an approved plan to carry. Do not turn it on for
+them, and do not promise behaviour it does not have:
+
+- It **cannot** type into a terminal or an editor. Computer Use refuses to send
+  input to a shell on purpose; the relay uses it only to tell whether somebody
+  is at the keyboard, and to show a banner.
+- In `notify` mode — the default — it raises a notification and starts nothing.
+- In `resume` mode it runs the CLI itself. A headless resume does **not**
+  inherit the session's permission mode, so unless one was set the resumed run
+  will sit waiting for an approval nobody is there to give.
+- Claude Code's own `autoContinueAtUsageLimit` is better wherever it applies,
+  because the process never dies. It does not apply to `-p` runs, background
+  sessions, or a terminal that has been closed.
+
+`node scripts/relay.js` with no arguments reports all of it.
+
+## Voice
+
+The plugin keeps a small local profile of how the user writes — counters, plus
+at most two short lines of their own text — so that anything written *as* them
+sounds like them. It costs no model call and never leaves the machine.
+
+Two separate things live there and they are not the same:
+
+- The **learned traits** are for writing as the user. Today that is the relay
+  prompt. Do not imitate them in your own replies.
+- The **instruction** they typed at `/usage-limits:voice set` is how they want
+  to be talked to. It appears in the budget line and it applies to you.
+
+If asked what it knows, run `node scripts/voice.js` and read it back verbatim,
+including the kept lines. `forget` deletes it outright.
+
 ## Codex, seen from Claude Code
 
 When Codex is installed on the same machine, every display shows its meter
@@ -536,6 +589,9 @@ stop.
 | `scripts/feed.js` | The status line command Claude Code runs. Not meant to be called by hand. |
 | `scripts/live.js` | The usage reading itself, taken the way Claude Code takes it for `/usage`, kept in `usage-limits-live.json` where `collect()` prefers it when newer than the cache. |
 | `scripts/view.js`, `scripts/bars.js`, `scripts/activity.js` | The display model, the drawing in Claude's colours, and the working/idle marks the hooks leave for the panel. Not meant to be called by hand. |
+| `scripts/relay.js` | The relay: `status`, `on`/`off`, `at N`, `grace N`, `mode notify\|resume`, `permission MODE`, `thinking off\|resume\|always`, `note "<text>"`, `cancel`, `log`. |
+| `scripts/wake.js` | What the scheduler runs after the reset: re-checks the meter, then notifies or resumes. Never called by hand. |
+| `scripts/voice.js` | The local writing profile: `show`, `card`, `set "<instruction>"`, `clear`, `off`/`on`, `forget`. |
 | `references/how-it-works.md` | Where the numbers come from and where they are soft. |
 
 ## Codex controls
