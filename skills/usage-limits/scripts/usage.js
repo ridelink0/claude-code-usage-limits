@@ -2104,8 +2104,32 @@ function criticalOthers(windows, bindingKey, threshold) {
 // changes nothing and the lever is effort instead. Either way the point is the
 // same - being at the wall is not the same as being out of budget, and an agent
 // that cannot tell the difference stops early and calls it caution.
-function escapeRoute(windows, binding, effortNote) {
+// The commands differ by host and getting them wrong is worse than saying
+// nothing: /model and /effort do not exist in Codex, and telling Codex to run
+// them is telling it to do nothing while believing it acted. Codex changes its
+// own model and effort through its own controls; the script can only save
+// defaults for NEW sessions, which is a different promise and is stated as one.
+function levers(which) {
+  // `host` is the required module here, not a parameter - shadowing it was a
+  // ReferenceError on the constant it owns.
+  const codex = which === host.CODEX;
+  return {
+    model: (family) =>
+      codex
+        ? "Codex's own model control (the script only saves defaults for new sessions: " +
+          'node scripts/lowpower.js on --host codex --model <id>)'
+        : '/model ' + (family || '<another model>') + ' (or node scripts/lowpower.js on --model <id>)',
+    effort: (level) =>
+      codex
+        ? "Codex's own effort control for this task (node scripts/lowpower.js on --host codex --effort " +
+          (level || '<level>') + ' saves it for new sessions and cannot change one already running)'
+        : '/effort ' + (level || '<level>'),
+  };
+}
+
+function escapeRoute(windows, binding, effortNote, host) {
   if (!binding || binding.percentUsed === null || binding.percentUsed === undefined) return null;
+  const lever = levers(host || currentHost());
   const live = (windows || []).filter(
     (w) => w && w.percentUsed !== null && w.percentUsed !== undefined && !w.stale && w.key !== binding.key
   );
@@ -2133,6 +2157,7 @@ function escapeRoute(windows, binding, effortNote) {
       nextLabel: next ? next.label || next.key : null,
       nextPercent: next ? Math.round(next.percentUsed) : null,
       suggest: roomier && roomier.family ? roomier.family : null,
+      command: lever.model(roomier && roomier.family ? roomier.family : null),
     };
   }
 
@@ -2144,6 +2169,7 @@ function escapeRoute(windows, binding, effortNote) {
       from: effortNote.effort || null,
       to: effortNote.cheaper.effort,
       multiple: Number.isFinite(effortNote.cheaper.multiple) ? effortNote.cheaper.multiple : null,
+      command: lever.effort(effortNote.cheaper.effort),
     };
   }
   return null;
@@ -3740,6 +3766,7 @@ module.exports = {
   bindingWindow,
   criticalOthers,
   escapeRoute,
+  levers,
   betterCalibration,
   calibrationForPlan,
   stampPlan,

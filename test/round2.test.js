@@ -160,7 +160,7 @@ test('at the wall with an escape, the instruction is switch and carry on - not s
   const text = brief.briefText({
     binding,
     pressure: 'tight',
-    escape: { kind: 'model', frees: 'weekly (Fable)', family: 'fable', nextLabel: 'weekly', nextPercent: 77, suggest: 'opus' },
+    escape: { kind: 'model', frees: 'weekly (Fable)', family: 'fable', nextLabel: 'weekly', nextPercent: 77, suggest: 'opus', command: '/model opus' },
     sessions: 1,
     critical: [],
   });
@@ -173,11 +173,58 @@ test('at the wall with an escape, the instruction is switch and carry on - not s
 test('the older family sentence steps aside for the line that names the model', () => {
   const brief = require('../skills/usage-limits/scripts/brief.js');
   const binding = { key: 'f', label: 'weekly (Fable)', family: 'fable', percentUsed: 89, stale: false, resetsAt: null };
-  const escape = { kind: 'model', frees: 'weekly (Fable)', family: 'fable', nextLabel: 'weekly', nextPercent: 76, suggest: 'opus' };
+  const escape = { kind: 'model', frees: 'weekly (Fable)', family: 'fable', nextLabel: 'weekly', nextPercent: 76, suggest: 'opus', command: '/model opus' };
   const both = brief.briefText({ binding, family: 'Fable', escape, pressure: 'roomy', sessions: 1, critical: [] });
   assert.doesNotMatch(both, /counts Fable turns only/, 'one point, one sentence');
   assert.match(both, /\/model opus/);
   // With no escape to name, the original sentence is still the only warning there is.
   const alone = brief.briefText({ binding, family: 'Fable', escape: null, pressure: 'roomy', sessions: 1, critical: [] });
   assert.match(alone, /counts Fable turns only/);
+});
+
+// /model and /effort do not exist in Codex. Naming them there tells Codex to
+// do nothing while believing it acted.
+test('the lever is named in the vocabulary of the host it will run in', () => {
+  const claude = usage.levers('claude');
+  const codex = usage.levers('codex');
+  assert.strictEqual(claude.effort('medium'), '/effort medium');
+  assert.match(claude.model('opus'), /^\/model opus/);
+  assert.doesNotMatch(codex.effort('medium'), /\/effort/);
+  assert.doesNotMatch(codex.model('opus'), /\/model/);
+  assert.match(codex.effort('medium'), /--host codex --effort medium/);
+  assert.match(codex.effort('medium'), /cannot change one already running/, 'the weaker promise is stated, not implied');
+  assert.match(codex.model(null), /--host codex --model/);
+});
+
+test('escapeRoute carries the host-correct command', () => {
+  const fable = { key: 'f', label: 'weekly (Fable)', family: 'fable', percentUsed: 89, stale: false, applies: true };
+  const week = { key: 'w', label: 'weekly', family: null, percentUsed: 60, stale: false, applies: true };
+  assert.match(usage.escapeRoute([fable, week], fable, null, 'claude').command, /^\/model/);
+  assert.match(usage.escapeRoute([fable, week], fable, null, 'codex').command, /--host codex/);
+});
+
+test('the escape reads as a choice, not only as a wall notice', () => {
+  const brief = require('../skills/usage-limits/scripts/brief.js');
+  const binding = { key: 'f', label: 'weekly (Fable)', family: 'fable', percentUsed: 70, stale: false, resetsAt: null };
+  const text = brief.briefText({
+    binding,
+    pressure: 'roomy',
+    escape: { kind: 'model', nextLabel: 'weekly', nextPercent: 40, suggest: 'opus', command: '/model opus' },
+    sessions: 1,
+    critical: [],
+  });
+  assert.match(text, /may make that change yourself/);
+  assert.match(text, /dearer than the work needs rather than only/);
+  assert.match(text, /\/model opus/);
+});
+
+test('an escape with no command names the lever and invents no syntax', () => {
+  const brief = require('../skills/usage-limits/scripts/brief.js');
+  const binding = { key: 'f', label: 'weekly (Fable)', family: 'fable', percentUsed: 89, stale: false, resetsAt: null };
+  const text = brief.briefText({
+    binding, pressure: 'tight', sessions: 1, critical: [],
+    escape: { kind: 'model', nextLabel: 'weekly', nextPercent: 40, suggest: null, command: null },
+  });
+  assert.doesNotMatch(text, /undefined|null/);
+  assert.match(text, /switching model retires it/);
 });

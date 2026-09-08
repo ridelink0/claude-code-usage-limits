@@ -387,6 +387,23 @@ is. There are two, and only one of them is the account's budget.
   this account. `node scripts/usage.js --recommend` names both levers with the
   commands.
 
+**The commands differ by host, and the wrong one does nothing.** `/model` and
+`/effort` do not exist in Codex. Under Codex, change the model and effort for
+the task in hand through Codex's own controls; `node scripts/lowpower.js on
+--host codex --effort low --model <id>` only saves defaults for *new* sessions
+and cannot change one already running. The budget line prints whichever
+vocabulary the host it is running in actually understands, so use the command
+it gives you rather than the one you remember.
+
+**This is a lever you may pull yourself, not only an emergency exit.** Use it
+whenever the current setting is dearer than the work in front of you needs,
+without being asked and long before any window is tight: a mechanical rename,
+a docs pass or a mass find-and-replace does not need the model and effort a
+hard design decision does. Drop it for that stretch, say in one line that you
+did and why, and put it back when the work gets hard again. An agent that only
+ever reads this as a wall notice runs every trivial turn at the top setting and
+then wonders where the window went.
+
 The budget line does this arithmetic for you. Once the binding window is half
 gone it says which lever applies, and at the wall it says outright that you are
 not out of budget and must not stop as though you were. When it does, the

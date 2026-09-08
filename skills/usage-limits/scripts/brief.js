@@ -548,7 +548,13 @@ function briefText(parts) {
       sentences.push(
         'The effort setting is what is spending this: ' + bits.join(', and ') +
           '. Keep it where the work genuinely needs the thinking and drop it where it ' +
-          'does not; it changes what every turn costs, not how many you get.'
+          'does not; it changes what every turn costs, not how many you get.' +
+          // The command, in the host's own vocabulary. /effort does not exist
+          // in Codex, and naming it there is telling Codex to do nothing while
+          // believing it acted.
+          (warning.cheaper && warning.cheaper.effort
+            ? ' To drop it: ' + usage.levers(usage.currentHost()).effort(warning.cheaper.effort) + '.'
+            : '')
       );
     }
   }
@@ -580,14 +586,27 @@ function briefText(parts) {
         (escape.nextLabel
           ? 'After a switch the binding window would be ' + escape.nextLabel + ' at ' + escape.nextPercent + ' per cent. '
           : '') +
-        'Use /model ' + (escape.suggest || '<another model>') + ' (or scripts/lowpower.js on --model <id>).'
+        // No command rather than a wrong one: the vocabulary differs by host,
+        // and "Use undefined" is worse than saying which lever it is and
+        // leaving the reader to reach for it.
+        (escape.command ? 'Use ' + escape.command + '.' : '')
       : escape && escape.kind === 'effort'
         ? 'A model switch does not free this window - it follows the account - but effort does: ' +
           escape.to + ' measured ' + (escape.multiple ? escape.multiple + 'x ' : '') + 'cheaper a turn than ' +
-          (escape.from || 'the current effort') + '. Use /effort ' + escape.to + '.'
+          (escape.from || 'the current effort') + '.' + (escape.command ? ' Use ' + escape.command + '.' : '')
         : null;
+  // Not only an emergency exit. The same lever is the right one whenever the
+  // setting is dearer than the work in front of you needs - a mechanical edit
+  // does not need the model a hard design decision does. Say so, because an
+  // agent that only ever reads this as a wall notice will run every trivial
+  // turn at the top setting and then wonder where the window went.
+  const chooseText = escapeText
+    ? ' You may make that change yourself, at any point and without being asked, ' +
+      'whenever the current setting is dearer than the work needs rather than only ' +
+      'when the window is nearly gone. Say in one line that you changed it and why.'
+    : '';
   if (escapeText && parts.binding && Number.isFinite(parts.binding.percentUsed) && parts.binding.percentUsed >= HALF_SPENT) {
-    sentences.push(escapeText);
+    sentences.push(escapeText + chooseText);
   }
 
   // A window that is not binding can still be the expensive one to exhaust.
@@ -955,7 +974,7 @@ async function run(now, hookInput) {
       othersSummary: summariseOthers(data.windows, binding && binding.key),
       // The way out that is not stopping. Cached with the rest of the view
       // because it is derived from the same one pass over the windows.
-      escape: usage.escapeRoute(data.windows, binding, data.effortWarning || null),
+      escape: usage.escapeRoute(data.windows, binding, data.effortWarning || null, usage.currentHost()),
       // Every window, trimmed to the cacheable fields, so the corrected reading
       // can be recorded for all three columns of the status line on a cache
       // hit too. Recording the binding window alone left the other two at
