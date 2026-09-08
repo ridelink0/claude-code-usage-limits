@@ -259,3 +259,30 @@ test('the agent scan is cheap enough for a display that redraws every second', (
   for (let i = 0; i < 20; i += 1) usage.liveAgents(Date.now());
   assert.ok(Date.now() - started < 200, 'twenty calls must come off the memo, not the disk');
 });
+
+// Found by walking the Codex instruction across the whole range, which is the
+// check Gev asked for: does it stop at a good stopping point, or just make a
+// plan? At 100 per cent of a SHARED window the escape wording had it refuse to
+// stop because a cheaper effort existed - but a cheaper turn against an
+// exhausted window is still a turn you cannot take. Only a model switch
+// retires a window outright, so only a model switch survives to 'gone'.
+test('at a spent shared window it stops; at a spent model window it switches', () => {
+  const brief = require('../skills/usage-limits/scripts/brief.js');
+  const shared = { key: 'five_hour', label: '5-hour', family: null, percentUsed: 100, percentLeft: 0, stale: false, applies: true, resetsAt: NOW + 9e5, turnsLeft: 0 };
+  const scoped = { key: 'f', label: 'weekly (Fable)', family: 'fable', percentUsed: 100, percentLeft: 0, stale: false, applies: true, resetsAt: NOW + 9e5, turnsLeft: 0 };
+  const effort = { kind: 'effort', from: 'high', to: 'medium', multiple: 4, command: '/effort medium' };
+  const model = { kind: 'model', nextLabel: 'weekly', nextPercent: 30, suggest: 'opus', command: '/model opus' };
+
+  const spentShared = brief.briefText({ binding: shared, pressure: 'gone', escape: effort, sessions: 1, critical: [] });
+  assert.match(spentShared, /nothing further will run/, 'a spent shared window is spent');
+  assert.doesNotMatch(spentShared, /must not stop/, 'effort cannot buy back an exhausted window');
+
+  const spentScoped = brief.briefText({ binding: scoped, pressure: 'gone', escape: model, sessions: 1, critical: [] });
+  assert.match(spentScoped, /must not stop/, 'a model switch retires the window outright');
+  assert.match(spentScoped, /\/model opus/);
+
+  // Effort still earns its place while headroom remains.
+  const tight = brief.briefText({ binding: shared, pressure: 'tight', escape: effort, sessions: 1, critical: [], turnsLeft: 6 });
+  assert.match(tight, /must not stop/);
+  assert.match(tight, /\/effort medium/);
+});

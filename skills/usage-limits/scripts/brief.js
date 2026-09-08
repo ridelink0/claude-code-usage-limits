@@ -717,7 +717,15 @@ function briefText(parts) {
     // that is a real session: the Fable weekly hit 89 per cent, the line said
     // the budget was nearly gone, and the work ended with the five-hour window
     // at 46 and every other model untouched.
-    escapeText && (parts.pressure === 'tight' || parts.pressure === 'gone')
+    // Only a MODEL switch survives to 'gone'. It retires a scoped window
+    // outright, so the budget really is still there. Effort does not: a
+    // cheaper turn against an exhausted window is still a turn you cannot
+    // take, and telling a session at 100 per cent that it is "not out of
+    // budget" because medium is cheaper than high would be this plugin
+    // producing the exact failure it exists to prevent, in reverse - refusing
+    // to stop at the one moment stopping is right.
+    escapeText &&
+    (parts.pressure === 'tight' || (parts.pressure === 'gone' && escape && escape.kind === 'model'))
       ? 'This window is nearly gone, but you are not out of budget and you must ' +
         'not stop as though you were. ' + escapeText + ' Do that, say in one ' +
         'line that you switched and why, and carry on with the whole request at ' +
