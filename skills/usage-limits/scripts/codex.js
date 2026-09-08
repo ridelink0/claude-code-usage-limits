@@ -443,7 +443,10 @@ function readingsOf(meter) {
   for (const entry of SLOTS) {
     const window = meter[entry.slot];
     if (!window || typeof window !== 'object') continue;
-    const percent = Number(window.used_percent);
+    // Number(null) is 0, and a null percentage read as "0% used" is worse
+    // than no reading at all. Only an actual number counts.
+    const raw = window.used_percent;
+    const percent = raw === null || raw === undefined || raw === '' ? NaN : Number(raw);
     if (!Number.isFinite(percent)) continue;
 
     const minutes = Number(window.window_minutes);
@@ -482,9 +485,21 @@ function utilizationFrom(meter) {
   // account has no rolling limit and usage scales with credits. Returning null
   // here would throw away the plan and the credit balance, which on such an
   // account are the only figures there are.
+  //
+  // A slot that IS there but carries no readable percentage is a different
+  // thing again: the meter answered without numbers, which happens around a
+  // limit hit. Calling that flexible pricing told Codex on 2026-09-07 that its
+  // Plus account had no window to run down, minutes after the window ran out.
+  const slotsPresent = SLOTS.filter((entry) => meter[entry.slot] && typeof meter[entry.slot] === 'object').length;
+  // Consumer plans are metered by windows without exception; only the
+  // business-side plans can be on flexible pricing. So on Plus, Pro, Go or
+  // Free a meter with no windows in it is a meter that failed to read them.
+  const planType = typeof meter.plan_type === 'string' ? meter.plan_type : '';
+  const consumer = /^(free|go|plus|pro|prolite)$/i.test(planType);
   const credits = meter.credits && typeof meter.credits === 'object' ? meter.credits : null;
   return {
-    windowless: specs.length === 0,
+    windowless: specs.length === 0 && slotsPresent === 0 && !consumer,
+    unreadable: specs.length === 0 && (slotsPresent > 0 || consumer),
     utilization: specs.length ? utilization : null,
     specs,
     planType: typeof meter.plan_type === 'string' ? meter.plan_type : null,
@@ -802,6 +817,8 @@ function collect(now, options) {
     // what flexible pricing looks like. That is a different thing from having
     // found nothing to read, and it needs to be said differently.
     windowless: Boolean(mapped && mapped.windowless),
+    // The meter reported window slots but no readable percentage in them.
+    unreadable: Boolean(mapped && mapped.unreadable),
     windowSpecs: mapped ? mapped.specs : null,
     reachedType: mapped ? mapped.reachedType : null,
     spendControlReached: Boolean(mapped && mapped.spendControlReached),

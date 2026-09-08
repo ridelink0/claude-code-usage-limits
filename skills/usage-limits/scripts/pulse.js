@@ -100,7 +100,18 @@ function pulseText(parts) {
   if (parts.sessions > 1) bits.push(parts.sessions + ' sessions sharing it');
   if (!bits.length) return '';
 
-  const head = '[usage-limits] ' + bits.join(', ') + '.';
+  const head = '[usage-limits] ' + (parts.fanout ? 'Before this fan-out: ' : '') + bits.join(', ') + '.';
+  if (parts.fanout) {
+    // Said before every Workflow or Agent call. The agents spend this same
+    // window, nothing can speak again until they stop, and a main-loop turn
+    // with a large context costs more than one whole fresh-context agent.
+    return (
+      head + ' Subagents spend this window too and nothing can warn you until they ' +
+      'stop, so size the fan-out to what is left' +
+      (parts.pressure === 'gone' ? ' - which is nothing: do not launch it' : parts.pressure === 'tight' ? ' - a handful, not dozens' : '') +
+      '. Fewer agents with a fresh context beat another turn of a long one.'
+    );
+  }
   if (parts.pressure === 'gone') {
     return head + ' The budget is gone. Stop adding work, save what exists and write the handoff.';
   }
@@ -137,6 +148,13 @@ async function run(now, hookInput) {
   // a subagent is not a session, and marking one would put it in the list of
   // windows sharing this budget and split the headroom with a ghost.
   const quiet = event === 'SubagentStop';
+  // The call about to fan out. Everything it spawns spends this window with no
+  // main-thread tool call to pulse on, so this is the last word before the
+  // bill. On 2026-09-07 a 34-agent workflow took a five-hour window from 28%
+  // to 100% in sixteen minutes, and the session was cut off at a figure the
+  // pulse had last read as 24%.
+  const tool = hookInput && hookInput.tool_name ? String(hookInput.tool_name) : '';
+  const fanout = event === 'PreToolUse' && /^(Workflow|Agent|Task)$/.test(tool);
   if (!quiet) {
     // A tool call just finished, so the turn is still running. A few bytes, so
     // the panel beside the chat keeps animating through a long turn.
@@ -150,8 +168,9 @@ async function run(now, hookInput) {
   // call right after it, the first chance to actually tell Claude, said
   // nothing because something had already "pulsed" two minutes ago.
   const throttleKey = quiet ? (sessionId || '_') + '#subagent' : sessionId;
-  // The cheap path, and the one taken almost every time.
-  if (!due(all, throttleKey, now, every)) return '';
+  // The cheap path, and the one taken almost every time. A fan-out is never
+  // throttled: it is said every time, because every time it is about to cost.
+  if (!fanout && !due(all, throttleKey, now, every)) return '';
 
   // Claimed before the scan rather than after, so a slow scan cannot let a
   // second tool call start another one.
@@ -201,7 +220,7 @@ async function run(now, hookInput) {
 
   // Quiet when there is nothing to act on. A line every two minutes saying the
   // budget is fine is noise that costs the budget it is reporting on.
-  if (pressure === 'roomy' && String(process.env.USAGE_LIMITS_PULSE || '').toLowerCase() !== 'always') {
+  if (!fanout && pressure === 'roomy' && String(process.env.USAGE_LIMITS_PULSE || '').toLowerCase() !== 'always') {
     return '';
   }
 
@@ -216,15 +235,18 @@ async function run(now, hookInput) {
         : null,
     sessions: active,
     pressure,
+    fanout,
   });
 }
 
 // PostToolUse does not take plain stdout as context the way UserPromptSubmit
 // does, so the line is returned in the documented envelope instead.
-function envelope(text) {
+function envelope(text, event) {
+  // PreToolUse and PostToolUse both take additionalContext, each under its own
+  // event name; the wrong name is dropped without a word.
   return JSON.stringify({
     hookSpecificOutput: {
-      hookEventName: 'PostToolUse',
+      hookEventName: event === 'PreToolUse' ? 'PreToolUse' : 'PostToolUse',
       additionalContext: text,
     },
   });
@@ -256,11 +278,15 @@ function readHookInput() {
 }
 
 if (require.main === module) {
+  let hookEvent = null;
   readHookInput()
-    .then((input) => run(Date.now(), input))
+    .then((input) => {
+      hookEvent = input && input.hook_event_name ? String(input.hook_event_name) : null;
+      return run(Date.now(), input);
+    })
     .then(
       (text) => {
-        if (text) process.stdout.write(envelope(text) + '\n');
+        if (text) process.stdout.write(envelope(text, hookEvent) + '\n');
         process.exit(0);
       },
       () => {

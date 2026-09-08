@@ -106,6 +106,32 @@ test('a plan with no rolling window keeps its plan and its credits', () => {
   assert.strictEqual(mapped.credits.enabled, true);
 });
 
+// The meter can come back with its window slots present but empty - seen
+// minutes after a limit hit. That is a reading without numbers, and it must not
+// be reported as an account with no window at all.
+test('a slot with no readable percentage is unreadable, not windowless', () => {
+  const mapped = codex.utilizationFrom(
+    meter({ plan_type: 'plus', primary: { used_percent: null, window_minutes: 300 }, secondary: { window_minutes: 10080 } })
+  );
+  assert.strictEqual(mapped.windowless, false);
+  assert.strictEqual(mapped.unreadable, true);
+  assert.strictEqual(mapped.utilization, null);
+});
+
+// Plus, Pro, Go and Free are always metered by windows. A Plus meter with no
+// window slots at all is a failed reading, which is what Codex saw minutes
+// after a limit hit on 2026-09-07 and was told was flexible pricing.
+test('a consumer plan with no window slots is unreadable, not flexible pricing', () => {
+  const mapped = codex.utilizationFrom(meter({ plan_type: 'plus', primary: null, secondary: null }));
+  assert.strictEqual(mapped.windowless, false);
+  assert.strictEqual(mapped.unreadable, true);
+});
+
+test('a null percentage is not zero percent used', () => {
+  const mapped = codex.utilizationFrom(meter({ primary: window(null, 300, 1788137905), secondary: window(57, 10080, 1788644513) }));
+  assert.deepStrictEqual(Object.keys(mapped.utilization), ['seven_day']);
+});
+
 test('the plan names the API reports are all recognised', () => {
   for (const id of ['free', 'go', 'plus', 'pro', 'prolite', 'business', 'team', 'enterprise', 'edu']) {
     const plan = codex.planFrom(id);

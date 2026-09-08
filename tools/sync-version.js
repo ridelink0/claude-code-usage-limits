@@ -18,6 +18,10 @@ const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf
 const MANIFESTS = [
   path.join('.claude-plugin', 'plugin.json'),
   path.join('.codex-plugin', 'plugin.json'),
+  // The VS Code extension is its own package with its own version field, and
+  // it was the one that drifted: 1.12.7 shipped with the extension still
+  // saying 1.12.6 until somebody noticed by hand.
+  path.join('vscode', 'package.json'),
 ];
 
 for (const relative of MANIFESTS) {

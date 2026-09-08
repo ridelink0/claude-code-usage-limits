@@ -644,6 +644,36 @@ function liveEffort(sessionId) {
   return null;
 }
 
+// The model a session is running, from the tail of its own transcript. Every
+// assistant line carries message.model, so this is the session's word rather
+// than a setting's or another window's. The VS Code panel has no status line
+// of its own to ask, and until this existed it borrowed the newest status-line
+// slot on the machine - which on 2026-09-08 was a 19-hour-old Opus session,
+// shown over a Fable one.
+function liveModel(sessionId) {
+  const found = sessionTranscriptFile(sessionId);
+  if (!found) return null;
+  const from = Math.max(0, found.size - EFFORT_TAIL_BYTES);
+  const text = readSlice(found.file, from, found.size).toString('utf8');
+  const lines = text.split('\n');
+  const start = Math.max(from > 0 ? 1 : 0, lines.length - EFFORT_TAIL_LINES);
+  for (let i = lines.length - 1; i >= start; i -= 1) {
+    const line = lines[i];
+    if (!line || line.indexOf('"assistant"') === -1 || line.indexOf('"model"') === -1) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch (err) {
+      continue;
+    }
+    const model = entry && entry.message && typeof entry.message.model === 'string' ? entry.message.model : null;
+    if (!model || model === '<synthetic>') continue;
+    const at = Date.parse(entry.timestamp);
+    return { model, at: Number.isFinite(at) ? at : found.at };
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // The scan cache
 // ---------------------------------------------------------------------------
@@ -1191,6 +1221,7 @@ function codexBlock(now) {
       windowSpecs: other.windowSpecs,
       plan: other.plan,
       windowless: other.windowless,
+      unreadable: other.unreadable,
     });
     return block.present ? block : null;
   } catch (err) {
@@ -2872,7 +2903,11 @@ function render(data) {
     // Two different situations, and telling them apart matters. Nothing to read
     // is a setup problem. Nothing to report is the correct answer on a plan
     // whose usage scales with credits rather than resetting on a clock.
-    if (data.windowless) {
+    if (data.unreadable) {
+      lines.push('  The meter reports usage windows but no readable percentage for them.');
+      lines.push('  That is a reading problem, not flexible pricing: the limit still');
+      lines.push('  applies. Run /status in Codex, or try again in a minute.');
+    } else if (data.windowless) {
       lines.push('  This account reports no rolling usage window.');
       lines.push('  On flexible pricing there is no percentage to run down: usage scales');
       lines.push('  with credits, so the credit balance above is the budget to plan against.');
@@ -3527,6 +3562,7 @@ module.exports = {
   SCAN_MAX_EVENTS,
   sessionTranscriptFile,
   liveEffort,
+  liveModel,
   EFFORT_TAIL_BYTES,
   scanFile,
   readScanCache,

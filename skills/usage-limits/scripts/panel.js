@@ -170,7 +170,12 @@ async function snapshot(options) {
     .sort((a, b) => marks[b].at - marks[a].at)[0];
   const sticky = opts.sessionId && marks[opts.sessionId] && now - marks[opts.sessionId].at <= feed.STICKY_QUIET_MS;
   const described = (sticky ? opts.sessionId : null) || freshest || opts.sessionId || null;
-  const slot = (described && slots[described]) || feed.stickySlot(slots, opts.sessionId, now);
+  // A described session with no status line of its own (VS Code) must not be
+  // dressed in another session's slot: that is how a Fable window came to say
+  // Opus. Its transcript speaks for it instead. Only a panel with no session
+  // at all falls back to the newest slot on the machine.
+  const slot = (described && slots[described]) || (described ? null : feed.stickySlot(slots, opts.sessionId, now));
+  const spoken = !onCodex && described && !slot ? usage.liveModel(described) : null;
   // The marks are machine-wide, and this panel describes ONE session. Reading
   // the machine-wide summary here is what let a prompt in another window put
   // ultrathink on this window's bars. When the session being described is
@@ -196,7 +201,7 @@ async function snapshot(options) {
     windowSpecs: collected.windowSpecs || null,
     headers: slot ? slot.rateLimits : null,
     headersAt: slot ? slot.headersAt : null,
-    model: (slot && slot.model) || seen.model || null,
+    model: (slot && slot.model) || seen.model || (spoken && spoken.model) || null,
     modelName: slot ? slot.modelName : null,
     // Whichever of the status line and the transcript spoke last. The setting
     // is only the last resort: a panel beside a VS Code window has no status
