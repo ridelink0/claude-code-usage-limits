@@ -2007,6 +2007,22 @@ function buildWindow(spec, snapshot, events, now, options) {
     }
   }
 
+  // When spending has gone further past the snapshot than the snapshot said was
+  // left, the percentage is a floor and the price per point was derived from a
+  // denominator that is no longer true. Everything downstream of it is worse
+  // than useless: measured live, the line read "13 per cent used, about 1301
+  // turns of headroom" in the same breath as warning that the window was
+  // probably already exhausted. A number that confident, that wrong, beside its
+  // own contradiction, is the failure this whole plugin exists to avoid.
+  //
+  // There is no honest count to print here, so none is printed. The warning
+  // that the snapshot has been outrun stands on its own.
+  if (window.pointsBeyondSnapshot) {
+    window.turnsLeft = null;
+    window.headroomMs = null;
+    window.remainingUSD = null;
+  }
+
   // A reset time in the past means the window already turned over and the
   // cached percentage describes a window that no longer exists. Reporting it
   // as current would claim the budget is gone when it has just come back.

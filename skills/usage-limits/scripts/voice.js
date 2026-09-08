@@ -150,9 +150,12 @@ const DROPPED = /\b(?:dont|doesnt|didnt|isnt|arent|wasnt|werent|cant|cannt|wont|
 const HEDGE = /\b(?:maybe|perhaps|i think|i guess|kind of|kinda|sort of|sorta|probably|possibly|might|could be|if possible|not sure|somehow|or something|i feel like)\b/gi;
 const IMPERATIVE = /^(?:please\s+)?(?:add|make|fix|check|build|do|run|write|change|remove|delete|update|use|put|give|show|find|get|set|keep|try|start|stop|finish|release|push|test|move|rename|open|close|send|create|install|upgrade|refactor|clean|verify)\b/i;
 const FIRST_PERSON = /\b(?:i|i'm|im|ive|i've|my|me|mine)\b/i;
-// Surrogate pairs in the pictographic planes, plus the dingbats and the
-// variation selector that turns a glyph into an emoji.
-const EMOJI = /[‼-㊙️☀-➿]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|\uD83E[\uDC00-\uDFFF]/g;
+// Written as code points rather than as the characters themselves, for two
+// reasons: the file stays plain ASCII and cannot be broken by an encoding
+// round-trip, and a source file that detects emoji should not contain any.
+// The surrogate pairs cover the pictographic planes; the rest is dingbats,
+// arrows, and the variation selector that turns a plain glyph into an emoji.
+const EMOJI = /[\u203C\u2049\u2600-\u27BF\u2B00-\u2BFF\uFE0F]|[\uD83C-\uD83E][\uDC00-\uDFFF]/g;
 
 function countOf(text, pattern) {
   const found = text.match(pattern);

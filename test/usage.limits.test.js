@@ -332,3 +332,4 @@ test('bindingWindow still names a window when the only reading left is a suppres
   };
   assert.strictEqual(usage.bindingWindow([five, fable]).key, 'seven_day_scoped:fable');
 });
+

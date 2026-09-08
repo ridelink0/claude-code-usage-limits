@@ -1845,3 +1845,30 @@ test('shareOf splits among every open session when more are open than have spent
   assert.ok(Math.abs(usage.shareOf(two, 'other', 4) - 0.25) < 1e-9);
   assert.ok(Math.abs(usage.shareOf(two, 'stranger', 4) - 0.25) < 1e-9);
 });
+
+// Measured live on 2026-09-08: the budget line read "13 per cent used, about
+// 1301 turns of headroom" in the same breath as warning that about 97 points
+// had been spent since the snapshot - more than it said was left. The prose was
+// right and the number was a fantasy: once spending has outrun the snapshot,
+// the price per point was derived from a denominator that has stopped being
+// true, and everything downstream of it inflates. There is no honest count in
+// that state, so none is printed.
+test('once spending has outrun the snapshot, no turn count is quoted at all', () => {
+  const spec = { key: 'five_hour', label: '5-hour', span: 5 * HOUR };
+  const snapshot = { utilization: 13, resets_at: new Date(NOW + HOUR).toISOString() };
+  const sample = events([
+    { offset: -70 * 60 * 1000, cost: 15 },
+    { offset: -65 * 60 * 1000, cost: 15 },
+    { offset: -60 * 60 * 1000, cost: 15 },
+    { offset: -55 * 60 * 1000, cost: 15 },
+    { offset: -50 * 60 * 1000, cost: 15 },
+    { offset: -45 * 60 * 1000, cost: 15 },
+    { offset: -60 * 1000, cost: 900 },
+  ]);
+  const window = usage.buildWindow(spec, snapshot, sample, NOW, { fetchedAt: NOW - 30 * 60 * 1000 });
+  assert.ok(window.pointsBeyondSnapshot > 0, 'the overshoot is what makes the reading a floor');
+  assert.strictEqual(window.percentUsed, 13, 'the percentage stays the last real reading');
+  assert.strictEqual(window.turnsLeft, null, 'and no headroom is claimed beside that warning');
+  assert.strictEqual(window.headroomMs, null);
+  assert.strictEqual(window.remainingUSD, null);
+});

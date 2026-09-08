@@ -135,16 +135,6 @@ function userIsPresent(cli) {
   }
 }
 
-function banner(cli, text) {
-  if (!cli) return;
-  spawnSync(process.execPath, [cli, 'status', JSON.stringify({ banner: text })], {
-    encoding: 'utf8',
-    timeout: 20000,
-    windowsHide: true,
-    env: Object.assign({}, process.env, { CLI_QUIET: '1' }),
-  });
-}
-
 // None of this is restored by --resume: a headless resume starts in the
 // permission mode a fresh -p run would, so a session that was running with
 // edits accepted comes back asking a person who is not there.
@@ -294,10 +284,8 @@ async function run(now, argv) {
     return { outcome: 'no-cli' };
   }
 
-  banner(capabilities.computerUse, 'Usage limits is picking your project back up');
   toast('Usage limits: resuming', 'Carrying on with ' + (record.project || path.basename(record.cwd)) + ' where the limit stopped it.');
   const delivered = record.host === host.CODEX ? deliverCodex(record, prompt, cli) : deliverClaude(record, prompt, config, cli);
-  banner(capabilities.computerUse, '');
   if (delivered.ok) {
     toast('Usage limits: done', 'The resumed run finished. Open the session to read it.');
     finish(state, record, 'resumed', delivered.how, now);
