@@ -666,6 +666,27 @@ function briefText(parts) {
     );
   }
 
+  // Is the setting bigger than the work needs? Asked from the setting, not
+  // from the budget: a mechanical hour at the top setting is waste at 10 per
+  // cent used exactly as much as at 80. The plugin supplies the measured half
+  // and asks for the judgement, because only the reader knows what is coming.
+  //
+  // Said once per setting per session. Every prompt would be nagging, and the
+  // question only changes when the setting does.
+  if (parts.fit) {
+    sentences.push(
+      'Your effort is ' + parts.fit.effort + ', measured at ' + parts.fit.multiple +
+        ' times the cost of ' + parts.fit.cheaper + ' a turn on this account (' +
+        parts.fit.sample + ' turns against ' + parts.fit.cheaperSample + '). Judge what is ' +
+        'actually in front of you before the next stretch: mechanical work - a rename, a docs ' +
+        'pass, running tests, applying a fix you have already worked out - does not need it. ' +
+        'If this stretch is that, take one of the three levers yourself and say which in one ' +
+        'line: drop the effort (' + parts.fit.command + '), hand the stretch to a cheaper ' +
+        'model, or do less of it at this setting - a fan-out multiplies the setting across ' +
+        'every agent. Put it back when the work gets hard again.'
+    );
+  }
+
   if (parts.voiceNote) sentences.push('How this user wants to be written to: ' + parts.voiceNote);
 
   // What the relay changes about all of this.
@@ -969,6 +990,10 @@ async function run(now, hookInput) {
   if (!base.utilization) return '';
 
   const all = readCache();
+  // Which setting the fit question was already asked for, read BEFORE anything
+  // rewrites the slot. Reading it afterwards meant comparing the new answer
+  // against itself, so the question could never be asked at all.
+  const askedFitFor = all && all[sessionId || '_'] ? all[sessionId || '_'].fitFor || null : null;
   let view = pickCached(all, sessionId, now, config.cacheSeconds * SECOND);
 
   // Everything shown has to come from one pass. Deriving the turns from a
@@ -1003,7 +1028,9 @@ async function run(now, hookInput) {
       snapshotAge: usage.formatDuration(data.snapshotAgeMs),
       binding: cacheableBinding(binding),
       effortWarning: data.effortWarning || null,
+      fit: usage.settingFit(data.events || null, data.effortNow || null, usage.currentHost()),
     };
+    view.fitFor = view.fit ? view.fit.effort : askedFitFor;
     writeCache(mergeCache(all, sessionId, view, KEEP_SESSIONS));
   }
 
@@ -1070,6 +1097,9 @@ async function run(now, hookInput) {
     host: usage.currentHost(),
     turnsLeft: view.turnsLeft,
     effortWarning: view.effortWarning || null,
+    // Once per setting. The slot below records which effort it was said for,
+    // so a change of setting asks the question again and a repeat does not.
+    fit: view.fit && askedFitFor !== view.fit.effort ? view.fit : null,
     // Outside the cache: it is cheap, and it belongs to the other agent's
     // clock rather than this session's.
     codex: codexSummary(now),

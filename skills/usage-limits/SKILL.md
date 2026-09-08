@@ -395,6 +395,30 @@ and cannot change one already running. The budget line prints whichever
 vocabulary the host it is running in actually understands, so use the command
 it gives you rather than the one you remember.
 
+**Check the setting against the work, not against the window.** Once there is
+evidence for it, the budget line tells you what your current effort actually
+costs against the cheapest level measured on this account - "ultra, measured at
+6 times the cost of medium a turn (8 turns against 6)". It says this from the
+first prompt, at any percentage, because a mechanical hour at the top setting is
+waste at 10 per cent used exactly as much as at 80; the only difference is that
+at 80 somebody notices.
+
+It cannot judge how hard your work is. You can. So when you see it, look at what
+is actually in front of you and take one of three levers yourself, saying which
+in one line:
+
+1. **Drop the effort** for that stretch - a rename, a docs pass, running tests,
+   applying a fix you have already worked out.
+2. **Hand the stretch to a cheaper model**, and keep the dear one for the
+   decisions that need it.
+3. **Do less of it at this setting** - a fan-out multiplies the setting across
+   every agent, so six agents at ultra is six ultra turns, not one.
+
+Put it back when the work gets hard again. The question is asked once per
+setting per session, not every prompt, and never at all unless there is a real
+measured comparison behind it - a ratio from a price list would have you drop
+effort on a hunch and call it evidence.
+
 **This is a lever you may pull yourself, not only an emergency exit.** Use it
 whenever the current setting is dearer than the work in front of you needs,
 without being asked and long before any window is tight: a mechanical rename,

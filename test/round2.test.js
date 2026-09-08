@@ -13,6 +13,7 @@ const path = require('node:path');
 const usage = require('../skills/usage-limits/scripts/usage.js');
 const relay = require('../skills/usage-limits/scripts/relay.js');
 const statusline = require('../skills/usage-limits/scripts/statusline.js');
+const brief = require('../skills/usage-limits/scripts/brief.js');
 
 const NOW = Date.parse('2026-09-08T22:00:00.000Z');
 
@@ -285,4 +286,48 @@ test('at a spent shared window it stops; at a spent model window it switches', (
   const tight = brief.briefText({ binding: shared, pressure: 'tight', escape: effort, sessions: 1, critical: [], turnsLeft: 6 });
   assert.match(tight, /must not stop/);
   assert.match(tight, /\/effort medium/);
+});
+
+// "Claude checks the model and effort, notices how it's big and not necessary,
+// then either reduces its work or workflow or changes the model or effort
+// itself." Budget-triggered advice cannot do that: a mechanical hour at the top
+// setting is waste at 10 per cent used exactly as much as at 80.
+test('the setting is judged against the work, not against the window', () => {
+  const events = [];
+  for (let i = 0; i < 8; i += 1) events.push({ effort: 'ultra', cost: 1.2, tokens: 9e5, parts: { output: 9000 }, sidechain: false });
+  for (let i = 0; i < 6; i += 1) events.push({ effort: 'medium', cost: 0.2, tokens: 1.5e5, parts: { output: 1500 }, sidechain: false });
+  const fit = usage.settingFit(events, 'ultra', 'claude');
+  assert.strictEqual(fit.cheaper, 'medium');
+  assert.strictEqual(fit.multiple, 6);
+  assert.strictEqual(fit.command, '/effort medium');
+  assert.strictEqual(fit.sample, 8);
+  // Codex is told about Codex's control, never /effort.
+  assert.doesNotMatch(usage.settingFit(events, 'ultra', 'codex').command, /\/effort/);
+});
+
+test('it refuses to invent a ratio it has not measured', () => {
+  const thin = [{ effort: 'ultra', cost: 1, parts: { output: 10 }, sidechain: false }];
+  assert.strictEqual(usage.settingFit(thin, 'ultra', 'claude'), null, 'one turn is not evidence');
+  const oneLevel = [];
+  for (let i = 0; i < 8; i += 1) oneLevel.push({ effort: 'ultra', cost: 1, parts: { output: 100 }, sidechain: false });
+  assert.strictEqual(usage.settingFit(oneLevel, 'ultra', 'claude'), null, 'nothing to compare against');
+  // Already at the cheap end: nothing to say.
+  const both = oneLevel.concat(oneLevel.map(() => ({ effort: 'medium', cost: 1, parts: { output: 100 }, sidechain: false })));
+  assert.strictEqual(usage.settingFit(both, 'medium', 'claude'), null);
+});
+
+test('the fit sentence names all three levers and asks for the judgement', () => {
+  const text = brief.briefText({
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 12, stale: false, resetsAt: NOW + 9e5 },
+    pressure: 'roomy', sessions: 1, critical: [], host: 'claude',
+    fit: { effort: 'ultra', sample: 8, cheaper: 'medium', cheaperSample: 6, multiple: 6, command: '/effort medium' },
+  });
+  assert.match(text, /measured at 6 times the cost of medium/);
+  assert.match(text, /Judge what is actually in front of you/);
+  assert.match(text, /drop the effort \(\/effort medium\)/, 'lever 1: effort');
+  assert.match(text, /hand the stretch to a cheaper model/, 'lever 2: model');
+  assert.match(text, /a fan-out multiplies the setting across every agent/, 'lever 3: less work');
+  assert.match(text, /Put it back when the work gets hard again/);
+  // It fires with the window at 12 per cent: the trigger is the setting.
+  assert.match(text, /get on with the work/);
 });

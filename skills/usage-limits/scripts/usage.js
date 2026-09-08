@@ -2160,6 +2160,54 @@ function criticalOthers(windows, bindingKey, threshold) {
   );
 }
 
+// Is the setting bigger than the work needs?
+//
+// Everything else here is budget-triggered: it speaks when a window is filling.
+// That is the wrong trigger for this question, because a mechanical hour at the
+// top setting is waste at 10 per cent used exactly as much as at 80 - the only
+// difference is that at 80 somebody notices. The trigger is the SETTING, not
+// the window.
+//
+// The plugin cannot judge how hard the work is; only the agent reading this
+// can. So this supplies the half that is measurable - what the current effort
+// actually costs against the cheapest level with real evidence behind it, on
+// this account - and the brief asks for the judgement.
+//
+// Returns null unless there is a measured alternative. A ratio invented from a
+// price list would be worse than silence: it would have an agent drop effort on
+// a hunch and call it evidence.
+function settingFit(events, effortNow, which) {
+  // Guarded here rather than trusted from the caller: a cache hit has no event
+  // list to hand over, and dominantEffort iterates without checking.
+  const list = Array.isArray(events) ? events : [];
+  const current = effortNow || dominantEffort(list);
+  if (!current) return null;
+  const rates = effortRates(list);
+  const here = rates.find((row) => row.effort === current);
+  if (!here || here.turns < MIN_EFFORT_SAMPLE) return null;
+  const measure = (row) => (Number.isFinite(row.outputPerTurn) && row.outputPerTurn > 0 ? row.outputPerTurn : row.perTurn);
+  const mine = measure(here);
+  if (!Number.isFinite(mine) || mine <= 0) return null;
+  let best = null;
+  for (const row of rates) {
+    if (row.effort === current || row.turns < MIN_EFFORT_SAMPLE) continue;
+    const theirs = measure(row);
+    if (!Number.isFinite(theirs) || theirs <= 0) continue;
+    const multiple = mine / theirs;
+    if (multiple < EFFORT_DEARER_BY) continue;
+    if (!best || multiple > best.multiple) best = { effort: row.effort, multiple, sample: row.turns };
+  }
+  if (!best) return null;
+  return {
+    effort: current,
+    sample: here.turns,
+    cheaper: best.effort,
+    cheaperSample: best.sample,
+    multiple: Number(best.multiple.toFixed(1)),
+    command: levers(which || currentHost()).effort(best.effort),
+  };
+}
+
 // The way out that is not stopping.
 //
 // This exists because of a session that ended for no reason. The Fable weekly
@@ -3837,6 +3885,7 @@ module.exports = {
   bindingWindow,
   criticalOthers,
   escapeRoute,
+  settingFit,
   levers,
   betterCalibration,
   calibrationForPlan,
