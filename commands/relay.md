@@ -31,6 +31,11 @@ The rest:
 - `thinking off|resume|always` - `resume` puts the word ultrathink into the
   prompt the relay delivers. `always` sets `alwaysThinkingEnabled` in your
   settings, backs the file up first, and applies to new sessions.
+- `arm [--session <id>] ["<text>"]` - arm by hand, against the binding
+  window's reset, without waiting for the hook to see a todo list. This is the
+  way under Codex, which writes no plan tool into its rollouts for the hook to
+  read, and for any project that lives in your head rather than a list. Any
+  text given is stored as the continuation.
 - `note "<text>"` (or `note --file <path>`) - store the continuation. This is
   the text that gets delivered, so write it to be acted on: what is done, what
   is next in order, which files are mid-change, what to verify first.

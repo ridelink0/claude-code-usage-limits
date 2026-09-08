@@ -114,10 +114,19 @@ function read() {
   };
 }
 
+// Written to a sibling and renamed into place. Two hooks can run at once, and a
+// reader that lands between the truncate and the write of a plain writeFileSync
+// sees half a file; the rename is the only step another process can observe.
+function writeAtomic(file, text) {
+  const tmp = file + '.' + process.pid + '.tmp';
+  fs.writeFileSync(tmp, text);
+  fs.renameSync(tmp, file);
+}
+
 function write(state) {
   try {
     fs.mkdirSync(configDir(), { recursive: true });
-    fs.writeFileSync(relayFile(), JSON.stringify(state, null, 2) + '\n');
+    writeAtomic(relayFile(), JSON.stringify(state, null, 2) + '\n');
     return true;
   } catch (err) {
     return false;
@@ -432,6 +441,31 @@ function psQuote(value) {
   return "'" + String(value).replace(/'/g, "''") + "'";
 }
 
+// One argument, quoted the way CommandLineToArgvW will unquote it. The rule
+// that matters and that a naive version misses: a backslash is only an escape
+// when it precedes a quote, so a run of backslashes before the closing quote
+// has to be doubled or the quote is eaten - which is exactly what a config
+// directory ending in a backslash did to the wake's command line.
+function winArg(value) {
+  const text = String(value);
+  if (!/[\s"]/.test(text)) return text;
+  let out = '"';
+  let slashes = 0;
+  for (const ch of text) {
+    if (ch === '\\') {
+      slashes += 1;
+      continue;
+    }
+    if (ch === '"') {
+      out += '\\'.repeat(slashes * 2 + 1) + '"';
+    } else {
+      out += '\\'.repeat(slashes) + ch;
+    }
+    slashes = 0;
+  }
+  return out + '\\'.repeat(slashes * 2) + '"';
+}
+
 function two(value) {
   return String(value).padStart(2, '0');
 }
@@ -442,12 +476,22 @@ function two(value) {
 // silently and forever. -StartWhenAvailable makes it fire on wake instead,
 // which is the whole difference between a relay and a coin toss. schtasks is
 // still the fallback for a box where the module is missing.
-function scheduleWindows(when, argv, name, cwd) {
+// The two registrations below are bounded by the caller's deadline, not by a
+// fixed figure: from inside a hook there may be a few seconds left, from the
+// command line there are as many as it takes. Measured once at 38 seconds
+// worst case when both spawns waited their full fixed timeouts, inside a hook
+// that is killed at ten.
+function remainingMs(deadline, ceiling) {
+  const left = Number.isFinite(deadline) ? deadline - Date.now() : ceiling;
+  return Math.max(0, Math.min(ceiling, left));
+}
+
+function scheduleWindows(when, argv, name, cwd, deadline) {
   const date = new Date(when);
   const stamp =
     date.getFullYear() + '-' + two(date.getMonth() + 1) + '-' + two(date.getDate()) + ' ' +
     two(date.getHours()) + ':' + two(date.getMinutes()) + ':' + two(date.getSeconds());
-  const argument = argv.map((value) => (/[\s"]/.test(value) ? '"' + value.replace(/"/g, '\\"') + '"' : value)).join(' ');
+  const argument = argv.map(winArg).join(' ');
   const script = [
     '$ErrorActionPreference = "Stop"',
     '$action = New-ScheduledTaskAction -Execute ' + psQuote(process.execPath) +
@@ -470,9 +514,11 @@ function scheduleWindows(when, argv, name, cwd) {
     const run = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], {
       encoding: 'utf8',
       windowsHide: true,
-      timeout: 8000,
+      timeout: Math.max(500, remainingMs(deadline, 8000)),
     });
     if (run.status === 0 && /registered/.test(run.stdout || '')) return { ok: true, how: 'ScheduledTasks' };
+    // No time left for a second attempt is a plain refusal, not a hung hook.
+    if (remainingMs(deadline, 8000) < 1500) return { ok: false, error: 'no time left in this hook to register the wake; it will arm on the next prompt' };
     // schtasks cannot express StartWhenAvailable, so this path is a worse
     // guarantee and says so rather than pretending the two are the same.
     const fallback = spawnSync(
@@ -481,7 +527,7 @@ function scheduleWindows(when, argv, name, cwd) {
         '/ST', two(date.getHours()) + ':' + two(date.getMinutes()),
         '/SD', two(date.getMonth() + 1) + '/' + two(date.getDate()) + '/' + date.getFullYear(),
         '/IT', '/Z', '/F'],
-      { encoding: 'utf8', windowsHide: true, timeout: 30000 }
+      { encoding: 'utf8', windowsHide: true, timeout: Math.max(500, remainingMs(deadline, 8000)) }
     );
     if (fallback.status === 0) return { ok: true, how: 'schtasks', warning: 'a sleeping machine will miss this wake' };
     return { ok: false, error: (run.stderr || fallback.stderr || 'could not register a scheduled task').trim().split('\n')[0] };
@@ -524,8 +570,8 @@ function schedulePosix(when, argv, name, cwd) {
   }
 }
 
-function schedule(when, argv, name, cwd) {
-  if (process.platform === 'win32') return scheduleWindows(when, argv, name, cwd);
+function schedule(when, argv, name, cwd, deadline) {
+  if (process.platform === 'win32') return scheduleWindows(when, argv, name, cwd, deadline);
   return schedulePosix(when, argv, name, cwd);
 }
 
@@ -579,7 +625,7 @@ function arm(input) {
   // pointed at the same one or it reads somebody else's relay - which in
   // testing meant it read the real one and found nothing armed.
   if (process.env.CLAUDE_CONFIG_DIR) argv.push('--config-dir', process.env.CLAUDE_CONFIG_DIR);
-  const scheduled = options.schedule === false ? { ok: true, how: 'none' } : schedule(when, argv, name, options.cwd);
+  const scheduled = options.schedule === false ? { ok: true, how: 'none' } : schedule(when, argv, name, options.cwd, options.deadline);
   if (!scheduled.ok) {
     note('arm failed for ' + id + ': ' + scheduled.error, now);
     return { ok: false, error: scheduled.error };
@@ -698,7 +744,10 @@ function applyAlwaysThinking(on) {
   try {
     const raw = fs.readFileSync(file, 'utf8');
     existed = true;
-    parsed = JSON.parse(raw);
+    // Editors on Windows save JSON with a byte order mark often enough that
+    // refusing it would read as "your settings file is broken" to somebody
+    // whose settings file is fine.
+    parsed = JSON.parse(raw.replace(/^﻿/, ''));
     fs.writeFileSync(file + '.bak-usage-limits', raw);
   } catch (err) {
     if (existed) return { ok: false, error: 'settings.json is not readable JSON; left untouched' };
@@ -713,6 +762,42 @@ function applyAlwaysThinking(on) {
     return { ok: false, error: err.message };
   }
   return { ok: true, file, backup: existed ? file + '.bak-usage-limits' : null };
+}
+
+// `relay arm [--session <id>] [note text]`: take the current reading, book the
+// wake against the binding window's reset, and store any text given as the
+// continuation. Uses the report rather than the hook's cache, so it costs a
+// scan; that is fine from a command line.
+async function armByHand(rest) {
+  const usage = require('./usage.js');
+  usage.setHost(host.detect(process.argv.slice(2), process.env));
+  const config = configure({ enabled: true });
+  const now = Date.now();
+  const data = await usage.report(now, {});
+  const binding = data && data.binding;
+  if (!binding || !Number.isFinite(binding.resetsAt)) return 'No window with a known reset time to arm against; run /usage and try again.';
+  const at = rest.indexOf('--session');
+  const sessionId = at !== -1 && rest[at + 1] ? rest[at + 1] : (data.session && data.session.id) || null;
+  if (!sessionId) return 'No session id: pass --session <id> (from usage.js --sessions).';
+  const text = rest.filter((item, i) => item !== '--session' && !(at !== -1 && i === at + 1)).join(' ').trim();
+  const result = arm({
+    now,
+    config,
+    sessionId,
+    binding,
+    resetsAt: binding.resetsAt,
+    cwd: process.cwd(),
+    project: path.basename(process.cwd()),
+    hostName: usage.currentHost(),
+    work: { hasWork: true, pending: 1, source: 'manual', todos: [], plan: text || null },
+  });
+  if (!result.ok) return 'Could not arm: ' + result.error;
+  if (text) saveContinuation(sessionId, text);
+  return (
+    'Armed by hand for session ' + sessionId.slice(0, 8) + ': wake at ' +
+      new Date(result.record.wakeAt).toLocaleString() + ' via ' + result.record.how + '.' +
+      (text ? ' Continuation saved.' : ' No continuation yet - add one with: relay note "<text>"')
+  );
 }
 
 /* ----------------------------------------------------------------- cli ---- */
@@ -796,6 +881,10 @@ function main(argv) {
     const result = disarm('cancelled by hand', Date.now());
     return result.changed ? 'Relay cancelled and the scheduled wake removed.' : 'Nothing was armed.';
   }
+  // Arming by hand, for the cases the hook cannot see: Codex writes no plan
+  // tool into its rollouts, so nothing there ever reads as work to carry; and
+  // a person can have a project in their head that is in no todo list.
+  if (command === 'arm') return armByHand(rest);
   if (command === 'log') {
     try {
       return fs.readFileSync(logFile(), 'utf8').split('\n').slice(-20).join('\n');
@@ -804,19 +893,25 @@ function main(argv) {
     }
   }
   return [
-    'usage: relay.js [status|on|off|at N|grace N|mode notify|resume|permission MODE|model NAME|thinking off|resume|always|note TEXT|cancel|log]',
+    'usage: relay.js [status|on|off|at N|grace N|mode notify|resume|permission MODE|model NAME|thinking off|resume|always|arm [--session ID] [TEXT]|note TEXT|cancel|log]',
     '',
     status(Date.now()),
   ].join('\n');
 }
 
 if (require.main === module) {
-  try {
-    process.stdout.write(main(process.argv.slice(2)) + '\n');
-  } catch (err) {
-    process.stdout.write('relay: ' + err.message + '\n');
-  }
-  process.exit(0);
+  Promise.resolve()
+    .then(() => main(process.argv.slice(2)))
+    .then(
+      (text) => {
+        process.stdout.write(text + '\n');
+        process.exit(0);
+      },
+      (err) => {
+        process.stdout.write('relay: ' + err.message + '\n');
+        process.exit(0);
+      }
+    );
 }
 
 module.exports = {
@@ -847,6 +942,9 @@ module.exports = {
   wakeAt,
   taskName,
   psQuote,
+  winArg,
+  remainingMs,
+  armByHand,
   schedule,
   scheduleWindows,
   schedulePosix,

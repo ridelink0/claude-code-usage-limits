@@ -89,8 +89,12 @@ async function windowReopened(record, now) {
       const codex = require('./codex.js');
       await codex.refresh({ now, timeoutMs: 8000 }).catch(() => null);
       const collected = codex.collect(now);
-      const percent = collected && collected.utilization ? Number(collected.utilization.primary) : null;
-      return { known: Number.isFinite(percent), percent };
+      // Same shape as the Claude side: keyed by window, each { utilization }.
+      // Reading a flat "primary" that codex.collect never writes answered
+      // "cannot tell" every time and disabled this check under Codex.
+      const bucket = collected && collected.utilization ? collected.utilization[record.windowKey || 'five_hour'] : null;
+      const value = bucket && typeof bucket.utilization === 'number' ? bucket.utilization : null;
+      return { known: value !== null, percent: value };
     }
     const live = require('./live.js');
     const usage = require('./usage.js');

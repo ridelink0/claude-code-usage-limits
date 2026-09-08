@@ -1272,7 +1272,12 @@ function codexBlock(now) {
 // The warning that would have caught that incident: what the window holds at
 // the effort actually set, rather than at the average of everything ever run.
 function effortWarning(events, current, window) {
-  if (!current || !window || window.stale) return null;
+  // Once spending has outrun the snapshot, percentLeft and usdPerPercent are
+  // a floor and a stale price. buildWindow nulls the turn count for that
+  // reason, and this function was quietly recomputing one from the two fields
+  // it left behind - printing "at ultra effort this window holds about 104
+  // turns" beside the warning that the window may already be exhausted.
+  if (!current || !window || window.stale || window.correctionUnreliable) return null;
   const rates = effortRates(events);
   const here = rates.find((row) => row.effort === current);
   if (!here || here.turns < MIN_EFFORT_SAMPLE || !here.perTurn || here.perTurn <= 0) return null;
@@ -2080,7 +2085,9 @@ function criticalOthers(windows, bindingKey, threshold) {
       // do about it is less work, against a limit its work never touches.
       w.applies !== false &&
       w.percentUsed !== null &&
-      w.percentUsed >= limit
+      // A window whose spend has outrun its snapshot reads as its old floor;
+      // it belongs in this list whatever that floor says.
+      (w.percentUsed >= limit || w.correctionUnreliable)
   );
 }
 
@@ -2107,6 +2114,11 @@ function bindingWindow(windows) {
   // ranked by how full it is instead, because a nearly full window must never
   // be passed over merely because nothing has been spent in it lately.
   const soonest = (w) => {
+    // Spend that has outrun the snapshot leaves percentUsed at the old floor
+    // and headroomMs empty, so on those two numbers alone the fullest window
+    // on the account ranked as the least urgent one. It is the most urgent:
+    // the budget it describes may already be gone.
+    if (w.correctionUnreliable) return 0;
     if (Number.isFinite(w.headroomMs)) return w.headroomMs;
     return w.percentUsed >= 90 ? 0 : Infinity;
   };

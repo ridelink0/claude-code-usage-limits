@@ -815,6 +815,9 @@ function relayState(now, hookInput, binding, sessionId) {
     const armed = relay.arm({
       now,
       config,
+      // Registration must be finished, not merely started, inside the hook's
+      // ten seconds; the scheduler trims its own waits to this.
+      deadline: now + ARM_DEADLINE_MS + 4000,
       sessionId,
       binding,
       work,

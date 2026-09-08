@@ -89,7 +89,13 @@ function record(binding, now, codexHome) {
       else if (Number.isFinite(entry.resetsAt) && entry.resetsAt <= at) delete all[key];
     }
     fs.mkdirSync(path.dirname(readingFile(codexHome)), { recursive: true });
-    fs.writeFileSync(readingFile(codexHome), JSON.stringify(all));
+    // Write beside and rename: the prompt hook and the pulse can both land
+    // here in the same second, and a reader between a truncate and a write
+    // would see half a file.
+    const file = readingFile(codexHome);
+    const tmp = file + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(all));
+    fs.renameSync(tmp, file);
     return true;
   } catch (err) {
     return false;

@@ -144,13 +144,14 @@ function planOn(settings, state, options) {
   const opts = options || {};
   const launcher = opts.launcher || launcherFile();
   const existing = current.statusLine === undefined ? null : current.statusLine;
-  // A second "on" must not record our own launcher as the thing to restore.
-  const previous =
-    state && Object.prototype.hasOwnProperty.call(state, 'previous')
-      ? state.previous
-      : isOurs(existing, launcher)
-        ? null
-        : existing;
+  // What "off" must put back is whatever is in the settings right now that is
+  // not ours. A second "on" must not record our own launcher as that thing -
+  // but it must not keep an old memory either: a status line the user set
+  // between two "on" runs was being overwritten and lost, because the first
+  // run's record was trusted over the file in front of us.
+  const remembered =
+    state && Object.prototype.hasOwnProperty.call(state, 'previous') ? state.previous : null;
+  const previous = isOurs(existing, launcher) ? remembered : existing;
   const command = 'node ' + JSON.stringify(launcher);
   const statusLine = { type: 'command', command };
   if (Number.isFinite(opts.refresh) && opts.refresh >= 1) statusLine.refreshInterval = Math.floor(opts.refresh);
