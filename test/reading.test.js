@@ -122,3 +122,25 @@ test('a correction taken before the snapshot never reaches the status line', () 
     };
     assert.match(usage.statusLine(collected), /5h 13%/);
   }));
+
+// The status line prints three windows and only one of them can be binding, so
+// recording the binding window alone left the same bug on two thirds of the line.
+test('every window with a correction is recorded, not only the binding one', () =>
+  withConfigDir(() => {
+    const written = reading.recordAll([
+      BINDING,
+      { key: 'seven_day', percentUsed: 64, pointsSinceSnapshot: 4, adjusted: true, resetsAt: NOW + 5 * 24 * 60 * MINUTE },
+      { key: 'ignored', percentUsed: 50, estimated: true },
+      null,
+    ], NOW);
+    assert.strictEqual(written, 2, 'the estimated one and the empty one are refused');
+    assert.strictEqual(reading.correctedFor('five_hour', NOW, NOW - MINUTE).percentUsed, 73);
+    assert.strictEqual(reading.correctedFor('seven_day', NOW, NOW - MINUTE).percentUsed, 64);
+    assert.strictEqual(reading.correctedFor('ignored', NOW, NOW - MINUTE), null);
+  }));
+
+test('recordAll takes a single window as happily as a list', () =>
+  withConfigDir(() => {
+    assert.strictEqual(reading.recordAll(BINDING, NOW), 1);
+    assert.strictEqual(reading.correctedFor('five_hour', NOW, NOW - MINUTE).percentUsed, 73);
+  }));

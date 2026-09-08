@@ -206,7 +206,7 @@ async function run(now, hookInput) {
   if (!binding) return '';
   // This turn paid for the scan, so leave the corrected figure where the
   // status line and --status can read it without paying for one.
-  reading.record(binding, now, usage.isCodex() ? require('./codex.js').homeDir() : null);
+  reading.recordAll(data.windows || [binding], now, usage.isCodex() ? require('./codex.js').homeDir() : null);
 
   // The same count and the same split as the brief, so the two lines never
   // disagree about how many sessions there are or how much of the budget is

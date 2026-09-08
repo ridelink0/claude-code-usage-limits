@@ -47,6 +47,19 @@ function read(codexHome) {
   }
 }
 
+// Every window that has a correction, not just the binding one.
+//
+// The status line prints all three, and only one of them can be binding. So
+// recording the binding window alone left the other two showing their raw
+// snapshots - which is the same bug, on two thirds of the line.
+function recordAll(windows, now, codexHome) {
+  let written = 0;
+  for (const window of Array.isArray(windows) ? windows : [windows]) {
+    if (record(window, now, codexHome)) written += 1;
+  }
+  return written;
+}
+
 // Never throws. This is written from inside hooks, and a hook that fails over a
 // cache file would be worse than the stale number it was trying to fix.
 function record(binding, now, codexHome) {
@@ -105,4 +118,4 @@ function clear(codexHome) {
   }
 }
 
-module.exports = { FRESH_MS, configDir, readingFile, read, record, correctedFor, clear };
+module.exports = { FRESH_MS, configDir, readingFile, read, record, recordAll, correctedFor, clear };
