@@ -552,8 +552,12 @@ function briefText(parts) {
           // The command, in the host's own vocabulary. /effort does not exist
           // in Codex, and naming it there is telling Codex to do nothing while
           // believing it acted.
+          // The host this line is being written FOR, not whatever the process
+          // happens to be set to. Reading global state here meant the sentence
+          // was only accidentally right, and a caller that built a line for
+          // the other host got a command that does not exist there.
           (warning.cheaper && warning.cheaper.effort
-            ? ' To drop it: ' + usage.levers(usage.currentHost()).effort(warning.cheaper.effort) + '.'
+            ? ' To drop it: ' + usage.levers(parts.host || usage.currentHost()).effort(warning.cheaper.effort) + '.'
             : '')
       );
     }
@@ -1063,6 +1067,7 @@ async function run(now, hookInput) {
         : null,
     othersSummary: view.othersSummary,
     escape: view.escape || null,
+    host: usage.currentHost(),
     turnsLeft: view.turnsLeft,
     effortWarning: view.effortWarning || null,
     // Outside the cache: it is cheap, and it belongs to the other agent's
