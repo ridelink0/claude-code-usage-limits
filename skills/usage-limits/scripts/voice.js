@@ -31,6 +31,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const host = require('./host.js');
+const codex = require('./codex.js');
+
 // Enough for the stable signals - message length, punctuation, openers - to
 // stop moving. Short-message authorship work stops gaining accuracy at around
 // a hundred and twenty messages, and says very little below a dozen.
@@ -48,8 +51,14 @@ const PROMPT_MAX_WORDS = 400;
 
 const OPENERS_KEPT = 6;
 
+// Every other state-writing script splits on the host so a Codex session
+// learns into ~/.codex and a Claude Code one into ~/.claude; this one used to
+// hardcode the Claude side, so under Codex the voice profile was written
+// somewhere Codex never reads and learned nothing across sessions.
 function configDir() {
-  return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  return host.detect(process.argv.slice(2), process.env) === host.CODEX
+    ? codex.homeDir()
+    : process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 }
 
 function voiceFile() {

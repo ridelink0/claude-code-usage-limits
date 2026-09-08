@@ -7,8 +7,33 @@ const os = require('node:os');
 const path = require('node:path');
 
 const voice = require('../skills/usage-limits/scripts/voice.js');
+const host = require('../skills/usage-limits/scripts/host.js');
 
 const NOW = Date.parse('2026-09-08T12:00:00.000Z');
+
+test('voiceFile writes under the Codex home when running as Codex, not ~/.claude', () => {
+  const codexDir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-voice-codex-'));
+  const beforeHost = process.env.USAGE_LIMITS_HOST;
+  const beforeCodexHome = process.env.CODEX_HOME;
+  const beforeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  process.env.USAGE_LIMITS_HOST = 'codex';
+  process.env.CODEX_HOME = codexDir;
+  // A Claude-shaped config dir still set alongside it: under Codex this must
+  // be ignored, the way every other state-writing script ignores it too.
+  process.env.CLAUDE_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-voice-claude-'));
+  try {
+    assert.strictEqual(host.detect(process.argv.slice(2), process.env), host.CODEX);
+    assert.strictEqual(voice.voiceFile(), path.join(codexDir, 'usage-limits-voice.json'));
+  } finally {
+    if (beforeHost === undefined) delete process.env.USAGE_LIMITS_HOST;
+    else process.env.USAGE_LIMITS_HOST = beforeHost;
+    if (beforeCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = beforeCodexHome;
+    if (beforeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = beforeConfigDir;
+    fs.rmSync(codexDir, { recursive: true, force: true });
+  }
+});
 
 function withConfigDir(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-voice-'));

@@ -958,6 +958,15 @@ test('renderForecast admits when it has nothing to price against', () => {
   assert.ok(text.includes('Nothing recent to price this against'));
 });
 
+test('renderForecast prices a Codex reading in window points, not dollars', () => {
+  // Codex meters a share of an allowance and never quotes a price, so this
+  // path must never format `rates` as USD the way Claude Code's does.
+  const data = { money: false, windows: [priced], rates: { median: 1, high: 2, sample: 20 } };
+  const text = usage.renderForecast(data, 10);
+  assert.ok(text.includes('points of the window'));
+  assert.ok(!text.includes('$'), 'must not invent a dollar figure for a host with no price');
+});
+
 test('familyOf recognises the family from the model id', () => {
   assert.strictEqual(usage.familyOf('claude-opus-5-2'), 'opus');
   assert.strictEqual(usage.familyOf('claude-sonnet-6'), 'sonnet');

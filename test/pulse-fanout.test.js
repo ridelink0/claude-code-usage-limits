@@ -34,9 +34,13 @@ test('the envelope names the event it answers', () => {
   assert.strictEqual(JSON.parse(pulse.envelope('x')).hookSpecificOutput.hookEventName, 'PostToolUse');
 });
 
-test('hooks.json wires the pulse to the calls that fan out', () => {
+test('hooks.json wires the pulse to the calls that fan out, and to Bash for a mid-turn reading', () => {
   const hooks = require(path.join(__dirname, '..', 'hooks', 'hooks.json')).hooks;
   assert.ok(Array.isArray(hooks.PreToolUse));
-  assert.strictEqual(hooks.PreToolUse[0].matcher, 'Workflow|Agent|Task');
+  // Bash rides the same matcher as the fan-out calls, but pulseText's fanout
+  // branch is gated on the tool name, not the matcher, so a plain Bash call
+  // still gets the ordinary throttled pulse rather than the "before this
+  // fan-out" line.
+  assert.strictEqual(hooks.PreToolUse[0].matcher, 'Workflow|Agent|Task|Bash');
   assert.match(hooks.PreToolUse[0].hooks[0].command, /pulse\.js/);
 });

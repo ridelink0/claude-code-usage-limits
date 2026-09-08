@@ -24,6 +24,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const drift = require('./drift.js');
+
 // Older than this and the spend it measured is history: turns have happened
 // since, and a stale correction that says 40 per cent is worse than an honest
 // snapshot that says 13, because it looks authoritative.
@@ -71,18 +73,25 @@ function record(binding, now, codexHome) {
   if (binding.stale || binding.estimated || binding.correctionUnreliable) return false;
   try {
     const all = read(codexHome);
-    all[binding.key] = {
-      at: Number.isFinite(now) ? now : Date.now(),
+    const at = Number.isFinite(now) ? now : Date.now();
+    // Whatever was sitting here before is what the cheap readers had been
+    // trusting; this fresh, checked correction is what the meter actually
+    // said. The gap between them is real drift a session just lived through,
+    // and it is worth keeping regardless of what happens to this record next.
+    const previous = all[binding.key];
+    const next = {
+      at,
       percentUsed: binding.percentUsed,
       pointsSinceSnapshot: binding.pointsSinceSnapshot || 0,
       adjusted: Boolean(binding.adjusted),
       resetsAt: Number.isFinite(binding.resetsAt) ? binding.resetsAt : null,
       turnsLeft: Number.isFinite(binding.turnsLeft) ? binding.turnsLeft : null,
     };
+    if (previous) drift.record(binding.key, previous, next, at, codexHome);
+    all[binding.key] = next;
     // One entry per window key, and there are only ever a handful of those, so
     // this file cannot grow. Anything whose reset has passed describes a window
     // that no longer exists.
-    const at = Number.isFinite(now) ? now : Date.now();
     for (const key of Object.keys(all)) {
       const entry = all[key];
       if (!entry || !Number.isFinite(entry.at) || at - entry.at > 24 * 60 * 60 * 1000) delete all[key];

@@ -37,9 +37,11 @@ const DEFAULT_INTERVAL_SECONDS = 120;
 const SCAN_BUDGET_MS = 5000;
 
 // One slot per session, same shape and same trimming as the brief's cache.
-// Two keys per session now - the spoken pulse and the quiet subagent refresh -
-// so this is double what it was.
-const KEEP_SESSIONS = 16;
+// Three keys per session now - the spoken pulse, the quiet subagent refresh,
+// and the reading taken before a long call - so this is three times what it
+// started at. Evicting a key only costs one extra scan, but evicting them as
+// fast as they are written would mean nothing is ever throttled.
+const KEEP_SESSIONS = 24;
 
 function stateFile() {
   const dir = usage.isCodex()
@@ -79,6 +81,28 @@ function trim(all, sessionId, at) {
   const kept = {};
   for (const key of ordered.slice(0, KEEP_SESSIONS)) kept[key] = next[key];
   return kept;
+}
+
+// A tool call the agent itself said would run long.
+//
+// PreToolUse now matches Bash, so a build or a test suite can be measured
+// before it starts rather than only after. But sharing the spoken pulse's one
+// throttle slot makes that almost never happen: a tool call finished seconds
+// ago, that PostToolUse pulse claimed the slot, and the one moment that
+// matters - just before the turn goes blind for ten minutes - says nothing.
+// Measured: a PostToolUse pulse at t, then `npm test` with a ten-minute
+// timeout at t+5s, and the pre-call pulse returned empty.
+//
+// The declaration is the agent's own: a Bash call carries the timeout it was
+// given, and anything above the pulse interval is a call that will outlast the
+// next scheduled reading. Nothing is inferred from the command text. A
+// backgrounded call is not this: it returns at once and PostToolUse fires
+// normally, so the turn never goes blind.
+function longCall(toolInput, every) {
+  if (!toolInput || typeof toolInput !== 'object') return false;
+  if (toolInput.run_in_background === true) return false;
+  const declared = Number(toolInput.timeout);
+  return Number.isFinite(declared) && declared > every;
 }
 
 function due(all, sessionId, now, every) {
@@ -156,6 +180,9 @@ async function run(now, hookInput) {
   // pulse had last read as 24%.
   const tool = hookInput && hookInput.tool_name ? String(hookInput.tool_name) : '';
   const fanout = event === 'PreToolUse' && /^(Workflow|Agent|Task)$/.test(tool);
+  // The other way a turn goes quiet for a long time: one foreground tool call
+  // that runs for minutes. See longCall().
+  const long = event === 'PreToolUse' && !fanout && longCall(hookInput && hookInput.tool_input, intervalMs());
   if (!quiet) {
     // A tool call just finished, so the turn is still running. A few bytes, so
     // the panel beside the chat keeps animating through a long turn.
@@ -168,7 +195,15 @@ async function run(now, hookInput) {
   // pulse would mean a workflow's subagents used up the interval and the tool
   // call right after it, the first chance to actually tell Claude, said
   // nothing because something had already "pulsed" two minutes ago.
-  const throttleKey = quiet ? (sessionId || '_') + '#subagent' : sessionId;
+  // Same reasoning for the call about to run long: its own slot, so it is
+  // still throttled to one reading per interval and a run of long calls does
+  // not scan before every one of them, but the post-tool pulses cannot use up
+  // the interval and leave the blind stretch unmeasured.
+  const throttleKey = quiet
+    ? (sessionId || '_') + '#subagent'
+    : long
+      ? (sessionId || '_') + '#long'
+      : sessionId;
   // The cheap path, and the one taken almost every time. A fan-out is never
   // throttled: it is said every time, because every time it is about to cost.
   if (!fanout && !due(all, throttleKey, now, every)) return '';
@@ -309,6 +344,7 @@ module.exports = {
   writeState,
   trim,
   due,
+  longCall,
   pulseText,
   envelope,
   run,

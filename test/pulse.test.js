@@ -141,6 +141,134 @@ test('the ping can be turned off entirely', async () => {
   }
 });
 
+test('PreToolUse on a Bash call gets the ordinary throttled pulse, not the fan-out line', async () => {
+  // hooks.json now matches PreToolUse on Bash too, so a build or test suite
+  // gets a reading before it runs rather than only after. But fanout wording
+  // ("Before this fan-out") is reserved for Workflow/Agent/Task, which spawn
+  // work that cannot be warned again until it stops - a single Bash call is
+  // not that, and must not be treated as never-throttled.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const usage = require('../skills/usage-limits/scripts/usage.js');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-pulse-bash-'));
+  const previousDir = process.env.CLAUDE_CONFIG_DIR;
+  const previousPulse = process.env.USAGE_LIMITS_PULSE;
+  const realReport = usage.report;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  process.env.USAGE_LIMITS_PULSE = 'always';
+  try {
+    usage.report = async () => ({
+      binding: { key: 'five_hour', label: '5-hour', percentUsed: 40, stale: false, turnsLeft: 60 },
+      sessions: [],
+    });
+
+    const bashText = await pulse.run(NOW, { session_id: 'b1', hook_event_name: 'PreToolUse', tool_name: 'Bash' });
+    assert.ok(!/Before this fan-out/.test(bashText), 'a plain Bash call is not a fan-out');
+
+    const workflowText = await pulse.run(NOW, { session_id: 'w1', hook_event_name: 'PreToolUse', tool_name: 'Workflow' });
+    assert.match(workflowText, /Before this fan-out/);
+  } finally {
+    usage.report = realReport;
+    if (previousDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousDir;
+    if (previousPulse === undefined) delete process.env.USAGE_LIMITS_PULSE;
+    else process.env.USAGE_LIMITS_PULSE = previousPulse;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a Bash call declared longer than the interval is read before it runs, however recently the last pulse spoke', async () => {
+  // The point of matching Bash on PreToolUse: a build or a test suite is the
+  // one step of a turn that can run for ten minutes with nothing able to
+  // speak. Sharing the spoken pulse's throttle slot defeats it - the tool call
+  // that finished five seconds ago already claimed the slot - so the call the
+  // agent itself declared long gets its own, and is still throttled to one
+  // reading per interval.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const usage = require('../skills/usage-limits/scripts/usage.js');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-pulse-long-'));
+  const previousDir = process.env.CLAUDE_CONFIG_DIR;
+  const previousPulse = process.env.USAGE_LIMITS_PULSE;
+  const realReport = usage.report;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  process.env.USAGE_LIMITS_PULSE = 'always';
+  let scans = 0;
+  try {
+    usage.report = async () => {
+      scans += 1;
+      return {
+        binding: { key: 'five_hour', label: '5-hour', percentUsed: 40, stale: false, turnsLeft: 60 },
+        sessions: [],
+      };
+    };
+
+    // A tool call finishes and pulses, claiming the ordinary slot.
+    assert.ok(await pulse.run(NOW, { session_id: 'L', hook_event_name: 'PostToolUse', tool_name: 'Read' }));
+    const afterPost = scans;
+
+    // Trivial Bash calls in the same interval stay silent and cost nothing:
+    // this is the throttle the matcher change depends on.
+    for (let i = 1; i <= 10; i += 1) {
+      const text = await pulse.run(NOW + i * 1000, {
+        session_id: 'L',
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'ls' },
+      });
+      assert.strictEqual(text, '', 'a trivial Bash call must not pulse');
+    }
+    assert.strictEqual(scans, afterPost, 'trivial Bash calls must not pay for a scan');
+
+    // The long one does get read, five seconds after the last pulse.
+    const long = await pulse.run(NOW + 11 * 1000, {
+      session_id: 'L',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'npm test', timeout: 10 * 60 * 1000 },
+    });
+    assert.match(long, /5-hour now 40%/);
+    assert.strictEqual(scans, afterPost + 1);
+
+    // And it is throttled in its own right: a run of long calls inside one
+    // interval is read once, not once each.
+    for (let i = 12; i <= 16; i += 1) {
+      const text = await pulse.run(NOW + i * 1000, {
+        session_id: 'L',
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'npm test', timeout: 10 * 60 * 1000 },
+      });
+      assert.strictEqual(text, '', 'the long-call reading is throttled too');
+    }
+    assert.strictEqual(scans, afterPost + 1);
+  } finally {
+    usage.report = realReport;
+    if (previousDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousDir;
+    if (previousPulse === undefined) delete process.env.USAGE_LIMITS_PULSE;
+    else process.env.USAGE_LIMITS_PULSE = previousPulse;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('what counts as a long call is the agent\'s own declaration, not a guess at the command', () => {
+  const every = pulse.DEFAULT_INTERVAL_SECONDS * 1000;
+  assert.strictEqual(pulse.longCall({ command: 'npm test', timeout: every + 1 }, every), true);
+  // No declared timeout means the default, which is the interval: not long.
+  assert.strictEqual(pulse.longCall({ command: 'npm run build' }, every), false);
+  assert.strictEqual(pulse.longCall({ command: 'x', timeout: every }, every), false);
+  // Backgrounded calls return at once, so the turn never goes blind and
+  // PostToolUse pulses normally.
+  assert.strictEqual(pulse.longCall({ command: 'x', timeout: every * 5, run_in_background: true }, every), false);
+  assert.strictEqual(pulse.longCall(null, every), false);
+  assert.strictEqual(pulse.longCall({ timeout: 'ages' }, every), false);
+});
+
 test('the ping gives a new session its equal share and counts the same sessions as the brief', async () => {
   const fs = require('node:fs');
   const os = require('node:os');

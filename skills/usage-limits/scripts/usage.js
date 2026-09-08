@@ -3665,8 +3665,12 @@ function renderForecast(data, turns) {
   }
   lines.push('');
   lines.push(
+    // Codex meters a share of an allowance and never quotes a price, so a
+    // dollar figure here would be invented. The table above is already in
+    // window points; say so instead of pretending there is a rate card.
     data.money === false
-      ? '  Priced from ' + data.rates.sample + ' recent turns, cheapest to dearest.'
+      ? '  Priced from ' + data.rates.sample + ' recent turns, in points of the window: ' +
+        'typical to the expensive end.'
       : '  Priced from ' + data.rates.sample + ' recent turns: ' +
         formatUSD(data.rates.median) + ' typical, ' + formatUSD(data.rates.high) +
         ' at the expensive end.'
@@ -3867,7 +3871,12 @@ async function main(argv) {
     .filter((window) => window.applies !== false)
     .map((window) => forecastWindow(window, turns, data.rates))
         .filter(Boolean);
-      process.stdout.write(JSON.stringify({ turns, rates: data.rates, windows: rows }, null, 2) + '\n');
+      // Same host split as the text renderer: without this a Codex reading's
+      // rates would print as bare numbers and a consumer could not tell they
+      // are window points rather than dollars.
+      process.stdout.write(
+        JSON.stringify({ turns, money: data.money !== false, rates: data.rates, windows: rows }, null, 2) + '\n'
+      );
     } else {
       process.stdout.write(renderForecast(data, turns) + '\n');
     }
