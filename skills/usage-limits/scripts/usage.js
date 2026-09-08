@@ -888,7 +888,12 @@ async function readClaudeEvents(since, options) {
   const opts = options || {};
   const startedAt = Date.now();
   // Zero is a real budget - spent before the first file - not "no budget";
-  // absent or negative means unlimited. A test relies on zero being exact.
+  // absent or negative means unlimited. A test relies on zero being exact,
+  // which Date.now() cannot promise: a scan of a few small files fits inside
+  // one millisecond tick, so "elapsed > 0" stayed false all the way through
+  // and the scan reported a complete total it had no right to. The budget is
+  // measured on the monotonic sub-millisecond clock, and spent means reached.
+  const clock = performance.now();
   const budgetMs = Number.isFinite(opts.budgetMs) && opts.budgetMs >= 0 ? opts.budgetMs : null;
   const keepFrom = Math.min(since, startedAt - SCAN_KEEP_MS);
 
@@ -914,7 +919,7 @@ async function readClaudeEvents(since, options) {
   let partial = false;
 
   for (const entry of ordered) {
-    if (budgetMs !== null && Date.now() - startedAt > budgetMs) {
+    if (budgetMs !== null && performance.now() - clock >= budgetMs) {
       partial = true;
       break;
     }

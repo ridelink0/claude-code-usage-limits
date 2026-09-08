@@ -313,7 +313,7 @@ test('a scan that runs out of its budget says so instead of reporting a short to
       fs.writeFileSync(path.join(project, 'sess-' + i + '.jsonl'), line('e' + i, NOW - MINUTE) + '\n');
     }
     // A budget of zero milliseconds is spent before the first file.
-    const events = await usage.readClaudeEvents(NOW - HOUR, { budgetMs: 0.0001 });
+    const events = await usage.readClaudeEvents(NOW - HOUR, { budgetMs: 0 });
     assert.strictEqual(events.partial, true, 'the caller must be able to tell it is a floor');
     // And with no budget the same scan is complete and says nothing.
     const full = await usage.readClaudeEvents(NOW - HOUR);

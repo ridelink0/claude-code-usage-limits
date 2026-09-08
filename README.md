@@ -705,9 +705,14 @@ today; and the hooks themselves, ready for the build that runs them. `status`
 reports both, `off` removes both, and neither touches anything else in those
 files.
 
-The practical difference is that under Codex the budget is read deliberately,
-once at the start of a piece of work, rather than being handed to you before
-every prompt.
+The practical difference is that under Codex the budget is read deliberately
+rather than being handed to you before every prompt: once at the start of a
+piece of work, again every ten or so tool-heavy turns and before the last long
+step, and when the turns left are fewer than the steps still ahead the block
+tells Codex to stop at a clean boundary, write WORK-PLAN.md and commit rather
+than run into the limit. That last rule exists because a Codex session on
+7 September 2026 read "about 32 turns left", carried on through forty minutes
+of publishing, and was cut off with the handoff unwritten.
 
 Two smaller differences. There is no money column: Codex meters a share of an
 allowance and never quotes a price, so the percentages stand alone. And
