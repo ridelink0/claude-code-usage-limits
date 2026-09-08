@@ -52,14 +52,42 @@ test('eventFrom leaves out a synthetic message, which is not an API call', () =>
   assert.strictEqual(usage.eventFrom(synthetic, new Set(), 'proj'), null);
 });
 
-test('typicalTurnCost and costPercentiles measure main-thread calls only', () => {
+// Subagent calls are not turns - counting each as one makes a turn look cheap.
+// But their spend comes out of the same window, so the turn that dispatched
+// them costs what they cost. Counting the calls and counting the money are
+// different questions and this is where they were conflated: a session that
+// fanned out was promised four hundred turns and got sixty.
+test('a turn is priced with the subagent spend it caused, but subagents are not turns', () => {
   const sample = [];
   for (let i = 0; i < 5; i += 1) sample.push(event({ cost: 1 }));
   for (let i = 0; i < 20; i += 1) sample.push(event({ cost: 0.01, sidechain: true }));
-  assert.strictEqual(usage.typicalTurnCost(sample, sample, sample, 5), 1);
+  // $5 of main thread, 20 cents of agents: a turn really costs $1.04.
+  assert.ok(Math.abs(usage.typicalTurnCost(sample, sample, sample, 5) - 1.04) < 1e-9);
   const spread = usage.costPercentiles(sample);
-  assert.strictEqual(spread.sample, 5);
+  assert.strictEqual(spread.sample, 5, 'still five turns, not twenty five');
   assert.strictEqual(spread.median, 1);
+});
+
+test('a heavy fan-out prices the turn that caused it', () => {
+  const sample = [];
+  for (let i = 0; i < 5; i += 1) sample.push(event({ cost: 1 }));
+  for (let i = 0; i < 3; i += 1) sample.push(event({ cost: 3, sidechain: true }));
+  // $5 visible, $14 spent: turns cost 2.8x what the main thread shows.
+  assert.ok(Math.abs(usage.typicalTurnCost(sample, sample, sample, 5) - 2.8) < 1e-9);
+});
+
+test('one enormous fan-out does not price every future turn as another one', () => {
+  const sample = [];
+  for (let i = 0; i < 5; i += 1) sample.push(event({ cost: 1 }));
+  sample.push(event({ cost: 500, sidechain: true }));
+  // Unclamped this would be 101x. Five is the ceiling.
+  assert.strictEqual(usage.typicalTurnCost(sample, sample, sample, 5), 5);
+});
+
+test('with no subagents at all the price is unchanged', () => {
+  const sample = [];
+  for (let i = 0; i < 5; i += 1) sample.push(event({ cost: 1 }));
+  assert.strictEqual(usage.typicalTurnCost(sample, sample, sample, 5), 1);
 });
 
 test('buildWindow counts subagent spend in the money and leaves it out of the turns', () => {

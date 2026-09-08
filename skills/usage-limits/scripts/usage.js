@@ -1094,6 +1094,12 @@ const MIN_PACE_SAMPLE = 5;
 // ordinary turn, and treating that as "the" turn cost sends the headroom
 // estimate swinging: a single $7 turn once put a 13% full window at nine turns
 // left. Too few recent turns to be sure, so widen to the whole window.
+// A turn that fanned out ten agents is real, and so is the budget it spent, but
+// it should not price every remaining turn as though it will do the same. Five
+// is generous enough to catch a habitually agent-heavy session and mean enough
+// that one workflow does not flatten the estimate to nothing.
+const SUBAGENT_FACTOR_MAX = 5;
+
 function typicalTurnCost(recentEvents, windowEvents, allEvents, minSample) {
   const floor = Number.isFinite(minSample) ? minSample : MIN_PACE_SAMPLE;
 
@@ -1101,14 +1107,20 @@ function typicalTurnCost(recentEvents, windowEvents, allEvents, minSample) {
   // is being measured against, so a thin window borrows from a wider sample
   // rather than inventing a figure from two turns. Subagent calls are left
   // out: they are small and many, and would make a turn look cheap.
-  const tiers = [mainThread(recentEvents), mainThread(windowEvents), mainThread(allEvents)];
+  const sources = [recentEvents, windowEvents, allEvents];
+  const tiers = sources.map((tier) => mainThread(tier));
   let pool = [];
-  for (const tier of tiers) {
-    if (tier && tier.length >= floor) {
-      pool = tier;
+  let source = null;
+  for (let i = 0; i < tiers.length; i++) {
+    if (tiers[i] && tiers[i].length >= floor) {
+      pool = tiers[i];
+      source = sources[i];
       break;
     }
-    if (tier && tier.length > pool.length) pool = tier;
+    if (tiers[i] && tiers[i].length > pool.length) {
+      pool = tiers[i];
+      source = sources[i];
+    }
   }
   const costs = pool
     .map((event) => event.cost)
@@ -1130,7 +1142,34 @@ function typicalTurnCost(recentEvents, windowEvents, allEvents, minSample) {
   const cut = costs.length >= MIN_PACE_SAMPLE ? Math.max(1, Math.round(costs.length * 0.1)) : 0;
   const kept = cut > 0 ? costs.slice(cut, costs.length - cut) : costs;
   const middle = kept.length ? kept : costs;
-  return middle.reduce((sum, cost) => sum + cost, 0) / middle.length;
+  const perMainThreadTurn = middle.reduce((sum, cost) => sum + cost, 0) / middle.length;
+
+  // And then the part that was missing, which is why a fan-out session was
+  // promised four hundred turns and got sixty.
+  //
+  // Subagent calls are excluded from the sample above for a good reason: they
+  // are small and many, and counting each as a turn makes a turn look cheap.
+  // But their spend does not disappear - it comes out of the same window. A
+  // turn that dispatches three research agents costs what the agents cost, and
+  // measuring only its main-thread half prices it as though they were free.
+  //
+  // Rather than attributing each call to a parent turn, which the transcripts
+  // do not reliably say, scale by how much of this pool's spend the main
+  // thread actually accounts for. If subagents were two thirds of it, a turn
+  // costs three times its visible half. Clamped, because a single enormous
+  // fan-out should not price every future turn as another one.
+  const total = sumCost(source);
+  const visible = sumCost(pool);
+  const factor = visible > 0 && total > visible ? Math.min(SUBAGENT_FACTOR_MAX, total / visible) : 1;
+  return perMainThreadTurn * factor;
+}
+
+function sumCost(events) {
+  let total = 0;
+  for (const event of events || []) {
+    if (event && Number.isFinite(event.cost) && event.cost > 0) total += event.cost;
+  }
+  return total;
 }
 
 function dominantEffort(events) {
