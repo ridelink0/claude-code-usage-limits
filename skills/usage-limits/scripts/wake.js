@@ -99,8 +99,12 @@ async function windowReopened(record, now) {
     const utilization = collected && collected.utilization;
     if (!utilization) return { known: false, percent: null };
     // The window the relay was armed against, by the key it was armed with.
-    const value = Number(utilization.five_hour_utilization);
-    return { known: Number.isFinite(value), percent: Number.isFinite(value) ? value : null };
+    // Each entry is { utilization, resets_at, ... }; reading a flattened
+    // "five_hour_utilization" off the top gave undefined every time, which read
+    // as "cannot tell" and quietly disabled this whole check.
+    const bucket = utilization[record.windowKey || 'five_hour'];
+    const value = bucket && typeof bucket.utilization === 'number' ? bucket.utilization : null;
+    return { known: value !== null, percent: value };
   } catch (err) {
     return { known: false, percent: null, error: err.message };
   }

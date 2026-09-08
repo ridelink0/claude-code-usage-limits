@@ -364,3 +364,22 @@ test('formatWait reads like a person wrote it', () => {
   assert.strictEqual(relay.formatWait(-1), 'now');
   assert.strictEqual(relay.formatWait(null), 'now');
 });
+
+// The guard that stops the relay spending the first minute of a fresh window on
+// a refusal. It read a flattened "five_hour_utilization" that the endpoint has
+// never returned, so it answered "cannot tell" every time and did nothing.
+test('the armed window key travels with the record, because the meter is indexed by it', () =>
+  withConfigDir(() => {
+    relay.configure({ enabled: true });
+    armed();
+    const record = relay.read().armed;
+    assert.strictEqual(record.windowKey, 'five_hour');
+    assert.strictEqual(record.window, '5-hour');
+  }));
+
+test('a relay that never registered a task has no task to unregister', () =>
+  withConfigDir(() => {
+    relay.configure({ enabled: true });
+    armed();
+    assert.strictEqual(relay.read().armed.task, null, 'schedule:false must not claim a task name');
+  }));

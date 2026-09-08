@@ -587,7 +587,7 @@ function arm(input) {
 
   const record = {
     id,
-    task: name,
+    task: scheduled.how === 'none' ? null : name,
     host: options.hostName || host.CLAUDE,
     cwd: options.cwd || process.cwd(),
     project: options.project || null,
@@ -596,6 +596,8 @@ function arm(input) {
     resetsAt: options.resetsAt,
     percentAtArming: options.binding ? options.binding.percentUsed : null,
     window: options.binding ? options.binding.label || options.binding.key : null,
+    // The label is for reading; the key is what the meter is indexed by.
+    windowKey: options.binding && options.binding.key ? options.binding.key : null,
     mode: config.mode,
     how: scheduled.how,
     warning: scheduled.warning || null,
