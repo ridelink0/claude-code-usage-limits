@@ -917,6 +917,11 @@ async function run(now, hookInput) {
       turnsLeft: binding && Number.isFinite(binding.turnsLeft) ? binding.turnsLeft : null,
       session: data.session,
       othersSummary: summariseOthers(data.windows, binding && binding.key),
+      // Every window, trimmed to the cacheable fields, so the corrected reading
+      // can be recorded for all three columns of the status line on a cache
+      // hit too. Recording the binding window alone left the other two at
+      // their raw snapshots on every short turn, where the pulse never runs.
+      windows: (data.windows || []).map(cacheableBinding),
       sessions: data.sessions,
       staleWindows: data.staleWindows,
       planChanged: data.planChanged,
@@ -957,7 +962,7 @@ async function run(now, hookInput) {
   // too often to scan for itself, and without this it shows the raw snapshot,
   // which during a heavy session is wrong by tens of points in the flattering
   // direction.
-  reading.record(binding, now, usage.isCodex() ? require('./codex.js').homeDir() : null);
+  reading.recordAll(view.windows && view.windows.length ? view.windows : [binding], now, usage.isCodex() ? require('./codex.js').homeDir() : null);
   const carry = relayState(now, hookInput, binding, sessionId);
   // An instruction the user typed at /usage-limits:voice set. The learned
   // traits are for writing AS them and stay out of the way; this is them
