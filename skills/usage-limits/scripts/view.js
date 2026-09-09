@@ -352,6 +352,10 @@ function build(input) {
     rows,
     fable,
     hidden,
+    // Which budget mode the hooks are in, when it is not the one they have
+    // always been in. Passed in rather than read here: this module builds a
+    // display out of what it is given and touches no files.
+    budget: opts.budget && opts.budget.name ? { name: opts.budget.name, label: opts.budget.label || opts.budget.name } : null,
     // The agents underneath this session. They spend the same window and had
     // no voice on any display until now.
     agents: opts.agents && Number.isFinite(opts.agents.running) ? opts.agents : { running: 0, runs: 0 },

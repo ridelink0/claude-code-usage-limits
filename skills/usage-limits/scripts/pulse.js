@@ -27,6 +27,7 @@ const brief = require('./brief.js');
 const host = require('./host.js');
 const activity = require('./activity.js');
 const live = require('./live.js');
+const mode = require('./mode.js');
 
 const SECOND = 1000;
 const DEFAULT_INTERVAL_SECONDS = 120;
@@ -50,12 +51,15 @@ function stateFile() {
   return path.join(dir, 'usage-limits-pulse.json');
 }
 
-function intervalMs() {
+// How often this hook is allowed to do real work. The budget mode owns this
+// number - a mode that says the reading itself costs too much has to be able
+// to take fewer of them - but an explicit environment setting is the user
+// saying it outright, and that still wins.
+function intervalMs(policy) {
   const configured = Number(process.env.USAGE_LIMITS_PULSE_SECONDS);
-  const seconds = Number.isFinite(configured) && configured > 0
-    ? configured
-    : DEFAULT_INTERVAL_SECONDS;
-  return seconds * SECOND;
+  if (Number.isFinite(configured) && configured > 0) return configured * SECOND;
+  const fromMode = policy && Number.isFinite(policy.pulseSeconds) ? policy.pulseSeconds : null;
+  return (fromMode > 0 ? fromMode : DEFAULT_INTERVAL_SECONDS) * SECOND;
 }
 
 function readState() {
@@ -74,9 +78,14 @@ function writeState(all) {
   usage.writeJsonAtomic(stateFile(), all);
 }
 
-function trim(all, sessionId, at) {
+// `extra` carries whatever else the slot has to remember, and it exists for
+// one reason: the re-cost has to know what it said last time. A slot that is
+// only a timestamp can throttle, but it cannot tell "two minutes have passed"
+// from "two minutes have passed and nothing has changed", and those are
+// different questions.
+function trim(all, sessionId, at, extra) {
   const next = Object.assign({}, all);
-  next[sessionId || '_'] = { at };
+  next[sessionId || '_'] = Object.assign({ at }, extra || null);
   const ordered = Object.keys(next).sort((a, b) => (next[b].at || 0) - (next[a].at || 0));
   const kept = {};
   for (const key of ordered.slice(0, KEEP_SESSIONS)) kept[key] = next[key];
@@ -152,12 +161,61 @@ function pulseText(parts) {
   return head + ' Still room; carry on.';
 }
 
+// The two-minute re-cost. The distinguishing feature of `high`, and the reason
+// it is not simply `standard` with a shorter interval.
+//
+// A PostToolUse hook CAN put text in front of the model mid-turn: the hook
+// output contract takes additionalContext on this event, and it has been seen
+// arriving mid-turn in a running session. So this is a real nudge, not a note
+// filed for the next prompt.
+//
+// What it must not do is claim a lever nobody has. Nothing a hook emits can
+// change the running session's own model or effort - there is no such field in
+// the whole hook output contract, and PreModelSwitch is a veto on a switch
+// someone else started rather than a way to start one. So for the main loop
+// this names the command and leaves it with the person, and for what the turn
+// SPAWNS it says the thing that is genuinely the agent's to decide.
+//
+// It is built every two minutes and SAID only when it differs from the last
+// thing said in this session. See the caller: a re-cost that repeats itself is
+// not a re-cost, it is a bill for advice already given.
+function recheckText(parts) {
+  const bits = [];
+  if (parts.fit) {
+    bits.push(
+      'this turn is at ' + parts.fit.effort + ', measured ' + parts.fit.multiple + ' times the cost of ' +
+        parts.fit.cheaper + ' a turn on this account'
+    );
+  }
+  if (parts.escape && parts.escape.kind === 'effort' && parts.escape.to) {
+    bits.push(parts.escape.to + ' would free the window that binds');
+  }
+  if (!bits.length) return '';
+  const command = (parts.fit && parts.fit.command) || (parts.escape && parts.escape.command) || null;
+  return (
+    '[usage-limits] Re-costed: ' + bits.join(', and ') + '. If the stretch in front of you is ' +
+    'mechanical, the tier is bigger than the work' + (command ? ' - the change is ' + command + ', and it is the ' +
+    "user's to make, so say it in one line rather than waiting for it" : '') +
+    (parts.pin
+      ? '. Self-switching is pinned, so this is a report: change nothing on the strength of it.'
+      : '. Size what you spawn the same way: low effort for mechanical stages. Step back up when the work turns hard again.')
+  );
+}
+
 async function run(now, hookInput) {
   if (String(process.env.USAGE_LIMITS_PULSE || '').toLowerCase() === 'off') return '';
-  usage.setHost(host.detect(process.argv.slice(2), process.env));
 
   const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
   const event = hookInput && hookInput.hook_event_name ? String(hookInput.hook_event_name) : 'PostToolUse';
+
+  // The budget mode, settled before anything is read, marked or scanned. In
+  // `off` the hook stops here: no reading, no activity mark, no state write.
+  // That mode's whole promise is that the plugin costs nothing, and a hook
+  // that "returns immediately" after a transcript scan has already broken it.
+  const budget = mode.forSession({ sessionId });
+  if (budget.policy.refreshSeconds === 0) return '';
+
+  usage.setHost(host.detect(process.argv.slice(2), process.env));
 
   // A subagent finishing is the other reason to look, and on a busy afternoon
   // it is the more important one.
@@ -182,7 +240,7 @@ async function run(now, hookInput) {
   const fanout = event === 'PreToolUse' && /^(Workflow|Agent|Task)$/.test(tool);
   // The other way a turn goes quiet for a long time: one foreground tool call
   // that runs for minutes. See longCall().
-  const long = event === 'PreToolUse' && !fanout && longCall(hookInput && hookInput.tool_input, intervalMs());
+  const long = event === 'PreToolUse' && !fanout && longCall(hookInput && hookInput.tool_input, intervalMs(budget.policy));
   if (!quiet) {
     // A tool call just finished, so the turn is still running. A few bytes, so
     // the panel beside the chat keeps animating through a long turn.
@@ -190,7 +248,7 @@ async function run(now, hookInput) {
   }
 
   const all = readState();
-  const every = intervalMs();
+  const every = intervalMs(budget.policy);
   // The quiet refresh keeps its own throttle. Sharing one with the spoken
   // pulse would mean a workflow's subagents used up the interval and the tool
   // call right after it, the first chance to actually tell Claude, said
@@ -257,13 +315,66 @@ async function run(now, hookInput) {
   const runwayMs = brief.RUNWAY_MENTION_MS;
   const pressure = brief.pressure(binding, now, config, turnsLeft);
 
+  // The mode's own mid-turn re-cost, on its own throttle slot.
+  //
+  // Its own slot because the "quiet when roomy" rule below would otherwise
+  // swallow it exactly when it matters most: a turn running a tier far bigger
+  // than the work needs is precisely the case where the budget still looks
+  // roomy and nothing else would say a word.
+  let recheck = '';
+  const recheckMs = (budget.policy.recheckSeconds || 0) * SECOND;
+  const recheckKey = (sessionId || '_') + '#recheck';
+  if (recheckMs > 0 && due(readState(), recheckKey, now, recheckMs)) {
+    // From the per-effort TABLE, which is what report() returns. It was asked
+    // for from `data.events`, a field report() has never had, so the measured
+    // half of the re-cost was null on every call on every machine and `high`
+    // was left emitting its escape clause alone.
+    const fit = usage.fitFromRates(data.effortRates || [], data.effortNow || null, usage.currentHost());
+    // The user's bounds are the user's, and `pin` is one of them: it lives on
+    // bounds, not on the mode's policy, so it has to be handed over here or
+    // the route comes back unable to say it is a report.
+    const route = usage.escapeRoute(data.windows || [binding], binding, data.effortWarning || null, usage.currentHost(), budget.policy, budget.bounds);
+    const allowed = (suggestion) => mode.allows(budget.bounds, suggestion);
+    // The measured half is a recommendation about the user's own setting, so
+    // it goes out through the advice rules rather than around them: never once
+    // muted, never once declined, never below a bound, and not a second time
+    // in a session where the brief has already made it. Filtering only on the
+    // bounds here meant `mode --no-advice` and `mode --decline` were both
+    // routed around every two minutes, in the one mode that speaks mid-turn.
+    const advice = mode.advicePending({ decided: budget, fit, sessionId });
+    const offerFit = advice.ok && !advice.alreadyOffered ? fit : null;
+    const text = recheckText({
+      fit: offerFit,
+      escape: route && route.kind === 'effort' && allowed({ effort: route.to }) ? route : null,
+      pin: budget.bounds && budget.bounds.pin,
+    });
+    // Say it once.
+    //
+    // Nothing this line is built from moves within a turn, so on the throttle
+    // alone it repeated itself verbatim every two minutes: measured, fifteen
+    // identical injections in one half-hour turn at 20 per cent used. That is
+    // the failure this whole feature exists to avoid, arriving in the mode
+    // named for efficiency. `high` re-costs continuously - it takes the
+    // measurement every two minutes - and speaks when the answer CHANGES.
+    const state = readState();
+    const before = state[recheckKey] && state[recheckKey].said;
+    recheck = text && text !== before ? text : '';
+    // Recorded only when it is actually said, and only for the half that is a
+    // recommendation, so that "no, leave it" has something to refuse: without
+    // this, `mode --decline` after a mid-turn re-cost had no id to act on.
+    if (recheck && offerFit && advice.id) mode.adviceOffer(advice.id, sessionId, now, advice.text);
+    // Claimed whether or not it produced a line: the measurement was taken,
+    // and taking it again in ten seconds would cost the same and say the same.
+    writeState(trim(state, recheckKey, now, text ? { said: text } : null));
+  }
+
   // Quiet when there is nothing to act on. A line every two minutes saying the
   // budget is fine is noise that costs the budget it is reporting on.
   if (!fanout && pressure === 'roomy' && String(process.env.USAGE_LIMITS_PULSE || '').toLowerCase() !== 'always') {
-    return '';
+    return recheck;
   }
 
-  return pulseText({
+  const spoken = pulseText({
     label: binding.label,
     percentUsed: binding.percentUsed,
     approximate: Boolean(binding.estimated || binding.adjusted),
@@ -276,6 +387,7 @@ async function run(now, hookInput) {
     pressure,
     fanout,
   });
+  return recheck ? (spoken ? spoken + ' ' + recheck : recheck) : spoken;
 }
 
 // PostToolUse does not take plain stdout as context the way UserPromptSubmit
@@ -336,6 +448,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  recheckText,
   DEFAULT_INTERVAL_SECONDS,
   KEEP_SESSIONS,
   stateFile,

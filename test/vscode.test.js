@@ -11,7 +11,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
-const { execFileSync } = require('node:child_process');
+
+const build = require('../vscode/build.js');
 
 const root = path.join(__dirname, '..');
 const HOUR = 60 * 60 * 1000;
@@ -75,7 +76,13 @@ function fakeVscode(record) {
 }
 
 test('the extension activates, paints the status bar and renders the view', async () => {
-  execFileSync(process.execPath, [path.join(root, 'vscode', 'build.js')], { stdio: 'ignore' });
+  // Built into a scratch directory, never into vscode/lib. Building into
+  // vscode/lib would wipe and rewrite the packaged copy in the middle of the
+  // suite, which repairs the staleness vscode-lib-drift.test.js exists to
+  // catch and races that test's directory read. The requires below are
+  // redirected to this copy instead.
+  const libDir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-vscode-lib-'));
+  build.copyScripts(libDir, '0.0.0-test');
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-vscode-'));
   const now = Date.now();
@@ -99,6 +106,12 @@ test('the extension activates, paints the status bar and renders the view', asyn
   const original = Module._load;
   Module._load = function (request) {
     if (request === 'vscode') return fakeVscode(record);
+    // extension.js loads the plugin's scripts as './lib/x.js'. Point those at
+    // the scratch build; everything they require of each other then resolves
+    // inside it on its own.
+    if (request.startsWith('./lib/')) {
+      return original.call(this, path.join(libDir, request.slice('./lib/'.length)), arguments[1]);
+    }
     return original.apply(this, arguments);
   };
   const before = process.env.CLAUDE_CONFIG_DIR;
@@ -176,5 +189,6 @@ test('the extension activates, paints the status bar and renders the view', asyn
     global.setInterval = setIntervalOriginal;
     if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = before;
+    fs.rmSync(libDir, { recursive: true, force: true });
   }
 });

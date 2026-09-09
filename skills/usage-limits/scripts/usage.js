@@ -2259,16 +2259,30 @@ function settingFit(events, effortNow, which) {
   // Guarded here rather than trusted from the caller: a cache hit has no event
   // list to hand over, and dominantEffort iterates without checking.
   const list = Array.isArray(events) ? events : [];
-  const current = effortNow || dominantEffort(list);
+  return fitFromRates(effortRates(list), effortNow || dominantEffort(list), which);
+}
+
+// The same judgement, from the per-effort table rather than from the events.
+//
+// This is the form the callers actually have. report() builds the event list,
+// derives effortRates from it and returns the TABLE - the events themselves
+// never leave the function - so every production caller of settingFit was
+// handing it `data.events`, which is undefined, and getting null back on every
+// call. That silently emptied the whole recommendation channel: no fit
+// sentence in the brief, no advice to offer or decline, and `high`'s mid-turn
+// re-cost reduced to its escape clause. Taking the table means the caller
+// passes the thing it has.
+function fitFromRates(rates, effortNow, which) {
+  const current = effortNow || null;
   if (!current) return null;
-  const rates = effortRates(list);
-  const here = rates.find((row) => row.effort === current);
+  const table = Array.isArray(rates) ? rates : [];
+  const here = table.find((row) => row.effort === current);
   if (!here || here.turns < MIN_EFFORT_SAMPLE) return null;
   const measure = (row) => (Number.isFinite(row.outputPerTurn) && row.outputPerTurn > 0 ? row.outputPerTurn : row.perTurn);
   const mine = measure(here);
   if (!Number.isFinite(mine) || mine <= 0) return null;
   let best = null;
-  for (const row of rates) {
+  for (const row of table) {
     if (row.effort === current || row.turns < MIN_EFFORT_SAMPLE) continue;
     const theirs = measure(row);
     if (!Number.isFinite(theirs) || theirs <= 0) continue;
@@ -2323,9 +2337,27 @@ function levers(which) {
   };
 }
 
-function escapeRoute(windows, binding, effortNote, host) {
+// `policy` is the budget mode's own record, when there is one, and `bounds` is
+// the user's own limits. One field of each reaches here, and they come from
+// different objects on purpose because that is where they live.
+//
+// `switchGapPoints` is the mode's: how much emptier another window has to be
+// before a switch is worth naming - the efficient modes act on a smaller
+// improvement because taking it is the whole point of being in them, while the
+// standard mode keeps the wider margin that stops a lateral move being sold as
+// a way out.
+//
+// `pin` is the user saying "report it, do not do it", and it is a BOUND, not a
+// mode field: mode.resolve() surfaces it as `bounds.pin` and no MODES record
+// has ever had a `pin` key. Reading it off the policy made `route.report`
+// unconditionally false, so the flag documented as carrying the pin carried
+// nothing, and the only reason no user ever saw a pinned suggestion phrased as
+// an instruction is that both renderers re-derived the pin for themselves.
+function escapeRoute(windows, binding, effortNote, host, policy, bounds) {
   if (!binding || binding.percentUsed === null || binding.percentUsed === undefined) return null;
   const lever = levers(host || currentHost());
+  const gapPoints = policy && Number.isFinite(policy.switchGapPoints) ? policy.switchGapPoints : 10;
+  const pinned = Boolean(bounds && bounds.pin);
   const live = (windows || []).filter(
     (w) => w && w.percentUsed !== null && w.percentUsed !== undefined && !w.stale && w.key !== binding.key
   );
@@ -2342,12 +2374,13 @@ function escapeRoute(windows, binding, effortNote, host) {
     // no other readable window there is no evidence a switch helps at all: it
     // is true that the scoped window would retire, but "you have room" is a
     // claim, and a claim with nothing behind it is the thing not to make.
-    if (!next || next.percentUsed >= binding.percentUsed - 10) return null;
+    if (!next || next.percentUsed >= binding.percentUsed - gapPoints) return null;
     const roomier = after
       .filter((w) => w.family && w.family !== binding.family)
       .sort((a, b) => a.percentUsed - b.percentUsed)[0] || null;
     return {
       kind: 'model',
+      report: pinned,
       frees: binding.label || binding.key,
       family: binding.family,
       nextLabel: next ? next.label || next.key : null,
@@ -2362,6 +2395,7 @@ function escapeRoute(windows, binding, effortNote, host) {
   if (effortNote && effortNote.cheaper && effortNote.cheaper.effort) {
     return {
       kind: 'effort',
+      report: pinned,
       from: effortNote.effort || null,
       to: effortNote.cheaper.effort,
       multiple: Number.isFinite(effortNote.cheaper.multiple) ? effortNote.cheaper.multiple : null,
@@ -2571,6 +2605,74 @@ function limitWindows(utilization) {
     }
   }
   return rows;
+}
+
+// Every window the snapshot knows about, without a scan.
+//
+// buildWindows() is the full answer and it costs a transcript read. Two
+// callers cannot afford that and still have to reason about windows rather
+// than about one field of the snapshot: the `off` guard, whose whole promise
+// is that the mode costs nothing, and `auto`, which has to pick a mode inside
+// a hook before anything expensive runs.
+//
+// Both used to read `utilization.limits` alone. That array is the account's
+// own description of its limits and it is genuinely useful, but it is also
+// optional - nothing else in the plugin requires it, and every fixture here
+// carries the top-level `five_hour`/`seven_day` keys instead. A guard wired to
+// the one field nothing else needs is a guard that is silent on a snapshot
+// every other reader handles, which is exactly what happened: at 97 per cent
+// used with no `limits` array, the only line `off` is allowed to emit was
+// never built.
+//
+// So: the bucket keys first, the `limits` array for anything they did not
+// cover, real labels on both, corrections applied, and the same applies-flag
+// every other reader makes its decisions from.
+function snapshotWindows(collected, now, codexHome) {
+  const utilization = collected && collected.utilization;
+  if (!utilization) return [];
+  const at = Number.isFinite(now) ? now : Date.now();
+  // No transcripts here on purpose - that is the cost being avoided - so the
+  // setting is the only thing that says which model is running. It is enough
+  // to keep a weekly for a model this agent is not using out of a worst-of.
+  const families = familiesInUse(null, null, [
+    collected.settings && collected.settings.model,
+    process.env.ANTHROPIC_MODEL,
+  ]);
+  const specs = collected.windowSpecs && collected.windowSpecs.length ? collected.windowSpecs : WINDOWS;
+  const byKey = new Map();
+  for (const spec of specs) {
+    const snapshot = utilization[spec.key];
+    if (!snapshot || typeof snapshot.utilization !== 'number') continue;
+    const resetsAt = snapshot.resets_at ? Date.parse(snapshot.resets_at) : null;
+    const corrected = reading.correctedFor(spec.key, at, collected.snapshotFetchedAt, codexHome);
+    byKey.set(spec.key, {
+      key: spec.key,
+      label: spec.label,
+      percentUsed: corrected && Number.isFinite(corrected.percentUsed) ? corrected.percentUsed : snapshot.utilization,
+      resetsAt: Number.isFinite(resetsAt) ? resetsAt : null,
+      stale: Number.isFinite(resetsAt) && resetsAt <= at,
+      applies: appliesTo(spec, families),
+      family: spec.family || null,
+    });
+  }
+  for (const limit of limitWindows(utilization)) {
+    if (byKey.has(limit.key)) continue;
+    const spec = WINDOWS.find((w) => w.key === limit.key) || null;
+    const corrected = reading.correctedFor(limit.key, at, collected.snapshotFetchedAt, codexHome);
+    const family = limit.family || (spec && spec.family) || null;
+    byKey.set(limit.key, {
+      key: limit.key,
+      // A raw key is an internal name, not a window: "five_hour is 97% used"
+      // in the one line `off` gets to say is the plugin talking to itself.
+      label: limit.label || (spec && spec.label) || limit.key.replace(/_/g, ' '),
+      percentUsed: corrected && Number.isFinite(corrected.percentUsed) ? corrected.percentUsed : limit.percent,
+      resetsAt: limit.resetsAt,
+      stale: Number.isFinite(limit.resetsAt) && limit.resetsAt <= at,
+      applies: appliesTo({ family }, families),
+      family,
+    });
+  }
+  return [...byKey.values()];
 }
 
 function collect(now) {
@@ -3029,6 +3131,11 @@ async function report(now, options) {
   return Object.assign({}, base, {
     windows,
     binding,
+    // Carried so a renderer can ask which mode THIS session is in. Without it
+    // render() asked mode.forSession({}) with no id, which skips the session
+    // override entirely and reported the persisted mode while a `--session`
+    // override was the one actually in force.
+    sessionId: (options && options.sessionId) || null,
     otherLimits: otherLimits(base.utilization),
     // The plan moved since anything was last learned about it, so the cached
     // percentage was measured against a different allowance and everything
@@ -3225,6 +3332,16 @@ function render(data) {
         : formatDuration(data.snapshotAgeMs) + ' old' + (data.snapshotSource === 'live' ? ' (live reading)' : ''))
   );
   lines.push('  Settings   model=' + data.settings.model + '  effort=' + data.settings.effortLevel);
+  // Which budget mode the hooks are in, and who said so. Printed here because
+  // the commonest confusion about this plugin is a line that did not appear:
+  // in `off` nothing is injected at all, and the report is the one place that
+  // can say why without injecting anything itself.
+  try {
+    const decided = require('./mode.js').forSession({ sessionId: data.sessionId || null });
+    lines.push('  Mode       ' + decided.label + ' (from ' + decided.source + ') - ' + decided.policy.summary);
+  } catch (err) {
+    // A report that fails over an optional row is worse than a missing row.
+  }
   if (data.planChanged) {
     lines.push('  Plan change  this is a different plan from the one the figures below');
     lines.push('               were learned on, so what a point of a window is worth has');
@@ -3619,6 +3736,23 @@ function formatPercent(value) {
   return value.toFixed(1) + '%';
 }
 
+// The same figure divided by a turn count, which is a different scale.
+//
+// formatPercent is built for window totals, where one decimal is plenty. A
+// per-turn share of a window is one or two orders of magnitude smaller: a
+// 15-turn job costing 0.6 points of the window is 0.04 a turn, and one decimal
+// prints that as "0.0%", which reads as free. The sentence exists to make the
+// table above checkable, so it has to carry enough precision to multiply back.
+function formatRatePercent(value) {
+  if (!Number.isFinite(value)) return '-';
+  if (value >= 10) return Math.round(value) + '%';
+  if (value >= 0.1) return value.toFixed(1) + '%';
+  if (value <= 0) return '0%';
+  // Two decimals down to 0.01, and an honest bound below that rather than a
+  // string of zeroes pretending to be a measurement.
+  return value >= 0.005 ? value.toFixed(2) + '%' : 'under 0.01%';
+}
+
 function renderForecast(data, turns) {
   const lines = [];
 
@@ -3666,11 +3800,16 @@ function renderForecast(data, turns) {
   lines.push('');
   lines.push(
     // Codex meters a share of an allowance and never quotes a price, so a
-    // dollar figure here would be invented. The table above is already in
-    // window points; say so instead of pretending there is a rate card.
+    // dollar figure here would be invented. The rate is still worth stating -
+    // it is what makes the table above checkable and what a person carries to
+    // the next job - so it is quoted in the unit Codex actually has: points of
+    // the window a turn costs. The table's own figures divided by the turns
+    // they were priced for, so the two can never disagree.
     data.money === false
-      ? '  Priced from ' + data.rates.sample + ' recent turns, in points of the window: ' +
-        'typical to the expensive end.'
+      ? '  Priced from ' + data.rates.sample + ' recent turns: about ' +
+        formatRatePercent(rows[0].percentLow / turns) + ' of the ' + rows[0].label +
+        ' window per turn typical, ' + formatRatePercent(rows[0].percentHigh / turns) +
+        ' at the expensive end.'
       : '  Priced from ' + data.rates.sample + ' recent turns: ' +
         formatUSD(data.rates.median) + ' typical, ' + formatUSD(data.rates.high) +
         ' at the expensive end.'
@@ -4005,11 +4144,14 @@ module.exports = {
   accountFile,
   buildWindows,
   limitWindows,
+  snapshotWindows,
   lastRejections,
   bindingWindow,
   criticalOthers,
   escapeRoute,
   settingFit,
+  fitFromRates,
+  formatRatePercent,
   effortNow,
   readEffortOverride,
   writeEffortOverride,

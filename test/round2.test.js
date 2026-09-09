@@ -214,9 +214,19 @@ test('the escape reads as a choice, not only as a wall notice', () => {
     sessions: 1,
     critical: [],
   });
-  assert.match(text, /may make that change yourself/);
-  assert.match(text, /dearer than the work needs rather than only/);
+  // Early, and clearly, and still not the agent's to take. The command named
+  // here is user-plane - /model is typed by a person, and the lowpower path
+  // behind it writes settings.json - so "you may make that change yourself, at
+  // any point and without being asked" was this plugin's own doctrine broken
+  // in the single channel that actually reaches the model.
+  assert.match(text, /dearer than the work needs/);
+  assert.match(text, /leave the change itself to the user/);
+  assert.doesNotMatch(text, /without being asked/);
+  assert.doesNotMatch(text, /lowpower/);
   assert.match(text, /\/model opus/);
+  // The half that IS the agent's, so the sentence is a redirection rather than
+  // a refusal.
+  assert.match(text, /the tier of what you SPAWN/);
 });
 
 test('an escape with no command names the lever and invents no syntax', () => {
@@ -324,8 +334,10 @@ test('the fit sentence names all three levers and asks for the judgement', () =>
   });
   assert.match(text, /measured at 6 times the cost of medium/);
   assert.match(text, /Judge what is actually in front of you/);
-  assert.match(text, /drop the effort \(\/effort medium\)/, 'lever 1: effort');
-  assert.match(text, /hand the stretch to a cheaper model/, 'lever 2: model');
+  // Lever 1 is the user's own effort setting, so it is offered and not taken.
+  assert.match(text, /Dropping your own effort \(\/effort medium\)/, 'lever 1: effort');
+  assert.match(text, /offer it rather than making it/, 'and it is offered, not made');
+  assert.match(text, /handing the stretch to a cheaper model/, 'lever 2: model');
   assert.match(text, /a fan-out multiplies the setting across every agent/, 'lever 3: less work');
   assert.match(text, /Put it back when the work gets hard again/);
   // It fires with the window at 12 per cent: the trigger is the setting.

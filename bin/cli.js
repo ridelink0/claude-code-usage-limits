@@ -26,6 +26,16 @@ const HELP = `claude-usage-limits - how much agent usage is left, and whether th
   claude-usage-limits statusline on       bars under the Claude Code prompt
   claude-usage-limits statusline off      put back what was there
 
+  claude-usage-limits mode                which budget mode the hooks are in
+  claude-usage-limits mode max            fewest tokens that still finish the job
+  claude-usage-limits mode high           full capability, re-costed every two minutes
+  claude-usage-limits mode standard       what the plugin does today
+  claude-usage-limits mode off            inject nothing; hooks return immediately
+  claude-usage-limits mode off --guard 95 off, except one line when nearly spent
+  claude-usage-limits mode auto           pick from pressure, always reported
+  claude-usage-limits mode --list         the four modes and their aliases
+  claude-usage-limits mode --ledger       measured cost per mode
+
   claude-usage-limits lowpower status     show the current effort setting
   claude-usage-limits lowpower on         lower effortLevel, remembering the old value
   claude-usage-limits lowpower on --effort medium --model sonnet
@@ -56,6 +66,12 @@ function run(argv) {
 
   if (args.indexOf('--version') !== -1 || args.indexOf('-v') !== -1) {
     process.stdout.write(require('../package.json').version + '\n');
+    return Promise.resolve(0);
+  }
+
+  if (args[0] === 'mode') {
+    const budget = require('../skills/usage-limits/scripts/mode.js');
+    process.stdout.write(budget.main(args.slice(1)) + '\n');
     return Promise.resolve(0);
   }
 

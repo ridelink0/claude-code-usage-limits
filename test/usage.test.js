@@ -3,7 +3,24 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+
+// Pinned before usage.js is required, and for the whole file.
+//
+// These are fixture tests, but several of the functions they call read the
+// config directory for a correction an earlier hook left behind - statusLine
+// most of all, because a stale snapshot on screen is the failure it exists to
+// prevent. Unpinned, that directory is the developer's own ~/.claude, so six
+// tests here asserted a fixture percentage and got the machine's live reading:
+// "5h 62%" against "5h 37%", failing on one machine and passing on another,
+// and leaving the suite permanently red - which is where a real regression
+// hides. It also means the suite reads the user's real account, which it has
+// no business doing.
+const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-usage-test-'));
+process.env.CLAUDE_CONFIG_DIR = SCRATCH;
+process.env.USAGE_LIMITS_HOST = 'claude';
+test.after(() => fs.rmSync(SCRATCH, { recursive: true, force: true }));
 
 const usage = require('../skills/usage-limits/scripts/usage.js');
 
@@ -960,11 +977,23 @@ test('renderForecast admits when it has nothing to price against', () => {
 
 test('renderForecast prices a Codex reading in window points, not dollars', () => {
   // Codex meters a share of an allowance and never quotes a price, so this
-  // path must never format `rates` as USD the way Claude Code's does.
+  // path must never format `rates` as USD the way Claude Code's does - and it
+  // must still quote a rate, in the unit Codex has. 10 turns costing 5 to 10
+  // points of the weekly is 0.5 to 1.0 points a turn, and those are the
+  // table's own figures divided by the turns they were priced for, so the
+  // sentence and the row above it can never disagree.
   const data = { money: false, windows: [priced], rates: { median: 1, high: 2, sample: 20 } };
   const text = usage.renderForecast(data, 10);
-  assert.ok(text.includes('points of the window'));
+  assert.ok(
+    text.includes('Priced from 20 recent turns: about 0.5% of the weekly window per turn typical, 1.0% at the expensive end.'),
+    text
+  );
   assert.ok(!text.includes('$'), 'must not invent a dollar figure for a host with no price');
+
+  // The same reading on Claude Code still gets the rate card it does have.
+  const claude = usage.renderForecast(Object.assign({}, data, { money: true }), 10);
+  assert.ok(claude.includes('$'), 'a host that quotes a price must still quote it');
+  assert.ok(!claude.includes('per turn typical'));
 });
 
 test('familyOf recognises the family from the model id', () => {

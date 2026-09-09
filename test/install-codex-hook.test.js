@@ -49,9 +49,13 @@ test('a half-written block is not mistaken for a whole one', () => {
   assert.strictEqual(installer.stripAgents(orphanStart), orphanStart);
 });
 
-// Codex will not take hooks from a plugin, and on current builds does not run
-// them from its own config either, so an entry has to be recognisable as ours
-// however it was written in order to be replaced rather than duplicated.
+// Codex will not take hooks from a plugin, so the entry is written into its own
+// config instead - and it does run them from there: the build measured on this
+// machine (ChatGPT extension 26.5903.61454) carries PreToolUse, PostToolUse,
+// UserPromptSubmit, SessionStart, SessionEnd, PreCompact and PostCompact, and
+// its PostToolUse output takes additionalContext the same way Claude Code's
+// does. So an entry has to be recognisable as ours however it was written, in
+// order to be replaced rather than duplicated.
 test('our hook entries are recognised by the script they run', () => {
   assert.ok(installer.isOurs({ command: 'node "/x/skills/usage-limits/scripts/brief.js" --host codex' }));
   assert.ok(installer.isOurs({ command: 'node "C:\\x\\skills\\usage-limits\\scripts\\pulse.js"' }));

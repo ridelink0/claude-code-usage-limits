@@ -91,17 +91,89 @@ test('drift.describe reads plainly with nothing on record', () =>
     assert.match(drift.describe(), /no corrections measured/);
   }));
 
-test('drift.describe reports the median and worst once there is something to say', () =>
+test('drift.describe reports the median and worst, and the gap that makes them readable', () =>
   withConfigDir(() => {
-    reading.record({ key: 'five_hour', percentUsed: 10, turnsLeft: 100, resetsAt: NOW + 60 * MINUTE, adjusted: true }, NOW);
-    reading.record({ key: 'five_hour', percentUsed: 40, turnsLeft: 60, resetsAt: NOW + 60 * MINUTE, adjusted: true }, NOW + MINUTE);
+    // Two points off after two minutes is a working plugin; thirty points off
+    // after half an hour is the complaint this ledger exists to settle. The
+    // numbers are the same shape, so the gap has to be printed with them or
+    // the line cannot be acted on.
+    reading.record({ key: 'five_hour', percentUsed: 10, turnsLeft: 100, resetsAt: NOW + 5 * 60 * MINUTE, adjusted: true }, NOW);
+    reading.record({ key: 'five_hour', percentUsed: 12, turnsLeft: 96, resetsAt: NOW + 5 * 60 * MINUTE, adjusted: true }, NOW + 2 * MINUTE);
+    reading.record({ key: 'five_hour', percentUsed: 42, turnsLeft: 20, resetsAt: NOW + 5 * 60 * MINUTE, adjusted: true }, NOW + 32 * MINUTE);
     const text = drift.describe();
-    assert.match(text, /median 30 points off, worst 30 points off/);
+    assert.match(text, /2 measured corrections/);
+    assert.match(text, /worst 30 points off over 30m/);
+    assert.match(text, /median 16 points off over a typical 16m gap/);
   }));
+
+test('the gap is only reported when the entries carry one', () => {
+  assert.strictEqual(drift.gap(90 * 1000), '1.5m');
+  assert.strictEqual(drift.gap(30 * 60 * 1000), '30m');
+  assert.strictEqual(drift.gap(null), null);
+  assert.strictEqual(drift.gap(NaN), null);
+});
 
 test('recording never throws on a malformed pair', () =>
   withConfigDir(() => {
     assert.strictEqual(drift.record(null, {}, {}, NOW), false);
     assert.strictEqual(drift.record('k', { percentUsed: 1, at: NOW }, { percentUsed: NaN, at: NOW }, NOW), false);
     assert.strictEqual(drift.record('k', {}, { percentUsed: 1, at: NOW }, NOW), false);
+  }));
+
+test('only an elapsed reset is excluded, not a long gap inside one window', () =>
+  withConfigDir(() => {
+    // The exclusion has to be exact. Too loose and a window that rolled over
+    // contributes an eighty-point "drift" that swamps every real measurement;
+    // too tight and the long blind stretches - the ones this ledger exists to
+    // measure - are the first thing thrown away, because they are the ones
+    // most likely to end near a reset.
+    const window = { at: NOW, percentUsed: 20, turnsLeft: 100 };
+    const later = { at: NOW + 40 * MINUTE, percentUsed: 85, turnsLeft: 9 };
+
+    // Reset one millisecond after the second reading: same window, real drift,
+    // and a forty-minute gap is exactly the case worth keeping.
+    assert.strictEqual(
+      drift.record('five_hour', Object.assign({}, window, { resetsAt: later.at + 1 }), later, later.at),
+      true
+    );
+    // Reset exactly at the second reading: the meter has zeroed, so the jump
+    // is not a measurement of anything.
+    assert.strictEqual(
+      drift.record('five_hour', Object.assign({}, window, { resetsAt: later.at }), later, later.at),
+      false
+    );
+    const stats = drift.summary();
+    assert.strictEqual(stats.sample, 1, 'one kept, one excluded');
+    assert.strictEqual(stats.worstAbsPercent, 65);
+    assert.strictEqual(stats.worstGapMs, 40 * MINUTE);
+  }));
+
+test('a ledger that cannot be written does not fail the reading that carries it', () =>
+  withConfigDir((dir) => {
+    // drift.record runs inside reading.record, which runs inside hooks. A hook
+    // that fails over a measurement file would cost more than the measurement
+    // is worth, so the ledger has to be the thing that gives way. A directory
+    // where the file belongs makes every write fail for real, rather than by
+    // stubbing something out.
+    fs.mkdirSync(path.join(dir, 'usage-limits-drift.json'), { recursive: true });
+    const first = { key: 'five_hour', percentUsed: 10, turnsLeft: 100, resetsAt: NOW + 60 * MINUTE, adjusted: true };
+    assert.strictEqual(reading.record(first, NOW), true);
+    assert.strictEqual(
+      reading.record(Object.assign({}, first, { percentUsed: 55 }), NOW + MINUTE),
+      true,
+      'the correction is still written even though the ledger could not be'
+    );
+    assert.strictEqual(reading.read().five_hour.percentUsed, 55);
+    assert.deepStrictEqual(drift.read(), { entries: [] });
+    assert.strictEqual(drift.summary().sample, 0);
+    assert.doesNotThrow(() => drift.describe());
+  }));
+
+test('a corrupt ledger is replaced, not thrown over', () =>
+  withConfigDir((dir) => {
+    fs.writeFileSync(path.join(dir, 'usage-limits-drift.json'), '{not json at all');
+    const first = { key: 'five_hour', percentUsed: 10, turnsLeft: 100, resetsAt: NOW + 60 * MINUTE, adjusted: true };
+    reading.record(first, NOW);
+    reading.record(Object.assign({}, first, { percentUsed: 30 }), NOW + MINUTE);
+    assert.strictEqual(drift.summary().sample, 1);
   }));

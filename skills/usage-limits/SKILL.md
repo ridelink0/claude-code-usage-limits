@@ -275,6 +275,137 @@ The user can also ask any time with `/usage-limits:session`, or run
 `--sessions` for the history of recent sessions on this machine.
 
 
+## Budget modes
+
+How hard this plugin leans, and what it costs to say it. Four modes, set by the
+user and read by every hook:
+
+```
+node scripts/mode.js                 # which one, where it came from, what it changes
+node scripts/mode.js max             # set it
+node scripts/mode.js --list          # all four, and the aliases
+node scripts/mode.js --explain high  # one mode's full record
+```
+
+| mode | one line |
+| --- | --- |
+| `max` | fewest tokens that can still finish the job: one terse line, readings every ten minutes, silent when nothing a decision depends on has moved |
+| `high` | full capability, re-measured every two minutes mid-turn, and said only when the answer changes |
+| `standard` | what the plugin does today, unchanged. The default |
+| `off` | nothing injected at all; every hook returns before reading anything, including the end-of-reply tally |
+
+Aliases: `ultra`, `ultra-efficient`, `maxtoken`, `maxefficient` map to `max`;
+`smart`, `high-efficient` to `high`; `efficient`, `token-efficient`, `default`,
+`on` to `standard`; `none`, `quiet`, `silent`, `ignore` to `off`.
+
+**`normal` is not an alias for either.** To some people it means "the plugin
+working as usual" (`standard`) and to others "the plugin stays out of the way"
+(`off`) - opposite instructions, so a silent guess is wrong half the time. If
+the user says "normal", ask which they meant and say what each one does. The
+script answers the same way.
+
+`auto` picks from how full the binding window is - standard under 50 per cent
+used, high from 50 to 79, max at 80 or above - and always reports itself as
+what it resolved to (`auto -> max`). It reads the snapshot already on disk
+rather than scanning, because the mode has to be settled before anything
+expensive runs, and with no readable window it stays on `standard` rather than
+guessing. It never picks `off`: turning the plugin off is a decision a person
+makes.
+
+`off` means off, including at 100 per cent. That is deliberate. If the user
+wants one line at the wall and nothing else, `node scripts/mode.js off --guard 95`
+is it.
+
+Two rules hold in every mode, and they are not negotiable:
+
+- **A mode never lowers the quality of the work.** When things are tight you
+  change the ORDER of the work, never the amount or the quality. The savings
+  come from ceremony - speculative reads, re-reads, preamble, subagents nobody
+  needed, workflows that cost more context than they save.
+- **The modes govern the agent plane only**, and never write `settings.json`.
+
+### Two planes, and the conversation between them
+
+The **user plane** is `settings.json` (`model`, `effortLevel`), the `/effort`
+and `/model` pickers, and `lowpower.js`. It is the user saying what they want
+for themselves. It is theirs.
+
+The **agent plane** is the tier actually running this turn, and the tier of
+everything this turn spawns. That is what costs money.
+
+What is actually yours to move, stated exactly, because a claim beyond this
+would be a lie the user cannot check:
+
+- **The model on an `Agent` call is yours.** `model: "sonnet" | "opus" |
+  "haiku" | "fable"` on any Agent call, and it overrides both the agent
+  definition and the configured default. It is ignored for `subagent_type:
+  "fork"`, which always inherits the parent model.
+- **Model and effort inside a `Workflow` script are yours**, per `agent()`
+  call: `opts.model` and `opts.effort` (`low` | `medium` | `high` | `xhigh` |
+  `max`). The host's own advice is to omit `opts.model` unless you are
+  confident, and to use `opts.effort: 'low'` for mechanical stages - so lean on
+  effort rather than model when sizing what you spawn.
+- **Your own model and effort are NOT yours to change mid-session.** Nothing a
+  hook can emit changes them: there is no such field anywhere in the hook
+  output contract, and `PreModelSwitch` can only veto a switch someone else
+  started. `/model` and `/effort` are typed by a person and
+  `CLAUDE_CODE_EFFORT_LEVEL` is read at launch. So say the exact command in one
+  line and let the user run it. Never imply you changed it yourself.
+- `xhigh` and `max` are refused outright when thinking is disabled, so never
+  point at either without that being true.
+
+The two planes talk to each other, in both directions, through the
+conversation. The whole rule in one line:
+
+**You may RECOMMEND a user-plane change. You may MAKE one when asked. You may
+never make one unasked.**
+
+Recommending, when you do it:
+
+- **Evidence or silence.** Cite a measurement - what this account has actually
+  measured, from `usage.js --recommend`, the fit line in the budget briefing,
+  or `scripts/drift.js`. "Recommended" with no number is nagging.
+- **At most one per session**, and none at all in `off`. The plugin enforces
+  this; do not route around it.
+- **A declined recommendation is not raised again.** When the user says no,
+  record it - `node scripts/mode.js --decline` - and it is never volunteered
+  again, in this session or any later one. `--advice` shows what is pending.
+- **Name the exact command, the plane it changes, and when it takes effect.**
+
+When the user asks you to change something, or says **"change it back"**: read
+`node scripts/mode.js --history` first, say out loud what you are reverting and
+to what, then do it. Never infer a target that is not in the log. `node
+scripts/mode.js undo` reverses the last change the plugin owns and names it
+first; for a change to the user's own settings it names the command and leaves
+the file alone, because that plane is not the plugin's to write.
+
+The surprise to head off, every time: **a user-plane change does not move the
+session already running.** If the user says "turn low power on" and you do it,
+nothing about this session changes - `lowpower.js` says so itself ("Applies to
+new sessions. For the session you are in, run /effort X"). Relay that in your
+own words whenever you make one, and the same in reverse: putting the baseline
+back does not restore this session's tier either.
+
+### Bounds the user can set
+
+```
+node scripts/mode.js --floor sonnet/medium   # never point below this, even in max
+node scripts/mode.js --ceiling opus/xhigh    # nor above it, even on the hard part
+node scripts/mode.js --pin                   # do not self-switch at all: report only
+```
+
+Under `--pin` the plugin reports the gap between the baseline and what is
+running and suggests nothing. Respect it in your own words too: report, do not
+switch.
+
+### Stepping back up
+
+The efficient modes are two-directional, and that matters more than it sounds.
+Having dropped to a cheap tier for a mechanical stretch, say so when the work
+turns hard again and point back at the baseline. A one-way ratchet down is how
+a long session quietly degrades, which is the thing the quality rule forbids.
+
+
 ## 4. Low power
 
 Two halves, and the second one is the half that actually binds.
@@ -404,41 +535,48 @@ waste at 10 per cent used exactly as much as at 80; the only difference is that
 at 80 somebody notices.
 
 It cannot judge how hard your work is. You can. So when you see it, look at what
-is actually in front of you and take one of three levers yourself, saying which
-in one line:
+is actually in front of you and reach for one of three levers, saying which in
+one line. Two of them are yours to pull; the first is not.
 
 1. **Drop the effort** for that stretch - a rename, a docs pass, running tests,
-   applying a fix you have already worked out.
-2. **Hand the stretch to a cheaper model**, and keep the dear one for the
-   decisions that need it.
+   applying a fix you have already worked out. `/effort` and `settings.json` are
+   the user's own baseline, so this one you **offer**: name the command, say why
+   the stretch does not need the tier, and leave the pulling of it to them.
+2. **Hand the stretch to a cheaper model.** Your own model is the user's setting
+   too, so say that in one line rather than switching - but the model on
+   anything you SPAWN is entirely yours: an Agent call takes a model, and a
+   Workflow's `agent()` takes a model and an effort. Size those to the stage.
 3. **Do less of it at this setting** - a fan-out multiplies the setting across
-   every agent, so six agents at ultra is six ultra turns, not one.
+   every agent, so six agents at ultra is six ultra turns, not one. Yours.
 
 Put it back when the work gets hard again. The question is asked once per
 setting per session, not every prompt, and never at all unless there is a real
 measured comparison behind it - a ratio from a price list would have you drop
 effort on a hunch and call it evidence.
 
-**This is a lever you may pull yourself, not only an emergency exit.** Use it
-whenever the current setting is dearer than the work in front of you needs,
-without being asked and long before any window is tight: a mechanical rename,
-a docs pass or a mass find-and-replace does not need the model and effort a
-hard design decision does. Drop it for that stretch, say in one line that you
-did and why, and put it back when the work gets hard again. An agent that only
-ever reads this as a wall notice runs every trivial turn at the top setting and
-then wonders where the window went.
+**This is worth raising early, not only at the wall.** Say it whenever the
+current setting is dearer than the work in front of you needs, long before any
+window is tight: a mechanical rename, a docs pass or a mass find-and-replace
+does not need the model and effort a hard design decision does. An agent that
+only ever reads this as a wall notice runs every trivial turn at the top setting
+and then wonders where the window went.
+
+**And "offer it" is one line, not a stop.** Naming the lever and carrying on is
+the whole action. Waiting for an answer before doing the work would cost more
+than the tier ever did.
 
 The budget line does this arithmetic for you. Once the binding window is half
 gone it says which lever applies, and at the wall it says outright that you are
 not out of budget and must not stop as though you were. When it does, the
-sequence is: switch, say in one line that you switched and why, carry on with
-the whole request at full quality.
+sequence is: say in one line which command frees it and why, and carry on with
+the whole request at full quality. A per-model weekly is not the account's
+budget, and treating it as one is the error.
 
 This is written down because it was got wrong. A session ended with the Fable
 weekly at 89 per cent and the line saying the budget was nearly gone - while the
 5-hour sat at 46 and every other model on the account was untouched. One command
-would have carried it on. Stopping there was not caution; it was quitting with a
-reason that sounded like one.
+would have carried it on, and naming that command costs a line. Stopping there
+was not caution; it was quitting with a reason that sounded like one.
 
 Only when the switch is genuinely unavailable - no other window has room, or the
 user has ruled it out - does the checkpoint below apply.
@@ -539,6 +677,14 @@ unambiguous and cannot come out as something else in a font that has never heard
 of it.
 
 ## Running under Codex
+
+One difference that matters for the budget modes. Every entry in Codex's
+`hooks.json` carries an `additionalContextLimit` - a per-hook cap on how much
+context a hook may inject, which Claude Code has no equivalent of. A long
+briefing can therefore be truncated there without a word. If a line looks cut
+off under Codex, that is why: `node scripts/mode.js max` keeps it to one line,
+and `high` is the verbose one.
+
 
 Everything above works the same. The numbers come from a different place and
 one thing about how they arrive is different, and both are worth knowing.
@@ -654,6 +800,7 @@ stop.
 | `scripts/host.js` | Works out which agent this is running inside, so one host's percentages are never reported against the other's turns. |
 | `scripts/codex.js` | The Codex reader: the meter and the pace out of `~/.codex/sessions`, plus the live `--refresh` call. |
 | `scripts/install-codex-hook.js` | `status`, `on`, `off`. Installs the Codex-side instruction, which Claude Code does not need. |
+| `scripts/mode.js` | The budget mode: no arguments to report it, `max`/`high`/`standard`/`off` to set it, `auto`, `off --guard 95`, `--list`, `--explain <name>`, `--floor`/`--ceiling`/`--pin`, `--baseline`, `--advice`/`--no-advice`, `--history`, `undo`, `--ledger`. Reads settings.json and never writes it. |
 | `scripts/lowpower.js` | `status`, `on`, `off`. Restores what it replaced. Claude Code only. |
 | `scripts/recommend.js` | The chooser behind `usage.js --recommend`: posture, then the effort and model commands for each lever. Not meant to be called by hand. |
 | `references/tactics.md` | Every lever that lowers cost, and why it works. |
@@ -661,6 +808,7 @@ stop.
 | `scripts/statusline.js` | `status`, `on`, `off`. Puts the bars under the prompt and restores what was there. |
 | `scripts/feed.js` | The status line command Claude Code runs. Not meant to be called by hand. |
 | `scripts/live.js` | The usage reading itself, taken the way Claude Code takes it for `/usage`, kept in `usage-limits-live.json` where `collect()` prefers it when newer than the cache. |
+| `scripts/drift.js` | How wrong the reading was: each correction written down against the one it replaced. Run it with no arguments for the median and worst gap measured so far, `--json` for the fields. Answer "how far behind does this plugin actually run" from here rather than from memory. |
 | `scripts/view.js`, `scripts/bars.js`, `scripts/activity.js` | The display model, the drawing in Claude's colours, and the working/idle marks the hooks leave for the panel. Not meant to be called by hand. |
 | `scripts/relay.js` | The relay: `status`, `on`/`off`, `at N`, `grace N`, `mode notify\|resume`, `permission MODE`, `thinking off\|resume\|always`, `note "<text>"`, `cancel`, `log`. |
 | `scripts/wake.js` | What the scheduler runs after the reset: re-checks the meter, then notifies or resumes. Never called by hand. |

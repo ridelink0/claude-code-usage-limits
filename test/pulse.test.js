@@ -256,6 +256,54 @@ test('a Bash call declared longer than the interval is read before it runs, howe
   }
 });
 
+test('matching Bash costs one scan per interval however many Bash calls there are', async () => {
+  // The matcher change puts this hook in front of every Bash call, which is
+  // the busiest tool there is. The throttle has to bound the work as a rate,
+  // not merely inside one window: sixty calls over ten minutes must cost the
+  // five scans the interval allows, not sixty.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const usage = require('../skills/usage-limits/scripts/usage.js');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-pulse-rate-'));
+  const previousDir = process.env.CLAUDE_CONFIG_DIR;
+  const previousPulse = process.env.USAGE_LIMITS_PULSE;
+  const realReport = usage.report;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  process.env.USAGE_LIMITS_PULSE = 'always';
+  let scans = 0;
+  try {
+    usage.report = async () => {
+      scans += 1;
+      return {
+        binding: { key: 'five_hour', label: '5-hour', percentUsed: 40, stale: false, turnsLeft: 60 },
+        sessions: [],
+      };
+    };
+
+    const every = pulse.DEFAULT_INTERVAL_SECONDS * 1000;
+    const span = 10 * 60 * 1000;
+    const calls = 60;
+    for (let i = 0; i < calls; i += 1) {
+      await pulse.run(NOW + Math.round((i * span) / calls), {
+        session_id: 'R',
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'git status --short' },
+      });
+    }
+    assert.strictEqual(scans, Math.ceil(span / every), '60 Bash calls over 10 minutes, 5 scans');
+  } finally {
+    usage.report = realReport;
+    if (previousDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousDir;
+    if (previousPulse === undefined) delete process.env.USAGE_LIMITS_PULSE;
+    else process.env.USAGE_LIMITS_PULSE = previousPulse;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('what counts as a long call is the agent\'s own declaration, not a guess at the command', () => {
   const every = pulse.DEFAULT_INTERVAL_SECONDS * 1000;
   assert.strictEqual(pulse.longCall({ command: 'npm test', timeout: every + 1 }, every), true);

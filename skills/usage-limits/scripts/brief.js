@@ -21,6 +21,7 @@ const live = require('./live.js');
 const relay = require('./relay.js');
 const reading = require('./reading.js');
 const voice = require('./voice.js');
+const mode = require('./mode.js');
 
 const SECOND = 1000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -423,7 +424,68 @@ function summariseOthers(windows, bindingKey) {
     .join(', ');
 }
 
-function briefText(parts) {
+// The user's bounds, applied at the rendering boundary rather than at each of
+// the half-dozen places a cheaper tier can be suggested.
+//
+// The invariant is about what reaches the reader: with a floor of opus/high
+// set, NOTHING the plugin says may point below opus/high. Filtering here means
+// a new suggestion path cannot quietly bypass the bound by being added
+// somewhere else, which is exactly how a rule like this rots.
+function applyBounds(parts, bounds) {
+  if (!bounds || (!bounds.floor && !bounds.ceiling && !bounds.pin)) return parts;
+  const next = Object.assign({}, parts);
+  const ok = (suggestion) => mode.allows(bounds, suggestion);
+  if (next.escape) {
+    const target =
+      next.escape.kind === 'model' ? { model: next.escape.suggest } : { effort: next.escape.to };
+    if (!ok(target)) next.escape = null;
+    // Pinned means the plugin observes and keeps its hands off. The route is
+    // still true and still worth knowing; what changes is that it is reported
+    // rather than instructed.
+    else if (bounds.pin) next.escape = Object.assign({}, next.escape, { report: true });
+    // A model escape with no named target passes allows() by construction:
+    // an unranked name is not evidence of a breach, and a NULL name has no
+    // rank at all. That is the right call for a spelling nobody recognises and
+    // the wrong one here, because with a model floor set, "switch to another
+    // model" is an instruction to go somewhere that may be below it. The route
+    // is still true, so it is reported rather than instructed.
+    else if (next.escape.kind === 'model' && !next.escape.suggest && bounds.floor && bounds.floor.model) {
+      next.escape = Object.assign({}, next.escape, { report: true });
+    }
+  }
+  if (next.fit && !ok({ effort: next.fit.cheaper })) next.fit = null;
+  if (next.effortWarning && next.effortWarning.cheaper && !ok({ effort: next.effortWarning.cheaper.effort })) {
+    next.effortWarning = Object.assign({}, next.effortWarning, { cheaper: null });
+  }
+  // The per-model weekly sentence is a fourth suggestion path, and it was the
+  // one this function did not touch. With `--floor opus --pin` set the brief
+  // stated both bounds and then, in the next clause, told the agent to switch
+  // to another model "for work that does not need opus" - below the floor, in
+  // a session that had pinned self-switching off, naming the settings.json
+  // writer to do it with. The window being scoped to one model is a FACT and
+  // stays; the instruction half is what the bounds govern.
+  if (next.family) {
+    const floorModel = bounds.floor && bounds.floor.model ? mode.modelRank(bounds.floor.model) : null;
+    const here = next.familyKey ? mode.modelRank(next.familyKey) : null;
+    // A floor at or above the family this window counts leaves no cheaper
+    // model to point at, so the only honest form is the report.
+    const noRoomBelow = floorModel !== null && here !== null && floorModel >= here;
+    next.familySwitch = !bounds.pin && !noRoomBelow;
+  }
+  return next;
+}
+
+function briefText(input) {
+  // The mode decides how much of this is said, and `off` decides that none of
+  // it is - at any percentage, at any pressure. That is the whole promise of
+  // that mode and it is honoured here, before a single sentence is built.
+  const policy = (input.mode && input.mode.policy) || null;
+  const style = policy ? policy.briefStyle : 'normal';
+  if (style === 'none') return '';
+  const bounds = (input.mode && input.mode.bounds) || null;
+  const pinned = Boolean(bounds && bounds.pin);
+  const parts = applyBounds(input, bounds);
+
   // The turns and the reset time belong to one specific window. Listing every
   // window and then the numbers invites reading them against the wrong one, so
   // the binding window is named and its figures are attached to it.
@@ -456,11 +518,27 @@ function briefText(parts) {
   if (parts.resetsIn) bound.push('resets in ' + parts.resetsIn);
 
   const sentences = [];
+  // The mode token, only when the mode is not the one the plugin has always
+  // been in. In `standard` the line is what it has always been, down to the
+  // first character; anywhere else the reader is owed the reason the line
+  // looks different from the one they are used to.
+  const token = parts.mode && parts.mode.name !== 'standard' ? '(' + (parts.mode.label || parts.mode.name) + ') ' : '';
   sentences.push(
     bound.length
-      ? '[usage-limits] binding window is ' + bound.join(', ') + '.'
-      : '[usage-limits] no usable window reading.'
+      ? '[usage-limits] ' + token + 'binding window is ' + bound.join(', ') + '.'
+      : '[usage-limits] ' + token + 'no usable window reading.'
   );
+  // What tier is producing this turn.
+  //
+  // The line used to report the window, the turns, the session cost and the
+  // context - everything about how much is being spent, and nothing about what
+  // is doing the spending. The number that decides the cost of a turn was the
+  // one number the line never printed. It says where the reading came from as
+  // well as what it is, because the source is the whole point: settings.json
+  // said xhigh for an entire session that was running something else.
+  if (parts.tier) sentences.push(parts.tier);
+  const bounded = mode.boundsNote(bounds);
+  if (bounded) sentences.push(bounded);
   if (parts.planChanged) {
     sentences.push(
       'The plan has changed since these figures were learned, so the reading ' +
@@ -572,10 +650,18 @@ function briefText(parts) {
   // every prompt.
   const namesTheSwitch = parts.escape && parts.escape.kind === 'model';
   if (parts.family && !namesTheSwitch) {
-    sentences.push(
+    // The fact first, because it is true under every bound: nothing done more
+    // cheaply on this model frees a window that counts only this model.
+    const fact =
       'That window counts ' + parts.family + ' turns only, so lowering effort does not free it: ' +
-        'switching model does. Use /model (or scripts/lowpower.js on --model <other>) for work ' +
-        'that does not need ' + parts.family + ', and keep this one for what does.'
+      'switching model does.';
+    sentences.push(
+      parts.familySwitch === false
+        ? fact + ' The bounds above rule that switch out, so this is a report: leave the model ' +
+          'where it is and say in one line that the window is scoped to ' + parts.family + '.'
+        : fact + ' Running work that does not need ' + parts.family + ' on a cheaper model is the ' +
+          'lever, and it is the user\'s own setting to change - say so in one line rather than ' +
+          'changing it. What IS yours is the model on anything you spawn: size that to the stage.'
     );
   }
   if (parts.othersSummary) sentences.push('Other windows: ' + parts.othersSummary + '.');
@@ -584,6 +670,15 @@ function briefText(parts) {
   // difference is a command. Said as soon as the window is half gone, so it is
   // already known by the time it matters.
   const escape = parts.escape;
+  // Pinned is the pure form of "this is the user wanting to decide for
+  // themselves": the plugin observes, reports the gap, and keeps its hands
+  // off. The route is unchanged - it is still true, and hiding it would be
+  // withholding a fact - but every sentence built from it becomes a report
+  // rather than an instruction.
+  const lever = (command) =>
+    pinned
+      ? 'The lever is ' + command + ', and it is yours to take or leave: self-switching is pinned, so this is a report and not a switch.'
+      : 'Use ' + command + '.';
   const escapeText =
     escape && escape.kind === 'model'
       ? 'This window is scoped to one model, so it is not the account\'s budget: switching model retires it. ' +
@@ -593,25 +688,43 @@ function briefText(parts) {
         // No command rather than a wrong one: the vocabulary differs by host,
         // and "Use undefined" is worse than saying which lever it is and
         // leaving the reader to reach for it.
-        (escape.command ? 'Use ' + escape.command + '.' : '')
+        (escape.command ? lever(escape.command) : '')
       : escape && escape.kind === 'effort'
         ? 'A model switch does not free this window - it follows the account - but effort does: ' +
           escape.to + ' measured ' + (escape.multiple ? escape.multiple + 'x ' : '') + 'cheaper a turn than ' +
-          (escape.from || 'the current effort') + '.' + (escape.command ? ' Use ' + escape.command + '.' : '')
+          (escape.from || 'the current effort') + '.' + (escape.command ? ' ' + lever(escape.command) : '')
         : null;
   // Not only an emergency exit. The same lever is the right one whenever the
   // setting is dearer than the work in front of you needs - a mechanical edit
   // does not need the model a hard design decision does. Say so, because an
   // agent that only ever reads this as a wall notice will run every trivial
   // turn at the top setting and then wonder where the window went.
-  const chooseText = escapeText
-    ? ' You may make that change yourself, at any point and without being asked, ' +
-      'whenever the current setting is dearer than the work needs rather than only ' +
-      'when the window is nearly gone. Say in one line that you changed it and why.'
+  //
+  // What it must NOT say is that the agent may take it unasked. The commands
+  // above are user-plane: /model and /effort are typed by a person, and
+  // lowpower.js writes settings.json. This is the one channel that actually
+  // reaches the model, so a sentence here saying "you may make that change
+  // yourself, without being asked" was the plugin's own doctrine - "Claude may
+  // never make one unasked" - broken in the place it does the most damage.
+  // Naming it early and clearly is still right; making it is still the user's.
+  const chooseText = escapeText && !pinned
+    ? ' Raise it whenever the current setting is dearer than the work needs, not ' +
+      'only when the window is nearly gone: say in one line that it is worth ' +
+      'changing and why, and leave the change itself to the user, whose setting ' +
+      'it is. What is yours without asking is the tier of what you SPAWN - the ' +
+      'model on an Agent call, the model and effort inside a Workflow - so size ' +
+      'that to the stage.'
     : '';
-  if (escapeText && parts.binding && Number.isFinite(parts.binding.percentUsed) && parts.binding.percentUsed >= HALF_SPENT) {
-    sentences.push(escapeText + chooseText);
-  }
+  // Kept in a variable as well as pushed: the terse style drops the sentences
+  // that read the same every turn, and this is not one of them. Being at the
+  // wall and being out of budget are different things, and the difference is a
+  // command - dropping THAT to save characters would be the mode buying its
+  // saving out of the one fact that changes what happens next.
+  const escapeSentence =
+    escapeText && parts.binding && Number.isFinite(parts.binding.percentUsed) && parts.binding.percentUsed >= HALF_SPENT
+      ? escapeText + chooseText
+      : null;
+  if (escapeSentence) sentences.push(escapeSentence);
 
   // A window that is not binding can still be the expensive one to exhaust.
   if (parts.critical && parts.critical.length) {
@@ -680,10 +793,11 @@ function briefText(parts) {
         parts.fit.sample + ' turns against ' + parts.fit.cheaperSample + '). Judge what is ' +
         'actually in front of you before the next stretch: mechanical work - a rename, a docs ' +
         'pass, running tests, applying a fix you have already worked out - does not need it. ' +
-        'If this stretch is that, take one of the three levers yourself and say which in one ' +
-        'line: drop the effort (' + parts.fit.command + '), hand the stretch to a cheaper ' +
-        'model, or do less of it at this setting - a fan-out multiplies the setting across ' +
-        'every agent. Put it back when the work gets hard again.'
+        'If this stretch is that, say so in one line and name the lever. Dropping your own ' +
+        'effort (' + parts.fit.command + ') is the user\'s setting to change, so offer it ' +
+        'rather than making it; handing the stretch to a cheaper model and doing less of it at ' +
+        'this setting are yours - a fan-out multiplies the setting across every agent. Put it ' +
+        'back when the work gets hard again.'
     );
   }
 
@@ -698,9 +812,14 @@ function briefText(parts) {
   // saying plainly, because a session told only "you are about to be cut off"
   // spends its last turns hedging.
   const carry = parts.relay;
+  // Kept as well as pushed, for the same reason as the escape: a relay changes
+  // what being cut off COSTS, which is the difference between winding down and
+  // carrying on. The terse style drops what reads the same every turn; this is
+  // not that.
+  const relaySentences = [];
   if (carry && carry.armed) {
     const wake = new Date(carry.armed.wakeAt);
-    sentences.push(
+    relaySentences.push(
       'A relay is armed: ' + (carry.justArmed ? 'booked just now' : 'booked') + ' for ' +
         wake.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ', ' +
         carry.config.graceMinutes + ' minutes after this window resets, and it will ' +
@@ -708,7 +827,7 @@ function briefText(parts) {
         '.' + (carry.armed.warning ? ' Caveat: ' + carry.armed.warning + '.' : '')
     );
     if (!carry.armed.continuation) {
-      sentences.push(
+      relaySentences.push(
         'Nothing has been written for it yet. Before this session ends, run ' +
           'node "$CLAUDE_PLUGIN_ROOT/skills/usage-limits/scripts/relay.js" note "<what you would tell yourself>" ' +
           'with what is done, what is next in order, which files are mid-change and what must be verified first. ' +
@@ -717,7 +836,7 @@ function briefText(parts) {
     }
   }
   if (carry && carry.last) {
-    sentences.push(
+    relaySentences.push(
       'The last relay ' +
         (carry.last.outcome === 'resumed'
           ? 'picked this work back up automatically after the previous reset (' + (carry.last.detail || 'resumed') + '); check what it did before repeating it'
@@ -727,6 +846,8 @@ function briefText(parts) {
         '.'
     );
   }
+
+  for (const line of relaySentences) sentences.push(line);
 
   // Three states, and only the last one stops anything.
   //
@@ -752,10 +873,17 @@ function briefText(parts) {
     escapeText &&
     (parts.pressure === 'tight' || (parts.pressure === 'gone' && escape && escape.kind === 'model'))
       ? 'This window is nearly gone, but you are not out of budget and you must ' +
-        'not stop as though you were. ' + escapeText + ' Do that, say in one ' +
-        'line that you switched and why, and carry on with the whole request at ' +
-        'full quality. Only if the switch is impossible or the user has ruled it ' +
-        'out: save the work, write the handoff, and say what is left.'
+        'not stop as though you were. ' + escapeText +
+        (pinned
+          ? ' Do not take it yourself - self-switching is pinned. Say in one line ' +
+            'that the lever is there, and carry on with the whole request at full ' +
+            'quality until the window actually ends; when it does, save the work, ' +
+            'write the handoff, and say what is left.'
+          : ' Say in one line that the lever is there and what it would ' +
+            'free - it is the user\'s own setting, so it is theirs to pull - and ' +
+            'carry on with the whole request at full quality meanwhile. Only if the ' +
+            'switch is refused or impossible: save the work, write the handoff, and ' +
+            'say what is left.')
       : parts.pressure === 'gone'
       ? 'The budget is gone, so nothing further will run. Save what exists and ' +
         'write the handoff: what is finished, what is next and in what order, ' +
@@ -806,7 +934,67 @@ function briefText(parts) {
         'with one plain line giving the session total above (turns, tokens and cost). ' +
         'Skip it on partial progress; the hook prints the exact figure after you stop.';
 
-  return sentences.join(' ') + '\n' + instruction + closing + care;
+  // What the mode adds, and what it takes away.
+  //
+  // The directive is the half of a mode that changes what the agent does. It
+  // is injected verbatim, last, so it is the freshest thing in the line.
+  //
+  // It is dropped in two places. When the line is telling the agent to stop,
+  // there is no budget left for it to govern, and a token-economy lecture at
+  // 100 per cent is pure cost. And in the terse style once the wall is reached,
+  // because the wall's own instruction is more specific than the directive and
+  // says the same thing better - repeating both at 95 per cent would spend
+  // exactly what the mode is asking to save.
+  const stopping = parts.pressure === 'gone' && !(escape && escape.kind === 'model');
+  // The wall, not "anything that is not roomy". pressure() returns roomy,
+  // tight, gone and unknown, so `!== 'roomy'` dropped the directive at `tight`
+  // - which is a normal working state, not the wall - and at `unknown`, which
+  // is a stale window or a missing percentage and is not the wall either. Both
+  // matter because autoPick resolves to `max` exactly at tight and above, so
+  // the mode's behavioural half was dropped precisely where auto selects it.
+  // At `gone` the wall's own instruction is more specific and `stopping` has
+  // usually dropped it already; this is what keeps the two agreeing.
+  const pastTheWall = style === 'terse' && parts.pressure === 'gone';
+  const directive =
+    parts.mode && parts.mode.directive && !stopping && !pastTheWall ? ' ' + parts.mode.directive : '';
+
+  // Terse is one line plus the decision: the binding window, the tier, what to
+  // do about it, and the directive. It drops the table, the per-model rows, the
+  // session totals and the two standing reminders - the parts that read the
+  // same every turn - and keeps every part that changes what happens next.
+  //
+  // What it must NOT drop is the decision itself. At the wall the instruction
+  // is identical in both styles, word for word: a mode that says "budget gone"
+  // less clearly to save forty characters has bought its saving out of the one
+  // sentence that matters.
+  if (style === 'terse') {
+    // The number's own health, in one clause. Terseness may cost the table; it
+    // may not cost the reader the knowledge that the figure is a floor.
+    const caveat =
+      parts.correctionUnreliable || (parts.binding && parts.binding.stale)
+        ? ' Last real reading, not a current one; /usage refreshes it.'
+        : '';
+    // A percentage measured against a different allowance is not a shorter
+    // truth, it is a different number. Terseness may cost the table; it may
+    // not cost the reader the knowledge that the figure predates a plan
+    // change - that would be the mode buying its saving out of the number
+    // itself, which is the one thing the header forbids.
+    const planCaveat = parts.planChanged
+      ? ' Measured against a different allowance: the plan has changed since, so /usage before trusting it.'
+      : '';
+    // The one recommendation this session is allowed, in its short form. It
+    // still cites the measurement, still names the command: terse is fewer
+    // words, not less evidence.
+    const adviceText = parts.adviceText ? ' ' + parts.adviceText : '';
+    return (
+      sentences[0] + caveat + (parts.tier ? ' ' + parts.tier : '') + (bounded ? ' ' + bounded : '') + adviceText +
+      (escapeSentence ? ' ' + escapeSentence : '') +
+      (parts.pressure !== 'roomy' && relaySentences.length ? ' ' + relaySentences.join(' ') : '') +
+      '\n' + instruction + directive
+    );
+  }
+
+  return sentences.join(' ') + '\n' + instruction + closing + care + directive;
 }
 
 // Past this the context is the cost of the session, not a detail of it.
@@ -923,15 +1111,78 @@ function relayState(now, hookInput, binding, sessionId) {
   }
 }
 
+// The one line `off` will ever say, and only when it has been asked for.
+//
+// `off` means off, including at 100 per cent: that is what was asked and it is
+// honoured literally. A silent cutoff at the wall is also the exact failure
+// this plugin exists to prevent, and it has already cost real work more than
+// once, so `mode off --guard 95` stores a percentage at which one short line
+// is still allowed. The default stays null - discoverable, not imposed.
+//
+// It never scans. The snapshot, plus whatever correction an earlier turn has
+// already paid for, and nothing else: a mode whose promise is that the plugin
+// costs nothing cannot buy its one line with a five-second transcript scan.
+//
+// Three things it must get right, because it is the ONLY line this mode will
+// ever emit and there is nothing else to correct it:
+//
+//   The windows come from snapshotWindows(), not from `utilization.limits`
+//   alone. That array is optional - every fixture in this repo and every other
+//   reader here works from the top-level five_hour/seven_day keys - so a guard
+//   wired to it was silent at 97 per cent used on the payload shape everything
+//   else treats as primary.
+//
+//   A per-model weekly for a model this session is not running cannot be the
+//   window that stops the work, so it cannot be the thing that fires the
+//   guard either. Without the applies filter it fired at 99 per cent on an
+//   Opus weekly for a user with 80 per cent of their real budget left - the
+//   exact false alarm bindingWindow() exists to prevent, in the one mode with
+//   no second line to take it back.
+//
+//   And it says "5-hour", not "five_hour". A raw key in the one sentence the
+//   user gets is the plugin talking to itself.
+function guardLine(now, budget) {
+  if (!Number.isFinite(budget.guardPercent)) return '';
+  try {
+    usage.setHost(host.detect(process.argv.slice(2), process.env));
+    const base = usage.collect(now);
+    if (!base.utilization) return '';
+    const codexHome = usage.isCodex() ? require('./codex.js').homeDir() : null;
+    let worst = null;
+    for (const window of usage.snapshotWindows(base, now, codexHome)) {
+      if (window.applies === false || window.stale) continue;
+      const percent = window.percentUsed;
+      if (!Number.isFinite(percent)) continue;
+      if (!worst || percent > worst.percent) worst = { percent, label: window.label || window.key };
+    }
+    if (!worst || worst.percent < budget.guardPercent) return '';
+    return (
+      '[usage-limits] (off, guard at ' + budget.guardPercent + '%) ' + worst.label + ' is ' +
+      Math.round(worst.percent) + '% used. Mode is off, so this is the only line you get.'
+    );
+  } catch (err) {
+    // A guard that throws would be worse than a guard that is quiet.
+    return '';
+  }
+}
+
 async function run(now, hookInput) {
   if (String(process.env.USAGE_LIMITS_BRIEF || '').toLowerCase() === 'off') return '';
+
+  const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
+  // Which budget mode is in force, settled before anything expensive happens.
+  // In `off` this whole hook is one small file read and then nothing: no
+  // reading, no scan, no activity mark, no injection. That mode's promise is
+  // that the plugin costs nothing, and a promise with a scan behind it is not
+  // one. The visible consequence, stated in the docs: the panel does not
+  // animate in `off`, because nothing runs to tell it anything.
+  const budget = mode.forSession({ sessionId });
+  if (budget.policy.briefStyle === 'none') return guardLine(now, budget);
 
   // Codex cannot ship a hook inside a plugin, so its hook is installed into
   // ~/.codex/hooks.json with the host written into the command. Settle it here,
   // before any file is read.
   usage.setHost(host.detect(process.argv.slice(2), process.env));
-
-  const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
   // A prompt has arrived, so this session is working, and the prompt itself
   // says whether it asked for ultracode. The panel animates from this.
   activity.mark(
@@ -957,6 +1208,13 @@ async function run(now, hookInput) {
   );
 
   const config = settings();
+  // How old the reading may be before this hook takes a fresh one is a mode
+  // decision - the reading itself costs a request and a wait - but an explicit
+  // environment setting is the user saying it outright, and that still wins.
+  const envRefresh = Number(process.env.USAGE_LIMITS_REFRESH);
+  const refreshSeconds = Number.isFinite(envRefresh)
+    ? envRefresh
+    : budget.policy.refreshSeconds || config.refreshSeconds;
   // The reading ages during long turns, and a burst of parallel agents can
   // spend half a window between two of them. Before the numbers go in front
   // of Claude, take the same reading Claude Code takes for /usage when the
@@ -970,14 +1228,14 @@ async function run(now, hookInput) {
       // does, when the reading has aged.
       await require('./codex.js').refreshIfStale({
         now,
-        maxAgeMs: config.refreshSeconds * SECOND,
+        maxAgeMs: refreshSeconds * SECOND,
         timeoutMs: REFRESH_TIMEOUT_MS,
       });
     } else {
       const cached = usage.collect(now);
       await live.refreshIfStale({
         now,
-        maxAgeMs: config.refreshSeconds * SECOND,
+        maxAgeMs: refreshSeconds * SECOND,
         cacheFetchedAtMs: cached.snapshotFetchedAt,
         accountUuid: usage.accountUuid(),
         timeoutMs: REFRESH_TIMEOUT_MS,
@@ -1011,7 +1269,10 @@ async function run(now, hookInput) {
       othersSummary: summariseOthers(data.windows, binding && binding.key),
       // The way out that is not stopping. Cached with the rest of the view
       // because it is derived from the same one pass over the windows.
-      escape: usage.escapeRoute(data.windows, binding, data.effortWarning || null, usage.currentHost()),
+      // The mode's own appetite goes in with it: how much emptier another
+      // window has to be before a switch is worth naming, and whether the user
+      // has pinned self-switching off altogether.
+      escape: usage.escapeRoute(data.windows, binding, data.effortWarning || null, usage.currentHost(), budget.policy, budget.bounds),
       // Every window, trimmed to the cacheable fields, so the corrected reading
       // can be recorded for all three columns of the status line on a cache
       // hit too. Recording the binding window alone left the other two at
@@ -1028,7 +1289,13 @@ async function run(now, hookInput) {
       snapshotAge: usage.formatDuration(data.snapshotAgeMs),
       binding: cacheableBinding(binding),
       effortWarning: data.effortWarning || null,
-      fit: usage.settingFit(data.events || null, data.effortNow || null, usage.currentHost()),
+      // From the per-effort TABLE, which is what report() returns. It was
+      // being asked for from `data.events`, a field report() has never had -
+      // it builds the event list internally and returns effortRates derived
+      // from it - so this was null on every call on every machine, and with it
+      // the whole recommendation channel: no fit sentence, nothing to offer,
+      // nothing to decline.
+      fit: usage.fitFromRates(data.effortRates || [], data.effortNow || null, usage.currentHost()),
     };
     view.fitFor = view.fit ? view.fit.effort : askedFitFor;
     writeCache(mergeCache(all, sessionId, view, KEEP_SESSIONS));
@@ -1070,7 +1337,51 @@ async function run(now, hookInput) {
   } catch (err) {
     voiceNote = null;
   }
+
+  // What tier is producing this turn, and what the user's own baseline is.
+  // Read, displayed, never written.
+  const terse = budget.policy.briefStyle === 'terse';
+  const tier = mode.tierLine(mode.tierNow({ sessionId, now, usage, env: process.env }), { terse });
+
+  // The recommendation channel. The measured fit sentence IS the
+  // recommendation - it cites this account's own numbers and names the exact
+  // command - so it goes out through the advice rules rather than beside them:
+  // at most one per session, never once declined, never in `off`, never
+  // pointing outside the bounds the user set.
+  const fitCandidate = view.fit && askedFitFor !== view.fit.effort ? view.fit : null;
+  const advice = mode.advicePending({ decided: budget, fit: fitCandidate, sessionId });
+  const offering = advice.ok && !advice.alreadyOffered;
+  if (offering) mode.adviceOffer(advice.id, sessionId, now);
+
+  const pressureNow = pressure(binding, now, config, Number.isFinite(yourTurnsLeft) ? yourTurnsLeft : view.turnsLeft);
+
+  // Say nothing when nothing a decision depends on has moved.
+  //
+  // Only `max` asks for this, and only while there is room: repeating the same
+  // figure every prompt is the plugin charging for its own presence. The
+  // pressure is in the digest and the wall is excluded outright, so the one
+  // line that must never be swallowed cannot be.
+  const digest = [
+    budget.name,
+    pressureNow,
+    binding && Number.isFinite(binding.percentUsed) ? Math.round(binding.percentUsed / 5) * 5 : 'x',
+    view.escape ? view.escape.kind : '-',
+    tier || '-',
+    active > 1 ? 'shared' : 'solo',
+    carry && carry.armed ? 'relay' : '-',
+    offering ? 'advice' : '-',
+  ].join('|');
+  if (!budget.policy.briefWhenUnchanged && pressureNow === 'roomy') {
+    const slots = readCache();
+    const slot = slots[sessionId || '_'];
+    if (slot && slot.said === digest) return '';
+    writeCache(mergeCache(slots, sessionId, Object.assign({}, slot || { at: now }, { said: digest }), KEEP_SESSIONS));
+  }
+
   return briefText({
+    mode: budget,
+    tier,
+    adviceText: terse && offering ? advice.text : null,
     relay: carry,
     voiceNote,
     lastReply: found.lastReply,
@@ -1097,9 +1408,9 @@ async function run(now, hookInput) {
     host: usage.currentHost(),
     turnsLeft: view.turnsLeft,
     effortWarning: view.effortWarning || null,
-    // Once per setting. The slot below records which effort it was said for,
-    // so a change of setting asks the question again and a repeat does not.
-    fit: view.fit && askedFitFor !== view.fit.effort ? view.fit : null,
+    // Once per setting, and once per session, and never after a decline: the
+    // advice rules above decide, and the sentence itself is unchanged.
+    fit: offering && !terse ? fitCandidate : null,
     // Outside the cache: it is cheap, and it belongs to the other agent's
     // clock rather than this session's.
     codex: codexSummary(now),
@@ -1120,9 +1431,7 @@ async function run(now, hookInput) {
     // budget, not the whole window's. Escalating on the whole window meant a
     // count that looked comfortable while the part actually available here was
     // a third of it.
-    pressure: pressure(binding, now, config, Number.isFinite(yourTurnsLeft)
-      ? yourTurnsLeft
-      : view.turnsLeft),
+    pressure: pressureNow,
   });
 }
 
@@ -1164,6 +1473,8 @@ module.exports = {
   readCache,
   cacheableBinding,
   pressureInputs,
+  applyBounds,
+  guardLine,
   CACHED_BINDING_FIELDS,
   LIVE_WINDOW_MS,
   RUNWAY_MENTION_MS,

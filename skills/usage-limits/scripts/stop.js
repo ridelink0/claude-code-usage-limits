@@ -16,9 +16,33 @@ const usage = require('./usage.js');
 const host = require('./host.js');
 const tally = require('./tally.js');
 const activity = require('./activity.js');
+const mode = require('./mode.js');
+const drift = require('./drift.js');
 
 async function run(now, hookInput) {
   const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
+
+  // `off` means off here too, and that is the whole reason this check is the
+  // first thing in the hook rather than a filter on the line at the end.
+  //
+  // This hook was the expensive one left running: it read the entire
+  // transcript after every reply - 2.77 MB on the session that measured it -
+  // wrote two state files and printed a line, in the mode documented as "the
+  // hooks return before reading anything: no scan, no state write, no line".
+  // The line goes to the person rather than into the context, so it cost no
+  // tokens; the scan cost exactly what `standard` costs, which is the half of
+  // that promise that was false.
+  //
+  // Two consequences, both stated where the user sets the mode and in the
+  // docs: no end-of-reply cost line in `off`, and no drift-ledger rows tagged
+  // `off` - a mode that injects nothing has no injection to attribute a cost
+  // to, so there is nothing for the ledger to compare.
+  //
+  // USAGE_LIMITS_TALLY stays the independent control, for anyone who wants the
+  // briefing and not the cost line.
+  const budget = mode.forSession({ sessionId });
+  if (budget.policy.briefStyle === 'none') return '';
+
   // The reply is finished: the panel beside the chat can stop animating.
   activity.mark('idle', sessionId, null, now);
 
@@ -33,6 +57,25 @@ async function run(now, hookInput) {
     cwd: hookInput.cwd || null,
   });
   tally.writeState(tally.trim(all));
+
+  // The mode ledger: what a reply actually cost, tagged with the mode that was
+  // in force while it ran. Modes should be evidence rather than vibes, and this
+  // is the only place that knows both halves at once. Skipped on the first
+  // sighting of a session, where the figures are history rather than this
+  // reply, and never allowed to disturb the hook.
+  try {
+    if (!created) {
+      drift.recordTurns(
+        budget.name,
+        delta.turns,
+        delta.cost,
+        now,
+        usage.isCodex() ? require('./codex.js').homeDir() : null
+      );
+    }
+  } catch (err) {
+    // A ledger entry is worth nothing next to the line this hook exists for.
+  }
 
   // The first time a session is seen, everything read is history rather than
   // the reply that just finished, so only the total is shown.

@@ -757,7 +757,17 @@ test('a per-model weekly says that only a model switch frees it', () => {
   const text = brief.briefText(near);
   assert.match(text, /counts Fable turns only/);
   assert.match(text, /lowering effort does not free it/);
-  assert.match(text, /\/model/);
+  // It names the lever and leaves the pulling of it to the user. The model
+  // this session runs is a user-plane setting: /model is typed by a person and
+  // lowpower.js writes settings.json, so a sentence here telling the agent to
+  // go and change it is the two-planes rule broken in the one channel that
+  // reaches the model.
+  assert.match(text, /the user's own setting to change/);
+  assert.match(text, /say so in one line rather than changing it/);
+  assert.doesNotMatch(text, /lowpower/, 'never the settings.json writer, unasked');
+  // And it still says what IS the agent's, so "leave it alone" does not read
+  // as "there is nothing you can do".
+  assert.match(text, /the model on anything you spawn/);
 
   // Nothing said for a shared window, or for a per-model week with room left.
   const shared = brief.briefText({ binding: { key: 'five_hour', label: '5-hour', percentUsed: 66 }, pressure: 'roomy' });

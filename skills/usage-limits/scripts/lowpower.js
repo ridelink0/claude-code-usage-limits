@@ -169,6 +169,50 @@ function describe(settings, state) {
   return lines.join('\n');
 }
 
+// Write down what was changed here, so "change my effort back" has a referent.
+//
+// This script is the ONLY thing in the plugin that writes settings.json, and
+// it was the only change the log could not name: mode.js recorded fourteen
+// kinds of mode-plane change and nothing ever wrote a user-plane entry, so
+// `mode --history` answered "nothing has been changed through this plugin yet"
+// immediately after this had rewritten the user's baseline, and undo's whole
+// user-plane branch was unreachable code.
+//
+// Required lazily and inside a try: a settings write that already succeeded
+// must not be reported as a failure because a log line could not be added, and
+// this file otherwise depends on nothing.
+//
+// `by` is a reading of the environment, not a claim about intent. Claude Code
+// and Codex both put a session id into the environment of everything they
+// launch, so a run from inside an agent session is recorded as the agent's and
+// a run from the user's own shell as theirs. It is the honest half of "at
+// whose instruction": who typed it, not who wanted it.
+function logSettingsChange(changes, direction, env) {
+  if (!changes || !changes.length) return;
+  const e = env || process.env;
+  const by = e.CLAUDE_SESSION_ID || e.CODEX_SESSION_ID ? 'claude' : 'user';
+  try {
+    const mode = require('./mode.js');
+    for (const change of changes) {
+      // "effortLevel: xhigh -> low", as planApply and planRestore build them.
+      const at = change.indexOf(': ');
+      const key = at === -1 ? change : change.slice(0, at);
+      const rest = at === -1 ? '' : change.slice(at + 2);
+      const arrow = rest.indexOf(' -> ');
+      mode.logChange({
+        plane: 'user',
+        key,
+        from: arrow === -1 ? null : rest.slice(0, arrow),
+        to: arrow === -1 ? rest || null : rest.slice(arrow + 4),
+        by,
+        reason: direction === 'off' ? 'lowpower off' : 'lowpower on',
+      });
+    }
+  } catch (err) {
+    // A record of the change is worth less than the change itself.
+  }
+}
+
 function main(argv) {
   const args = parseArgs(argv);
   const host = require('./host.js');
@@ -196,6 +240,7 @@ function main(argv) {
     if (!state && fs.existsSync(file)) fs.copyFileSync(file, file + '.usage-limits-backup');
     writeJson(file, plan.settings);
     writeJson(stateFile(), plan.state);
+    logSettingsChange(plan.changes, 'on');
     process.stdout.write(
       'Low power on.\n  ' + (plan.changes.join('\n  ') || '(nothing to change)') + '\n' +
         'Applies to new sessions. For the session you are in, run /effort ' +
@@ -216,6 +261,7 @@ function main(argv) {
     }
     writeJson(file, plan.settings);
     fs.unlinkSync(stateFile());
+    logSettingsChange(plan.changes, 'off');
     process.stdout.write(
       'Low power off.\n  ' + (plan.changes.join('\n  ') || '(nothing to change)') + '\n'
     );

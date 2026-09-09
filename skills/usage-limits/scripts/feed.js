@@ -204,8 +204,18 @@ function line(built, options) {
         : bars.paint(effortName, effort.rgb, mode);
   // The word, in the rainbow, the way Claude Code paints it in the prompt.
   const thinking = built.ultrathink ? ' ' + bars.dim('·', mode) + ' ' + bars.rainbow('ultrathink', tick, { mode, reduced }) : '';
+  // The budget mode, only when it is not the one the plugin has always been
+  // in. `standard` is today's behaviour and today's line, unchanged to the
+  // character; anything else changes what the hooks say, and a line that does
+  // not mention it leaves the user guessing why the briefing went quiet.
+  // It rides on the head so the width ladder drops it with the head, before it
+  // ever costs a percentage its place.
+  const budgetText =
+    built.budget && built.budget.name !== 'standard'
+      ? ' ' + bars.dim('·', mode) + ' ' + bars.dim('budget ' + built.budget.label, mode)
+      : '';
   const head =
-    glyph + ' ' + built.modelLabel + (effortText ? ' ' + bars.dim('·', mode) + ' ' + effortText : '') + thinking;
+    glyph + ' ' + built.modelLabel + (effortText ? ' ' + bars.dim('·', mode) + ' ' + effortText : '') + thinking + budgetText;
 
   const segment = (row, width, shorter) => {
     const label = shortLabel(row, shorter);
@@ -396,6 +406,17 @@ function motionOff(settings, env) {
 
 // Written and flushed before the process is allowed to end: stdout is a pipe
 // here, and a pipe write can still be in flight when process.exit runs.
+// The budget mode, for the token on the line. Wrapped and lazy: the status
+// line must never fail over an optional word, and a machine that has never set
+// a mode should not pay for a require to be told so.
+function budgetNow(sessionId) {
+  try {
+    return require('./mode.js').forSession({ sessionId });
+  } catch (err) {
+    return null;
+  }
+}
+
 function out(text) {
   return new Promise((resolve) => {
     process.stdout.write(text, () => resolve());
@@ -461,6 +482,7 @@ async function main(argv) {
     const built = view.build({
       now,
       agents: usage.liveAgents(now),
+      budget: budgetNow(mine || (slot && slot.sessionId) || null),
       utilization: collected.utilization,
       fetchedAtMs: collected.snapshotFetchedAt,
       source: collected.snapshotSource,

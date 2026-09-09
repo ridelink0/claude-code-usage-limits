@@ -839,6 +839,109 @@ and are counted together. On this machine the transcripts carry both `cli` and
 Windows, macOS, and Linux all work. `CLAUDE_CONFIG_DIR` is honoured if you have
 moved the config directory.
 
+## Budget modes
+
+This plugin is not free. It puts a line into the model's context before every
+prompt, refreshes readings after tool calls, and keeps a status line alive. A
+mode called "save tokens" that still injects four hundred tokens of advice per
+turn is not saving anything - it is charging you for the advice about saving.
+
+So a mode changes two things, not one: what the plugin tells the agent to do,
+and what it costs to say it.
+
+```
+claude-usage-limits mode                  which one, where it came from
+claude-usage-limits mode max              set it
+claude-usage-limits mode off --guard 95   off, except one line near the wall
+claude-usage-limits mode auto             pick from pressure, always reported
+claude-usage-limits mode --list           all four, and the aliases
+claude-usage-limits mode --ledger         measured cost per turn, per mode
+```
+
+| mode | what it does | what it costs |
+| --- | --- | --- |
+| `max` | fewest tokens that can still finish the job | one terse line, readings every 10 minutes, silent while nothing a decision depends on has moved |
+| `high` | full capability, re-costed every two minutes mid-turn | the normal line, **plus a standing directive on every prompt** (about 650 characters, so a `high` briefing runs roughly 40% longer than `standard`), plus a short re-cost the first time a cheaper tier would do the same job - re-measured every two minutes, said only when the answer changes |
+| `standard` | what the plugin has always done | today's line, today's cadences, unchanged |
+| `off` | nothing at all | every hook returns before reading anything: no scan, no state write, no line, no end-of-reply tally |
+
+`high` is the mode that spends a little more to waste a lot less: it carries a
+standing directive and re-measures mid-turn, so its own line is longer than
+`standard`'s. `max` is the one that costs less to say. Picking `high` because
+the word sounds efficient and expecting a shorter line is the one
+misunderstanding worth heading off.
+
+Aliases, because people ask for these in their own words: `ultra`,
+`ultra-efficient`, `maxtoken`, `maxefficient` for `max`; `smart`,
+`high-efficient` for `high`; `efficient`, `token-efficient`, `default`, `on`
+for `standard`; `none`, `quiet`, `silent`, `ignore` for `off`.
+
+**`normal` is deliberately not an alias.** To some people it means "the plugin
+working as usual" (`standard`); to others it means "the plugin stays out of the
+way" (`off`). Those are opposite instructions, so guessing is wrong half the
+time. Ask for `normal` and you get a question back, not a setting.
+
+`off` means off, including at 100 per cent used. That is what it says and it is
+honoured literally - which is also the failure this plugin exists to prevent,
+so setting it prints the consequence once and offers `--guard 95`: one short
+line when the window is nearly spent, and nothing else, ever. The default guard
+is none. Discoverable, not imposed.
+
+The one thing a mode never does is lower the quality of the work. When things
+are tight you change the ORDER of the work, never the amount or the quality.
+The savings come from ceremony - speculative reads, re-reads, preamble,
+subagents nobody needed, workflows that cost more context than they save - and
+the directives say that outright, because a model reading "use fewer tokens"
+will otherwise quietly decide to skip the hard part. There is a test for it,
+and another one that checks the `max` line is never longer than the `standard`
+line for the same reading.
+
+### Two planes, and which one is whose
+
+There are two separate things people mean by "change the model":
+
+- **The user plane** is your `settings.json` (`model`, `effortLevel`), the
+  `/effort` and `/model` pickers, and `lowpower.js`. It is you saying what you
+  want for yourself. The plugin reads it, shows it, and **never writes it on
+  its own initiative.** Claude may recommend a change, and make one if you ask;
+  it may not make one unasked. There is a test that exercises every mode, every
+  alias, `auto`, the bounds and the guard, and then checks `settings.json` is
+  byte-identical.
+- **The agent plane** is the tier actually running the turn, and the tier of
+  everything the turn spawns. That is what costs money, and that is what the
+  modes govern.
+
+`claude-usage-limits mode --baseline` shows both side by side. The budget line
+now says the tier as well, and where the reading came from, because the number
+that decides what a turn costs was the one number the line never printed.
+
+What Claude can genuinely move, stated without embroidery: the model on an
+`Agent` call, and the model and effort inside a `Workflow` script. Its own
+model and effort it cannot change mid-session - no hook output field exists for
+it, on either host - so the plugin names the exact command and leaves it with
+you. It does not pretend otherwise.
+
+You can bound what it may suggest:
+
+```
+claude-usage-limits mode --floor sonnet/medium   # never point below this
+claude-usage-limits mode --ceiling opus/xhigh    # nor above it
+claude-usage-limits mode --pin                   # report only, suggest nothing
+claude-usage-limits mode --decline               # no, and stop suggesting that
+```
+
+And when you say "put it back", there is something to put it back to:
+
+```
+claude-usage-limits mode --history   what changed, when, at whose instruction
+claude-usage-limits mode undo        reverse the last change, naming it first
+```
+
+`undo` reverses what the plugin owns. For a change to your own settings it
+names the entry and the command that undoes it and leaves the file alone -
+which is the same rule as everywhere else, and the reason the byte-identical
+test can never go green by accident.
+
 ## Working cheaply on purpose
 
 Half the problem is measurement. The other half is that a high effort setting
@@ -972,7 +1075,8 @@ skills/usage-limits/scripts/      usage.js, brief.js, pulse.js, stop.js,
                                   lowpower.js, install-codex-hook.js,
                                   recommend.js, panel.js, feed.js,
                                   statusline.js, live.js, view.js, bars.js,
-                                  activity.js
+                                  activity.js, reading.js, drift.js,
+                                  mode.js, voice.js, relay.js, wake.js
 skills/usage-limits/references/   the longer notes
 hooks/hooks.json                  runs brief.js before each prompt, pulse.js
                                   during long turns, stop.js after each reply
@@ -981,6 +1085,7 @@ commands/check.md                 the /usage-limits:check command
 commands/session.md               the /usage-limits:session command
 commands/panel.md                 the /usage-limits:panel command
 commands/statusline.md            the /usage-limits:statusline command
+commands/usage-mode.md            the /usage-mode command
 bin/cli.js                        the npx entry point
 tools/sync-version.js             keeps the manifest version in step
 vscode/                           the VS Code extension; build.js copies the
@@ -994,10 +1099,17 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-480 tests over the pricing, the window arithmetic, plan and credit detection,
+712 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, the mid-turn pulse, the after-reply tally and the session history, job forecasting,
 per-project attribution, the Codex reader and its installer, the CLI,
 packaging, and the settings save/restore.
+
+The budget modes are checked as rules rather than examples: the whole stopping
+matrix is walked in every mode (640 lines), `off` must inject nothing at any
+percentage and any pressure, the `max` line must never be longer than the
+`standard` line for the same reading, no line may tell the agent to do the work
+worse, and every mode path, alias, bound and guard is exercised before
+`settings.json` is compared byte for byte.
 
 ## Status
 

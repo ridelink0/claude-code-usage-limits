@@ -12,9 +12,17 @@ const usage = require('./usage.js');
 const host = require('./host.js');
 const tally = require('./tally.js');
 const activity = require('./activity.js');
+const mode = require('./mode.js');
 
 async function run(now, hookInput) {
   const sessionId = hookInput && hookInput.session_id ? hookInput.session_id : null;
+
+  // The same rule as the Stop hook, for the same reason: `off` promises the
+  // hooks return before reading anything, and this one read the whole
+  // transcript one last time and printed a closing line. See stop.js.
+  const budget = mode.forSession({ sessionId });
+  if (budget.policy.briefStyle === 'none') return '';
+
   // The session is over, so as far as the panel is concerned it is idle.
   activity.mark('idle', sessionId, null, now);
 
