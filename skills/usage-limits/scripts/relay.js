@@ -1076,6 +1076,13 @@ function schedulePosix(when, argv, name, cwd) {
 
 function schedule(when, argv, name, cwd, deadline) {
   if (process.platform === 'win32') return scheduleWindows(when, argv, name, cwd, deadline);
+  // The same refusal the Windows route makes. The `at` spawn below may wait
+  // twenty seconds, inside a hook that is killed at ten, and a hook with no
+  // time left must say so rather than start a registration it cannot finish -
+  // the deadline was passed here and ignored on every platform but one.
+  if (Number.isFinite(deadline) && deadline - Date.now() < 1500) {
+    return { ok: false, error: 'no time left in this hook to register the wake; it will arm on the next prompt' };
+  }
   return schedulePosix(when, argv, name, cwd);
 }
 

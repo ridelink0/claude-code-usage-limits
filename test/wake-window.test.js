@@ -94,9 +94,12 @@ test('a window that dies at once reports the exit code; one that keeps running i
     assert.strictEqual(dead.ok, false);
     assert.match(dead.error, /exited 3/);
     assert.strictEqual(fs.readFileSync(path.join(dir, 'relay-wake-sess-1234.md'), 'utf8').trim(), 'the plan', 'the hand-off is on disk for the pointer');
-    const launcher = fs.readFileSync(path.join(dir, 'relay-wake-sess-1234.cmd'), 'utf8');
+    // Each platform writes its own launcher: a .cmd on Windows, a .sh elsewhere,
+    // with that shell's own quoting.
+    const win = process.platform === 'win32';
+    const launcher = fs.readFileSync(path.join(dir, 'relay-wake-sess-1234' + (win ? '.cmd' : '.sh')), 'utf8');
     assert.ok(launcher.includes('--remote-control'));
-    assert.ok(launcher.includes('"--model" "opus"'));
+    assert.ok(launcher.includes(win ? '"--model" "opus"' : "'--model' 'opus'"));
     assert.strictEqual(runs.length, 1);
     assert.match(runs[0], /exit 3/);
 

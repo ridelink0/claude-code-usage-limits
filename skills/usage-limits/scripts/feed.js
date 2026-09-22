@@ -397,7 +397,13 @@ function runPrevious(command, raw, env, budgetMs) {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'ignore'],
     });
-    if (result.error || result.status !== 0) return '';
+    // A command that never reads its stdin - echo, most one-line status lines -
+    // can exit before the JSON is written, and the write then fails with EPIPE.
+    // That says nothing about the command, which ran and printed. Measured on a
+    // Linux runner: the whole test took 85 ms, so no timeout was involved, and
+    // the line was dropped anyway. Only the command's own failure drops it.
+    if (result.status !== 0) return '';
+    if (result.error && result.error.code !== 'EPIPE') return '';
     return String(result.stdout || '').replace(/\s+$/, '');
   } catch (err) {
     return '';

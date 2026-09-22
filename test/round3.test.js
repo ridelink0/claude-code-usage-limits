@@ -221,7 +221,10 @@ test('the headless resume does not update itself at four in the morning', () => 
     delete process.env.DISABLE_AUTOUPDATER;
     const options = wake.spawnOptionsFor({ cwd: 'C:\\p' }, {}, 'claude.cmd');
     assert.strictEqual(options.env.DISABLE_AUTOUPDATER, '1');
-    assert.strictEqual(options.env.PATH, process.env.PATH, 'the rest of the environment is inherited');
+    // process.env is case-insensitive on Windows; a copy of it keeps the key the
+    // machine uses, which is Path on a stock Windows runner.
+    const pathKey = Object.keys(options.env).find((key) => key.toUpperCase() === 'PATH');
+    assert.strictEqual(options.env[pathKey], process.env.PATH, 'the rest of the environment is inherited');
     process.env.DISABLE_AUTOUPDATER = '0';
     assert.strictEqual(wake.spawnOptionsFor({ cwd: 'C:\\p' }, {}, 'claude.cmd').env.DISABLE_AUTOUPDATER, '0', 'a value already set is left alone');
   } finally {
