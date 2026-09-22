@@ -66,3 +66,28 @@ test('the same brief within ninety seconds is said once', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('how the last relay ended is said once per session, and a newer one is news again', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-relaylast-'));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  try {
+    delete require.cache[require.resolve('../skills/usage-limits/scripts/brief.js')];
+    const brief = require('../skills/usage-limits/scripts/brief.js');
+    const t = Date.parse('2026-09-22T22:00:00Z');
+    const lost = { endedAt: t - 3600e3, outcome: 'lost', detail: 'the wake started 10:53 and never reported back' };
+    assert.strictEqual(brief.relayNewsFor('s1', lost, t), lost);
+    // The next prompt of the same session: already told.
+    assert.strictEqual(brief.relayNewsFor('s1', lost, t + 60e3), null);
+    assert.strictEqual(brief.relayNewsFor('s1', lost, t + 5 * 3600e3), null);
+    // Another session has not heard it yet.
+    assert.strictEqual(brief.relayNewsFor('s2', lost, t + 60e3), lost);
+    // A different relay ending is news again.
+    const resumed = { endedAt: t + 2 * 3600e3, outcome: 'resumed' };
+    assert.strictEqual(brief.relayNewsFor('s1', resumed, t + 2 * 3600e3), resumed);
+    assert.strictEqual(brief.relayNewsFor('s1', null, t), null);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = before;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

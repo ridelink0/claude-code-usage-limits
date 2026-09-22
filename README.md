@@ -1304,6 +1304,13 @@ It is off until you set a number, it never fires without a reading behind it, an
 the refusal says what to do instead - a denial that only says "over budget" gets
 retried.
 
+It is judged on the fullest window this session can spend into, and the refusal
+names that window. A weekly scoped to one model counts only while that model
+runs - by the setting, or by the model the session's last reply came from, so a
+`/model` switch is seen - and a window whose reset has passed does not count.
+Until 1.39.0 it took the highest number on disk, and an Opus session was refused
+on the Fable weekly with a message calling it "the binding window".
+
 **Why a refusal rather than a sentence.** On Codex the reported figure
 demonstrably does not change behaviour, and the reason is not stubbornness.
 `gpt-6-astra`'s own system prompt, shipped in `models_cache.json`, says: *"Do not

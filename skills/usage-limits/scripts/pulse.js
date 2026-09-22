@@ -258,8 +258,10 @@ async function run(now, hookInput) {
   // ask the model to agree with it.
   if (event === 'PreToolUse' && ceiling.isMultiplier(tool)) {
     try {
+      const worst = ceilingPercent(now, null, hookInput && hookInput.transcript_path);
       const at = ceiling.assess({
-        percent: ceilingPercent(now),
+        percent: worst ? worst.percent : null,
+        label: worst ? worst.label : null,
         state: budget.state,
         env: process.env,
         // The cap only binds in the session that set it.
@@ -432,46 +434,76 @@ async function run(now, hookInput) {
   return recheck ? (spoken ? spoken + ' ' + recheck : recheck) : spoken;
 }
 
-// The cheapest percentage good enough to enforce a ceiling against.
+// The cheapest reading good enough to enforce a ceiling against.
 //
 // The ceiling is checked before every fan-out, which is far too often to scan
-// transcripts for. Two sources are already paid for: the corrected reading the
-// last scan left behind, and the account snapshot, which is one small file
-// read. The highest of them wins, because a ceiling means "no window past
-// here" - taking the emptiest window would be a ceiling that never binds.
+// transcripts for. snapshotWindows() is the no-scan view every other cheap
+// reader uses: the account snapshot, the corrections the last scan left
+// behind, and whether each window is one this agent can spend into. The
+// fullest of those wins, because a ceiling means "no window past here".
 //
-// Returns null when neither source has anything, and a ceiling with no reading
-// behind it never refuses. Guessing high would block work over a number nobody
+// This used to take the highest number on disk, whatever window it belonged
+// to - including a weekly scoped to a model this session was not running, and
+// the snapshot of a window that had already reset. See ceiling.worstWindow().
+//
+// Returns null when nothing is readable, and a ceiling with no reading behind
+// it never refuses. Guessing high would block work over a number nobody
 // measured; guessing low would not be a ceiling at all.
-function ceilingPercent(now) {
-  let worst = null;
-  const consider = (value) => {
-    if (!Number.isFinite(value)) return;
-    if (worst === null || value > worst) worst = value;
-  };
+function ceilingPercent(now, collected, transcriptPath) {
   const codexHome = usage.isCodex() ? require('./codex.js').homeDir() : null;
   try {
-    const entries = reading.read(codexHome);
-    for (const key of Object.keys(entries)) {
-      const entry = reading.correctedFor(key, now, null, codexHome);
-      if (entry) consider(entry.percentUsed);
-    }
+    const running = lastModel(transcriptPath);
+    return ceiling.worstWindow(
+      usage.snapshotWindows(collected || usage.collect(now), now, codexHome, running ? [running] : [])
+    );
   } catch (err) {
-    // A missing or unreadable correction just means the snapshot decides.
+    // No snapshot is a reason not to enforce, not a reason to throw.
+    return null;
   }
+}
+
+// The model this session's last reply came from, off the tail of its transcript.
+//
+// The setting says what a session started on; /model changes what it runs
+// without touching settings.json. A weekly scoped to the model actually
+// running must count, so the pulse adds this to the setting rather than
+// replacing it - suppressing a window takes both sides agreeing. One read of
+// the last 64 KB, from the end, whole lines only. Null on anything unexpected.
+function lastModel(transcriptPath) {
+  if (!transcriptPath) return null;
+  let fd = null;
   try {
-    const snapshot = usage.collect(now);
-    const utilization = snapshot && snapshot.utilization;
-    if (utilization && typeof utilization === 'object') {
-      for (const key of Object.keys(utilization)) {
-        const window = utilization[key];
-        if (window && typeof window === 'object') consider(Number(window.utilization));
+    fd = fs.openSync(transcriptPath, 'r');
+    const size = fs.fstatSync(fd).size;
+    const length = Math.min(size, 64 * 1024);
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, size - length);
+    const lines = buffer.toString('utf8').split('\n');
+    // The first line of a partial read is cut; only a read from the start is whole.
+    if (length < size) lines.shift();
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (!lines[i].includes('"assistant"')) continue;
+      try {
+        const entry = JSON.parse(lines[i]);
+        const model = entry && entry.type === 'assistant' && entry.message && entry.message.model;
+        // "<synthetic>" marks a reply Claude Code wrote itself, not a model.
+        if (model && typeof model === 'string' && !model.startsWith('<')) return model;
+      } catch (err) {
+        // A half-written last line while the transcript is being appended.
       }
     }
+    return null;
   } catch (err) {
-    // Same: no snapshot is a reason not to enforce, not a reason to throw.
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch (err) {
+        // Already closed is fine.
+      }
+    }
   }
-  return worst;
 }
 
 // PostToolUse does not take plain stdout as context the way UserPromptSubmit
@@ -568,5 +600,6 @@ module.exports = {
   envelope,
   refusal,
   ceilingPercent,
+  lastModel,
   run,
 };

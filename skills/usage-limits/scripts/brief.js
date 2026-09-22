@@ -132,7 +132,7 @@ function readSaid() {
   }
 }
 function keepSaidFor(key) {
-  return /#(standing|cachemiss|stale)$/.test(key) ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  return /#(standing|cachemiss|stale|relaylast)$/.test(key) ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
 }
 
 // A plugin update takes effect when Claude Code restarts, so a session that
@@ -173,6 +173,23 @@ function staleVersionFor(sessionId, now, dir) {
   writeSaid(all, at);
   return 'usage-limits ' + installed + ' is installed but this session still runs ' + running +
     ', because a plugin update applies at the next start; a relay or cap set here follows the older rules until then.';
+}
+// How the last relay ended is news once. It used to ride along for six hours
+// after any relay ended, on every prompt of every session: on 2026-09-22 a wake
+// lost at 5:53 AM was repeated in two sessions' briefs all afternoon, about
+// work neither of them was doing. Each session now hears about a given ended
+// relay once, keyed on when it ended and how.
+function relayNewsFor(sessionId, last, now) {
+  if (!last) return null;
+  const at = Number.isFinite(now) ? now : Date.now();
+  const key = String(sessionId || '_') + '#relaylast';
+  const seen = String(last.endedAt) + ':' + String(last.outcome);
+  const all = readSaid();
+  const entry = all[key];
+  if (entry && entry.seen === seen && Number.isFinite(entry.at) && at - entry.at < keepSaidFor(key)) return null;
+  all[key] = { at, seen };
+  writeSaid(all, at);
+  return last;
 }
 function writeSaid(all, at) {
   const next = {};
@@ -1281,7 +1298,9 @@ function relayState(now, hookInput, binding, sessionId) {
     const state = (relay.reapLost(Date.now()), relay.read());
     const config = relay.settings(state);
     const last = state.history[state.history.length - 1];
-    const recent = last && Number.isFinite(last.endedAt) && now - last.endedAt < 6 * 60 * 60 * 1000 ? last : null;
+    const ended = last && Number.isFinite(last.endedAt) && now - last.endedAt < 6 * 60 * 60 * 1000 ? last : null;
+    // Said once per session per ended relay, not on every prompt for six hours.
+    const recent = ended ? relayNewsFor(sessionId, ended, now) : null;
     if (!config.enabled) return recent ? { enabled: false, last: recent } : null;
 
     // Already armed for this session: nothing to decide, just say so.
@@ -1722,7 +1741,7 @@ function withBugcheck(text) {
   return text;
 }
 
-module.exports = { withBugcheck, sayOnce, shapeOf, saidFile, REPEAT_MS, staleVersionFor, installedVersion, runningVersion,
+module.exports = { withBugcheck, sayOnce, shapeOf, saidFile, REPEAT_MS, staleVersionFor, relayNewsFor, installedVersion, runningVersion,
   readSaid, standingSaid, markStanding, standingShortFor, STANDING_SHORT, cacheMissWhyFor, missReason, MISS_RECENT_MS,
   DEFAULTS,
   aheadOfPace,

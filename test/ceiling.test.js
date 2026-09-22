@@ -147,3 +147,119 @@ test('the environment cap needs no session - it is this process, said outright',
   assert.equal(at.over, true);
   assert.equal(at.source, 'environment');
 });
+
+// 2026-09-22: the Fable weekly at 89 per cent refused an Opus session's
+// fan-out, and the refusal called it "the binding window" while the brief
+// beside it said 5-hour 15. A weekly scoped to a model is only this agent's
+// limit while that model runs, and a window that has reset is over.
+test('the ceiling is judged on the fullest window that applies, never one that is idle or over', () => {
+  const windows = [
+    { key: 'five_hour', label: '5-hour', percentUsed: 15, applies: true, stale: false },
+    { key: 'seven_day', label: 'weekly', percentUsed: 77, applies: true, stale: false },
+    { key: 'seven_day_scoped:fable', label: 'weekly (Fable)', percentUsed: 89, applies: false, stale: false },
+    { key: 'seven_day_opus', label: 'weekly (Opus)', percentUsed: 99, applies: true, stale: true },
+  ];
+  assert.deepStrictEqual(ceiling.worstWindow(windows), { percent: 77, label: 'weekly' });
+  assert.strictEqual(ceiling.worstWindow([]), null);
+  assert.strictEqual(ceiling.worstWindow([{ key: 'x', percentUsed: null }]), null);
+});
+
+test('a refusal names the window its number belongs to, and never calls it binding', () => {
+  const named = ceiling.assess({ percent: 77, label: 'weekly', state: capped(75), env: NO_ENV, sessionId: SESSION });
+  const reason = ceiling.verdict(named, 'Agent').reason;
+  assert.match(reason, /^Usage ceiling reached: the weekly window is 77% used and the ceiling is 75%\./);
+  const unnamed = ceiling.assess({ percent: 77, state: capped(75), env: NO_ENV, sessionId: SESSION });
+  assert.match(ceiling.verdict(unnamed, 'Agent').reason, /the fullest window is 77% used/);
+  const near = ceiling.assess({ percent: 70, label: '5-hour', state: capped(75), env: NO_ENV, sessionId: SESSION });
+  assert.match(ceiling.warning(near), /the 5-hour window is 70% used/);
+  for (const text of [reason, ceiling.warning(near)]) assert.doesNotMatch(text, /binding/);
+});
+
+test('the pulse reads the snapshot the way every other reader does: a model-scoped weekly counts only while that model runs', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ul-ceiling-'));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  // Corrections live in the config dir; an empty one means the snapshot decides.
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  try {
+    const pulse = require('../skills/usage-limits/scripts/pulse.js');
+    const now = Date.parse('2026-09-22T22:00:00Z');
+    const later = (hours) => new Date(now + hours * 3600e3).toISOString();
+    const collected = (model) => ({
+      snapshotFetchedAt: now - 60e3,
+      settings: { model },
+      utilization: {
+        five_hour: { utilization: 15, resets_at: later(2) },
+        seven_day: { utilization: 77, resets_at: later(120) },
+        limits: [
+          { kind: 'weekly_scoped', percent: 89, resets_at: later(120), is_active: true,
+            scope: { model: { id: null, display_name: 'Fable' } } },
+        ],
+      },
+    });
+    assert.deepStrictEqual(pulse.ceilingPercent(now, collected('opus[1m]')), { percent: 77, label: 'weekly' });
+    // While Fable is the model, its weekly is this agent's wall.
+    assert.deepStrictEqual(pulse.ceilingPercent(now, collected('fable')), { percent: 89, label: 'weekly (Fable)' });
+    // No usable model setting: nothing is suppressed on a guess.
+    assert.strictEqual(pulse.ceilingPercent(now, collected(undefined)).percent, 89);
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a /model switch the setting never heard about still counts: the pulse reads the running model off the transcript', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ul-ceiling-model-'));
+  const before = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  try {
+    const pulse = require('../skills/usage-limits/scripts/pulse.js');
+    const transcript = path.join(dir, 'session.jsonl');
+    const line = (o) => JSON.stringify(o) + '\n';
+    fs.writeFileSync(transcript,
+      line({ type: 'user', message: { content: 'go' } }) +
+      line({ type: 'assistant', message: { model: 'claude-opus-5-5' } }) +
+      line({ type: 'assistant', message: { model: 'claude-fable-5-1' } }) +
+      // Claude Code's own synthetic reply is not a model.
+      line({ type: 'assistant', message: { model: '<synthetic>' } }) +
+      // A half-written line while the transcript is being appended.
+      '{"type":"assistant","message":{"mod');
+    assert.strictEqual(pulse.lastModel(transcript), 'claude-fable-5-1');
+    assert.strictEqual(pulse.lastModel(path.join(dir, 'missing.jsonl')), null);
+    assert.strictEqual(pulse.lastModel(null), null);
+
+    // Past 64 KB only the tail is read, and its cut first line is dropped.
+    const big = path.join(dir, 'big.jsonl');
+    fs.writeFileSync(big, line({ type: 'assistant', message: { model: 'claude-sonnet-5' } }) +
+      line({ type: 'user', message: { content: 'x'.repeat(70 * 1024) } }) +
+      line({ type: 'assistant', message: { model: 'claude-opus-5-5' } }));
+    assert.strictEqual(pulse.lastModel(big), 'claude-opus-5-5');
+
+    const now = Date.parse('2026-09-22T22:00:00Z');
+    const later = (hours) => new Date(now + hours * 3600e3).toISOString();
+    const collected = {
+      snapshotFetchedAt: now - 60e3,
+      settings: { model: 'opus[1m]' },
+      utilization: {
+        five_hour: { utilization: 15, resets_at: later(2) },
+        seven_day: { utilization: 77, resets_at: later(120) },
+        limits: [{ kind: 'weekly_scoped', percent: 89, resets_at: later(120), is_active: true,
+          scope: { model: { id: null, display_name: 'Fable' } } }],
+      },
+    };
+    // The setting says Opus, the session is running Fable: Fable's weekly binds.
+    assert.deepStrictEqual(pulse.ceilingPercent(now, collected, transcript), { percent: 89, label: 'weekly (Fable)' });
+    // The setting and the transcript agree on Opus: it does not.
+    assert.deepStrictEqual(pulse.ceilingPercent(now, collected, big), { percent: 77, label: 'weekly' });
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = before;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

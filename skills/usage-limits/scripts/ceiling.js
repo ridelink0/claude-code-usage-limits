@@ -115,15 +115,34 @@ function ceilingFrom(state, env, sessionId) {
   return { percent: stored, source: 'this session' };
 }
 
-// Where the binding window stands against the ceiling.
+// The window a ceiling is judged against: the fullest one this agent can spend
+// into.
 //
-// `percent` is the BINDING window's, not the emptiest one's. A ceiling read
-// against whichever window has the most left would never bind at all, which is
-// the same mistake the brief was corrected for.
+// Not the emptiest - a ceiling read against whichever window has the most left
+// would never bind. And not simply the fullest either: a weekly scoped to one
+// model is only this agent's limit while that model runs. On 2026-09-22 the
+// Fable weekly at 89 per cent refused an Opus session's fan-out and the refusal
+// called it "the binding window", while the brief beside it said 5-hour 15.
+// `windows` is usage.snapshotWindows(), which already carries `applies` and
+// `stale`; a window whose reset has passed describes a window that is over.
+function worstWindow(windows) {
+  let worst = null;
+  for (const window of Array.isArray(windows) ? windows : []) {
+    if (!window || window.applies === false || window.stale) continue;
+    if (!Number.isFinite(window.percentUsed)) continue;
+    if (!worst || window.percentUsed > worst.percent) {
+      worst = { percent: window.percentUsed, label: window.label || window.key || null };
+    }
+  }
+  return worst;
+}
+
+// Where that window stands against the ceiling.
 function assess(options) {
   const opts = options || {};
   const ceiling = ceilingFrom(opts.state, opts.env, opts.sessionId);
   const percent = Number.isFinite(opts.percent) ? opts.percent : null;
+  const label = opts.label ? String(opts.label) : null;
   if (ceiling.percent === null || percent === null) {
     return {
       set: ceiling.percent !== null,
@@ -133,6 +152,7 @@ function assess(options) {
       over: false,
       near: false,
       headroomPoints: null,
+      label,
       staleCap: ceiling.staleCap || null,
       otherSessionCap: ceiling.otherSessionCap || null,
     };
@@ -143,6 +163,7 @@ function assess(options) {
     source: ceiling.source,
     ceiling: ceiling.percent,
     percent,
+    label,
     over: percent >= ceiling.percent,
     near: headroomPoints > 0 && headroomPoints <= NEAR_POINTS,
     headroomPoints,
@@ -151,6 +172,12 @@ function assess(options) {
 
 function round(value) {
   return Math.round(value * 10) / 10;
+}
+
+// Names the window the number belongs to. A caller that passed no label gets
+// the plain truth rather than a claim that it is the binding one.
+function which(state) {
+  return state && state.label ? 'the ' + state.label + ' window' : 'the fullest window';
 }
 
 // What to do about one tool call.
@@ -164,7 +191,7 @@ function verdict(state, tool) {
   return {
     decision: 'deny',
     reason:
-      'Usage ceiling reached: the binding window is ' +
+      'Usage ceiling reached: ' + which(state) + ' is ' +
       round(state.percent) +
       '% used and the ceiling is ' +
       state.ceiling +
@@ -184,7 +211,7 @@ function warning(state) {
   return (
     'Usage ceiling in ' +
     round(state.headroomPoints) +
-    ' points: the binding window is ' +
+    ' points: ' + which(state) + ' is ' +
     round(state.percent) +
     '% used against a ceiling of ' +
     state.ceiling +
@@ -216,6 +243,7 @@ module.exports = {
   NEAR_POINTS,
   isMultiplier,
   ceilingFrom,
+  worstWindow,
   assess,
   verdict,
   warning,

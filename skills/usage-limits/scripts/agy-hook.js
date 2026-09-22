@@ -94,22 +94,19 @@ function toolNameOf(input) {
 // host that DOES have a meter, and because a ceiling that silently does
 // nothing on the day Antigravity starts publishing one would be worse.
 function percentNow(now) {
-  let worst = null;
+  // The same no-scan view and the same rule as the Claude Code pulse: the
+  // fullest window this agent can spend into, never a window that has reset.
   try {
-    const snapshot = usage.collect(now);
-    const utilization = snapshot && snapshot.utilization;
-    if (utilization && typeof utilization === 'object') {
-      for (const key of Object.keys(utilization)) {
-        const window = utilization[key];
-        if (!window || typeof window !== 'object') continue;
-        const value = Number(window.utilization);
-        if (Number.isFinite(value) && (worst === null || value > worst)) worst = value;
-      }
-    }
+    return ceiling.worstWindow(usage.snapshotWindows(usage.collect(now), now, null));
   } catch (err) {
     // No reading is a reason not to enforce, never a reason to throw.
+    return null;
   }
-  return worst;
+}
+
+// assess() takes the number and the name of the window it belongs to.
+function reading(worst) {
+  return { percent: worst ? worst.percent : null, label: worst ? worst.label : null };
 }
 
 async function run(now, input, argv) {
@@ -124,7 +121,7 @@ async function run(now, input, argv) {
   if (event === 'PreToolUse') {
     const tool = toolNameOf(input);
     if (!ceiling.isMultiplier(tool)) return {};
-    const at = ceiling.assess({ percent: percentNow(now), state: budget.state, env: process.env, sessionId });
+    const at = ceiling.assess(Object.assign({ state: budget.state, env: process.env, sessionId }, reading(percentNow(now))));
     const call = ceiling.verdict(at, tool);
     if (call.decision !== 'deny') return {};
     return { decision: 'deny', reason: call.reason };
@@ -141,7 +138,7 @@ async function run(now, input, argv) {
       text = '';
     }
     const warning = ceiling.warning(
-      ceiling.assess({ percent: percentNow(now), state: budget.state, env: process.env, sessionId })
+      ceiling.assess(Object.assign({ state: budget.state, env: process.env, sessionId }, reading(percentNow(now))))
     );
     const message = [text, warning].filter(Boolean).join(' ');
     return message ? { injectSteps: [{ ephemeralMessage: message }] } : { injectSteps: [] };

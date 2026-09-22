@@ -2700,16 +2700,20 @@ function limitWindows(utilization) {
 // So: the bucket keys first, the `limits` array for anything they did not
 // cover, real labels on both, corrections applied, and the same applies-flag
 // every other reader makes its decisions from.
-function snapshotWindows(collected, now, codexHome) {
+function snapshotWindows(collected, now, codexHome, extraModels) {
   const utilization = collected && collected.utilization;
   if (!utilization) return [];
   const at = Number.isFinite(now) ? now : Date.now();
   // No transcripts here on purpose - that is the cost being avoided - so the
   // setting is the only thing that says which model is running. It is enough
   // to keep a weekly for a model this agent is not using out of a worst-of.
+  // A caller that knows what the session is actually running - the pulse reads
+  // it off the transcript tail - adds it, so a /model switch the setting never
+  // heard about cannot suppress the window being spent.
   const families = familiesInUse(null, null, [
     collected.settings && collected.settings.model,
     process.env.ANTHROPIC_MODEL,
+    ...(Array.isArray(extraModels) ? extraModels : []),
   ]);
   const specs = collected.windowSpecs && collected.windowSpecs.length ? collected.windowSpecs : WINDOWS;
   const byKey = new Map();
