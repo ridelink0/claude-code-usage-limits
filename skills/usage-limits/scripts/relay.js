@@ -1042,7 +1042,7 @@ function scheduleWindows(when, argv, name, cwd, deadline) {
   }
 }
 
-function schedulePosix(when, argv, name, cwd) {
+function schedulePosix(when, argv, name, cwd, deadline) {
   const seconds = Math.max(60, Math.round((when - Date.now()) / 1000));
   // `at` is the right tool and is absent on most desktops now. A detached
   // sleeper is second best: it survives the terminal closing, but not a
@@ -1051,9 +1051,12 @@ function schedulePosix(when, argv, name, cwd) {
   const at = spawnSync('sh', ['-c', 'command -v at >/dev/null 2>&1 && echo yes || echo no'], { encoding: 'utf8' });
   if ((at.stdout || '').trim() === 'yes') {
     const minutes = Math.max(1, Math.round(seconds / 60));
+    // Bounded by what the caller has left, like the Windows route: a hook is
+    // killed at ten seconds and this used to wait twenty. An `at` that runs
+    // out of time falls through to the sleeper below, which returns at once.
     const run = spawnSync('sh', ['-c', 'echo ' + JSON.stringify(command) + ' | at now + ' + minutes + ' minutes'], {
       encoding: 'utf8',
-      timeout: 20000,
+      timeout: Math.max(1000, remainingMs(deadline, 20000)),
     });
     // macOS ships `at` but launchd leaves atrun DISABLED by default, so the
     // command succeeds, prints a job id, and the wake never fires. Reporting
@@ -1083,7 +1086,7 @@ function schedule(when, argv, name, cwd, deadline) {
   if (Number.isFinite(deadline) && deadline - Date.now() < 1500) {
     return { ok: false, error: 'no time left in this hook to register the wake; it will arm on the next prompt' };
   }
-  return schedulePosix(when, argv, name, cwd);
+  return schedulePosix(when, argv, name, cwd, deadline);
 }
 
 function cancelSchedule(name) {
