@@ -112,7 +112,21 @@ function detect(argv, env) {
   return CLAUDE;
 }
 
+// Codex hook payloads always carry turn_id; Claude Code's never do. Codex also
+// loads an installed plugin's Claude-style hooks/hooks.json, which runs these
+// scripts with no --host and may set CLAUDE_PLUGIN_ROOT, so detect() alone
+// called that Codex turn Claude Code and briefed Claude's budget into Codex.
+// An explicit --host or USAGE_LIMITS_HOST still wins.
+function detectFromHook(argv, env, input) {
+  const args = argv || [];
+  const environment = env || process.env;
+  if (args.includes('--host') || normalise(environment.USAGE_LIMITS_HOST)) return detect(args, environment);
+  if (input && typeof input === 'object' && input.turn_id !== undefined && input.turn_id !== null) return CODEX;
+  return detect(args, environment);
+}
+
 module.exports = {
+  detectFromHook,
   CLAUDE,
   CODEX,
   GEMINI,

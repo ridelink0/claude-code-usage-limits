@@ -777,6 +777,30 @@ function liveFile() {
   return path.join(homeDir(), 'usage-limits-codex-live.json');
 }
 
+// The app-server's account/rateLimits/read answers in camelCase (usedPercent,
+// windowDurationMins, resetsAt, planType ...) while rollouts and every reader
+// here use snake_case. Stored as received, a fresh live reading was invisible
+// to readingsOf() and the brief, pulse and ceiling all went blind on Codex.
+// One conversion, applied where a reading is taken and again where the file
+// is read back, because a camelCase file may already be on disk.
+const METER_RENAMES = { window_duration_mins: 'window_minutes' };
+function snakeKey(key) {
+  const snake = String(key).replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
+  return METER_RENAMES[snake] || snake;
+}
+function normalizeMeter(meter) {
+  if (Array.isArray(meter)) return meter.map(normalizeMeter);
+  if (!meter || typeof meter !== 'object') return meter;
+  const out = {};
+  for (const [key, value] of Object.entries(meter)) {
+    const name = snakeKey(key);
+    // A snake_case field that is already there wins over a converted twin.
+    if (Object.prototype.hasOwnProperty.call(out, name) && name !== key) continue;
+    out[name] = normalizeMeter(value);
+  }
+  return out;
+}
+
 function readLiveMeter() {
   let parsed;
   try {
@@ -786,7 +810,7 @@ function readLiveMeter() {
   }
   if (!parsed || typeof parsed !== 'object') return null;
   if (!Number.isFinite(parsed.at) || !parsed.meter || typeof parsed.meter !== 'object') return null;
-  return parsed;
+  return Object.assign({}, parsed, { meter: normalizeMeter(parsed.meter) });
 }
 
 function writeLiveMeter(reading) {
@@ -1045,7 +1069,7 @@ function refresh(options) {
             return;
           }
           const limits = message.result && message.result.rateLimits;
-          finish(null, { at: Date.now(), meter: limits || null });
+          finish(null, { at: Date.now(), meter: limits ? normalizeMeter(limits) : null });
           return;
         }
       }
@@ -1073,6 +1097,7 @@ module.exports = {
   SLOTS,
   WEIGHTS,
   PLANS,
+  normalizeMeter,
   homeDir,
   sessionsDir,
   findExecutable,

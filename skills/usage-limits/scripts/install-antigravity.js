@@ -77,7 +77,9 @@ function hooks() {
     'usage-limits-ceiling': {
       PreToolUse: [
         {
-          matcher: '.*',
+          // Only the fan-out tools: a node start before every tool call cost
+          // 3-6 s each here, and ordinary tools have nothing to ask the ceiling.
+          matcher: 'invoke_subagent|browser_subagent',
           hooks: [{ type: 'command', command: hookCommand('PreToolUse'), timeout: 10 }],
         },
       ],

@@ -33,7 +33,12 @@ const usage = require('./usage.js');
 const host = require('./host.js');
 const mode = require('./mode.js');
 const ceiling = require('./ceiling.js');
-const brief = require('./brief.js');
+// brief.js is loaded only on PreInvocation: PreToolUse runs before tool calls
+// and must stay a few small requires, not the whole brief.
+
+// PreToolUse must always name a decision. Antigravity reads an answer with no
+// decision as a refusal, so the old bare {} blocked every tool it ran on.
+const ALLOW = { decision: 'allow' };
 
 const EVENTS = ['PreInvocation', 'PostInvocation', 'PreToolUse', 'PostToolUse', 'Stop'];
 
@@ -116,14 +121,14 @@ async function run(now, input, argv) {
   usage.setHost(host.GEMINI);
   const sessionId = input && input.conversationId ? String(input.conversationId) : null;
   const budget = mode.forSession({ sessionId });
-  if (budget.policy.briefStyle === 'none') return {};
+  if (budget.policy.briefStyle === 'none') return event === 'PreToolUse' ? ALLOW : {};
 
   if (event === 'PreToolUse') {
     const tool = toolNameOf(input);
-    if (!ceiling.isMultiplier(tool)) return {};
+    if (!ceiling.isMultiplier(tool)) return ALLOW;
     const at = ceiling.assess(Object.assign({ state: budget.state, env: process.env, sessionId }, reading(percentNow(now))));
     const call = ceiling.verdict(at, tool);
-    if (call.decision !== 'deny') return {};
+    if (call.decision !== 'deny') return ALLOW;
     return { decision: 'deny', reason: call.reason };
   }
 
@@ -133,7 +138,7 @@ async function run(now, input, argv) {
     // transient system message, which is exactly what a per-turn figure is.
     let text = '';
     try {
-      text = await brief.run(now, input);
+      text = await require('./brief.js').run(now, input, { host: host.GEMINI });
     } catch (err) {
       text = '';
     }
@@ -162,11 +167,13 @@ if (require.main === module) {
       },
       () => {
         // Hooks block the agent loop here, so a failure has to be silent and
-        // well formed rather than loud.
-        process.stdout.write('{}\n');
+        // well formed rather than loud - and on PreToolUse, well formed means
+        // an explicit allow, never a bare {} that reads as a refusal.
+        const pre = process.argv.slice(2).join(' ').includes('--event PreToolUse');
+        process.stdout.write(JSON.stringify(pre ? ALLOW : {}) + '\n');
         process.exit(0);
       }
     );
 }
 
-module.exports = { EVENTS, eventFrom, toolNameOf, percentNow, run };
+module.exports = { EVENTS, ALLOW, eventFrom, toolNameOf, percentNow, run };

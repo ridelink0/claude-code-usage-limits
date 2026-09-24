@@ -50,7 +50,8 @@ const MULTIPLIERS = [
 // Antigravity derives tool names by lowercasing the step type and stripping
 // CORTEX_STEP_TYPE_, so its names are snake_case and cannot be matched by the
 // list above.
-const MULTIPLIER_PATTERN = /^(agent|task|workflow|subagent|dispatch|spawn_[a-z_]*agent|run_[a-z_]*agent)$/i;
+// invoke_subagent and browser_subagent are the two Antigravity fan-out tools.
+const MULTIPLIER_PATTERN = /^(agent|task|workflow|subagent|dispatch|spawn_[a-z_]*agent|run_[a-z_]*agent|invoke_subagent|browser_subagent)$/i;
 
 // How far below the ceiling the warning starts. Ten points is about one long
 // turn at xhigh on a 5-hour window, which is the last moment a warning can

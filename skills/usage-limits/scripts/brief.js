@@ -1411,7 +1411,12 @@ function fastModeFor(sessionId) {
   }
 }
 
-async function run(now, hookInput) {
+const GEMINI_UNREADABLE =
+  "[usage-limits] Antigravity's quota is not readable by this plugin, so there is no budget figure and no fan-out ceiling here; Antigravity's own usage panel has the number.";
+const LIMIT_REACHED =
+  '[usage-limits] The meter says the usage limit is reached. Start nothing new: save the work, write the hand-off note in this turn, and end the turn.';
+
+async function run(now, hookInput, opts) {
   if (String(process.env.USAGE_LIMITS_BRIEF || '').toLowerCase() === 'off') return '';
 
   const sessionId = hookInput && (hookInput.session_id || hookInput.conversationId) ? (hookInput.session_id || hookInput.conversationId) : null;
@@ -1424,15 +1429,21 @@ async function run(now, hookInput) {
   const budget = mode.forSession({ sessionId });
   if (budget.policy.briefStyle === 'none') return guardLine(now, budget);
 
-  // Settle host here, before any file is read.
-  const detectedHost = host.detect(process.argv.slice(2), process.env);
-  const effectiveHost = (hookInput && (hookInput.conversationId || hookInput.invocationNum !== undefined))
-    ? host.GEMINI
-    : detectedHost;
-  usage.setHost(effectiveHost);
+  // Settle host here, before any file is read. A caller that already knows the
+  // host (agy-hook runs only inside Antigravity) says so, and that wins over
+  // detection: an empty or unparseable payload used to fall through to
+  // Claude Code and put Claude's usage, model and session into Antigravity.
+  const detectedHost = host.detectFromHook(process.argv.slice(2), process.env, hookInput);
+  const effectiveHost = (opts && opts.host)
+    || ((hookInput && (hookInput.conversationId || hookInput.invocationNum !== undefined))
+      ? host.GEMINI
+      : detectedHost);
+  const gemini = usage.setHost(effectiveHost) === host.GEMINI;
   // A prompt has arrived, so this session is working, and the prompt itself
-  // says whether it asked for ultracode. The panel animates from this.
-  activity.mark(
+  // says whether it asked for ultracode. The panel animates from this. The
+  // activity file is Claude Code's, so an Antigravity conversation is never
+  // counted in it.
+  if (!gemini) activity.mark(
     'working',
     sessionId,
     Object.assign(
@@ -1469,7 +1480,11 @@ async function run(now, hookInput) {
   // one quick failure and then a widening backoff, never a wait on every
   // prompt; USAGE_LIMITS_FETCH=off turns it off.
   try {
-    if (usage.isCodex()) {
+    if (gemini) {
+      // Antigravity publishes no meter this plugin can read, and refreshing
+      // Claude's /usage reading from inside Antigravity spends a request on
+      // the wrong account.
+    } else if (usage.isCodex()) {
       // Codex only writes its meter when it makes a request, so between turns
       // the newest figure can be half an hour old. Ask it, the way /status
       // does, when the reading has aged.
@@ -1492,7 +1507,13 @@ async function run(now, hookInput) {
     // The reading on disk is still there.
   }
   const base = usage.collect(now);
-  if (!base.utilization) return '';
+  if (!base.utilization) {
+    if (gemini) return sayOnce(sessionId, GEMINI_UNREADABLE, now);
+    // Codex can say a limit is already hit while giving no percentage; that
+    // is the plainest reading there is, not a missing one.
+    if (base.reachedType || base.spendControlReached) return sayOnce(sessionId, LIMIT_REACHED, now);
+    return '';
+  }
 
   const all = readCache();
   // Which setting the fit question was already asked for, read BEFORE anything

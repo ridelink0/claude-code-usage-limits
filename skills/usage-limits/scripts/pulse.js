@@ -225,7 +225,7 @@ async function run(now, hookInput) {
   const budget = mode.forSession({ sessionId });
   if (budget.policy.refreshSeconds === 0) return '';
 
-  usage.setHost(host.detect(process.argv.slice(2), process.env));
+  usage.setHost(host.detectFromHook(process.argv.slice(2), process.env, hookInput));
 
   // A subagent finishing is the other reason to look, and on a busy afternoon
   // it is the more important one.
