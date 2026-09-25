@@ -686,11 +686,19 @@ function briefText(input) {
   if (Number.isFinite(parts.turnsLeft)) {
     // Another session spending the same budget means fewer of those turns are
     // yours, so say both numbers rather than the flattering one.
+    // The stance below is judged on yourTurnsLeft, so whenever that is the
+    // smaller number it has to be on the line too. Printing only the window's
+    // figure is how a brief came to say "the budget is nearly gone" beside
+    // "about 594 turns of headroom": both were true, of different numbers.
+    const yours = Number.isFinite(parts.yourTurnsLeft) ? parts.yourTurnsLeft : null;
+    const fewerYours = yours !== null && yours < parts.turnsLeft * 0.75;
     const shared =
-      parts.sessions > 1 && Number.isFinite(parts.yourTurnsLeft)
-        ? ' (' + parts.sessions + ' sessions active, roughly ' + parts.yourTurnsLeft +
+      parts.sessions > 1 && yours !== null
+        ? ' (' + parts.sessions + ' sessions active, roughly ' + yours +
           ' of them yours)'
-        : '';
+        : fewerYours
+          ? ' (about ' + count(yours, 'turn') + ' of that yours at this context size)'
+          : '';
     bound.push('about ' + count(parts.turnsLeft, 'turn') + ' of headroom' + shared);
     // A turn count is a poor sense of urgency when several agents are spending
     // at once: two hundred turns sounds like plenty and can be gone in ten

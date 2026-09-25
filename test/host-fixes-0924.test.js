@@ -100,3 +100,22 @@ test('a Codex payload (turn_id) is Codex even when Codex runs the Claude-style p
   // A Claude Code payload has no turn_id and keeps the old detection.
   assert.equal(host.detectFromHook([], bare, { session_id: 's' }), host.CLAUDE);
 });
+
+// The stance is judged on this session's own headroom, so when that is the
+// smaller number the line has to carry it: a brief once said "the budget is
+// nearly gone" beside "about 594 turns of headroom".
+test('the brief names your own headroom when it is the number being judged', () => {
+  const brief = require(path.join(SCRIPTS, 'brief.js'));
+  const base = {
+    binding: { key: 'five_hour', label: '5-hour', percentUsed: 3, stale: false },
+    othersSummary: 'weekly 2%', turnsLeft: 594, resetsIn: '4h 53m', sessions: 1,
+  };
+  const tight = brief.briefText({ ...base, yourTurnsLeft: 9, pressure: 'tight' });
+  assert.match(tight, /about 594 turns of headroom \(about 9 turns of that yours at this context size\)/);
+  // One session, and the two figures agree: no extra clause to add.
+  const roomy = brief.briefText({ ...base, yourTurnsLeft: 560, pressure: 'roomy' });
+  assert.doesNotMatch(roomy, /of that yours/);
+  // Several sessions keep the wording they already had.
+  const shared = brief.briefText({ ...base, sessions: 3, yourTurnsLeft: 120, pressure: 'roomy' });
+  assert.match(shared, /3 sessions active, roughly 120 of them yours/);
+});
