@@ -830,6 +830,72 @@ function attemptFile() {
   return path.join(homeDir(), 'usage-limits-codex-fetch.json');
 }
 
+// How long a detached refresh is given before another hook may start one. The
+// child is not waited on, so this claim is the only thing stopping every hook
+// in a burst from launching its own app-server.
+const DETACHED_GUARD_MS = 45 * 1000;
+
+// A detached refresh sits outside everybody's hook budget, so it can afford to
+// wait out a cold start instead of giving up at four seconds.
+const DETACHED_TIMEOUT_MS = 25 * 1000;
+
+// Start the refresh in a child nobody waits for.
+//
+// This is the answer to the hook timeout. Codex kills a hook at ten seconds,
+// and `codex app-server` can take more than four to answer cold - so a hook
+// that waits for the reading is a hook that gets killed, and a killed hook
+// says nothing at all. Here the hook returns immediately and the reading lands
+// in liveFile() a second or two later, where the NEXT hook reads it. One turn
+// of latency for a figure that is refreshed every few minutes anyway.
+function spawnRefresh(options) {
+  const opts = options || {};
+  const spawn = opts.spawn || require('child_process').spawn;
+  const args = [__filename, '--refresh-meter'];
+  if (opts.codexPath) args.push('--codex-path', String(opts.codexPath));
+  const child = spawn(opts.execPath || process.execPath, args, {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    // The child reads CODEX_HOME to find the same home directory this process
+    // is using, so a test or a non-default install refreshes the right file.
+    env: Object.assign({}, opts.env || process.env, { CODEX_HOME: homeDir() }),
+  });
+  if (child && typeof child.unref === 'function') child.unref();
+  return child;
+}
+
+// Take the reading and record it, with no staleness or backoff check. This is
+// the half of refreshIfStale() that actually costs something, split out so the
+// detached child can run it without tripping over the in-flight claim the
+// parent just wrote.
+async function fetchAndRecord(options) {
+  const opts = options || {};
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const maxAgeMs = Number.isFinite(opts.maxAgeMs) ? opts.maxAgeMs : 3 * MINUTE;
+  const claim = (delayMs, kind) => {
+    try {
+      fs.writeFileSync(attemptFile(), JSON.stringify({ attemptedAtMs: now, delayMs, kind }), 'utf8');
+    } catch (err) {
+      // One extra attempt is survivable.
+    }
+  };
+  try {
+    const reading = await refresh({ codexPath: opts.codexPath, timeoutMs: opts.timeoutMs });
+    if (!reading || !reading.meter) {
+      claim(maxAgeMs, 'empty');
+      return { reading: null, error: 'no meter' };
+    }
+    writeLiveMeter(reading);
+    claim(maxAgeMs, 'ok');
+    return { reading, error: null };
+  } catch (err) {
+    // Codex missing or not answering: back off rather than pay for it again on
+    // every prompt.
+    claim(Math.min(10 * MINUTE, Math.max(2 * MINUTE, maxAgeMs * 2)), (err && err.code) || 'error');
+    return { reading: null, error: (err && err.code) || 'error' };
+  }
+}
+
 // Ask Codex for the meter, but only when the newest reading on disk has aged,
 // and never twice in quick succession. Codex writes its meter into a rollout
 // only when it makes a request, so between turns the newest reading can be
@@ -869,23 +935,32 @@ async function refreshIfStale(options) {
       // One extra attempt is survivable.
     }
   };
+  // The hook's own path: start the reading and get out of the way. Waiting for
+  // `codex app-server` inside a hook is what overran Codex's ten-second limit
+  // under load - the cold start alone has been measured past four seconds, and
+  // the brief still has a transcript scan to do after it. The child writes the
+  // meter file; the next hook reads it.
+  if (opts.detach) {
+    claim(DETACHED_GUARD_MS, 'detached');
+    try {
+      spawnRefresh({ codexPath: opts.codexPath, spawn: opts.spawn, execPath: opts.execPath, env: env });
+    } catch (err) {
+      claim(Math.max(2 * MINUTE, maxAgeMs), 'spawn-failed');
+      return { reading: live, skipped: null, error: 'spawn failed' };
+    }
+    return { reading: live, skipped: 'detached' };
+  }
+
   claim(Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 8000, 'inflight');
 
-  try {
-    const reading = await refresh({ codexPath: opts.codexPath, timeoutMs: opts.timeoutMs });
-    if (!reading || !reading.meter) {
-      claim(maxAgeMs, 'empty');
-      return { reading: live, skipped: null, error: 'no meter' };
-    }
-    writeLiveMeter(reading);
-    claim(maxAgeMs, 'ok');
-    return { reading, skipped: null };
-  } catch (err) {
-    // Codex missing or not answering: back off rather than pay for it again on
-    // every prompt.
-    claim(Math.min(10 * MINUTE, Math.max(2 * MINUTE, maxAgeMs * 2)), (err && err.code) || 'error');
-    return { reading: live, skipped: null, error: (err && err.code) || 'error' };
-  }
+  const done = await fetchAndRecord({
+    now,
+    maxAgeMs,
+    timeoutMs: opts.timeoutMs,
+    codexPath: opts.codexPath,
+  });
+  if (done.error) return { reading: live, skipped: null, error: done.error };
+  return { reading: done.reading, skipped: null };
 }
 
 function collect(now, options) {
@@ -1093,10 +1168,39 @@ function refresh(options) {
   });
 }
 
+// The detached refresh, run as `node codex.js --refresh-meter`. Nothing waits
+// for this process, so it can spend the cold start a hook cannot.
+if (require.main === module) {
+  const argv = process.argv.slice(2);
+  if (argv[0] !== '--refresh-meter') {
+    process.stderr.write('codex.js: only --refresh-meter is runnable\n');
+    process.exitCode = 2;
+  } else {
+    const at = argv.indexOf('--codex-path');
+    fetchAndRecord({
+      now: Date.now(),
+      timeoutMs: DETACHED_TIMEOUT_MS,
+      codexPath: at !== -1 ? argv[at + 1] : null,
+    })
+      .catch(() => null)
+      .then(() => {
+        // The app-server is asked to stop by having its stdin closed, which
+        // refresh() has already done. This timer is deliberately not unref'd:
+        // it is the one thing that ends this process if the child it started
+        // does not exit on its own.
+        setTimeout(() => process.exit(0), 2000);
+      });
+  }
+}
+
 module.exports = {
   SLOTS,
   WEIGHTS,
   PLANS,
+  DETACHED_GUARD_MS,
+  DETACHED_TIMEOUT_MS,
+  spawnRefresh,
+  fetchAndRecord,
   normalizeMeter,
   homeDir,
   sessionsDir,

@@ -44,20 +44,66 @@ function pluginDir() {
 }
 
 // Forward slashes on every platform. They work in Windows paths and keep the
-// command free of escapes in both JSON and the shell that runs it. Antigravity
-// runs hook commands through `cmd /c` on Windows and `sh -c` elsewhere, so the
-// quoting has to survive both.
-function quote(file) {
-  const normalized = String(file).replace(/\\/g, '/');
-  return normalized.includes(' ') ? '"' + normalized + '"' : normalized;
+// command free of escapes in both JSON and the shell that runs it.
+function slashes(file) {
+  return String(file).replace(/\\/g, '/');
 }
 
 function scriptPath(name) {
   return path.join(__dirname, name);
 }
 
-function hookCommand(event) {
-  return 'node ' + quote(scriptPath('agy-hook.js')) + ' --event ' + event;
+// The name of the launcher written beside hooks.json.
+const LAUNCHER = 'agy-hook.js';
+
+// A hook command a shell cannot mangle.
+//
+// Antigravity runs hook commands through `cmd /c` on Windows. It does not pass
+// /s, so cmd applies its own quote rule: the outer quotes are stripped only
+// when the string carries exactly one pair. A path with a space in it needs a
+// pair of its own, which makes three, and cmd then keeps them all - the command
+// name becomes the whole quoted string and node is handed `C:/Users/Some` as
+// its script. That is not a theory: a checkout under a directory with a space
+// in its name installed cleanly and every hook then failed silently, because
+// Antigravity reports nothing when a hook cannot start.
+//
+// So the command carries no quotes at all, which means it must carry no spaces
+// either. Two ways to get there, and the one used depends on the path:
+//
+//   - the plugin directory has no space: name the launcher absolutely, exactly
+//     as before, and nothing depends on the working directory
+//   - it does: name it relatively. Hooks run with their working directory set
+//     to the folder holding hooks.json, which is where the launcher is written
+//
+// Either way the real path into this checkout lives inside the launcher, as
+// JavaScript, where no shell ever sees it.
+function launcherPath() {
+  return path.join(pluginDir(), LAUNCHER);
+}
+
+function hookCommand(event, dir) {
+  const absolute = slashes(dir === undefined ? launcherPath() : path.join(dir, LAUNCHER));
+  const target = absolute.includes(' ') ? LAUNCHER : absolute;
+  return 'node ' + target + ' --event ' + event;
+}
+
+// The launcher itself. It exists so the command above needs no path: requiring
+// the real script by absolute path is a string in a JS file, which survives any
+// amount of shell quoting, and calling main() is what `node agy-hook.js` would
+// have done.
+function launcherText() {
+  return [
+    "'use strict';",
+    '',
+    '// Written by install-antigravity.js. Do not edit: `on` rewrites it.',
+    '//',
+    '// The hook command that runs this file carries no path and no quotes,',
+    "// because Antigravity's `cmd /c` keeps the quotes around a path with a",
+    '// space in it and node is then handed a truncated script name. The path',
+    '// lives here instead, where only node reads it.',
+    'require(' + JSON.stringify(slashes(scriptPath('agy-hook.js'))) + ').main(process.argv.slice(2));',
+    '',
+  ].join('\n');
 }
 
 function manifest() {
@@ -155,6 +201,9 @@ function enable() {
   }
   const dir = pluginDir();
   writeFile(path.join(dir, 'plugin.json'), JSON.stringify(manifest(), null, 2) + '\n');
+  // Before hooks.json, so the file the commands name is never missing while
+  // they are readable.
+  writeFile(path.join(dir, LAUNCHER), launcherText());
   writeFile(path.join(dir, 'hooks.json'), JSON.stringify(hooks(), null, 2) + '\n');
   const rules = rulesText();
   if (rules) writeFile(path.join(dir, 'rules', 'AGENTS.md'), rules);
@@ -178,7 +227,7 @@ function disable() {
   const dir = pluginDir();
   if (!installed()) return 'Not installed. Nothing to remove.';
   const removed = [];
-  for (const relative of ['plugin.json', 'hooks.json', path.join('rules', 'AGENTS.md')]) {
+  for (const relative of ['plugin.json', 'hooks.json', LAUNCHER, path.join('rules', 'AGENTS.md')]) {
     const file = path.join(dir, relative);
     try {
       fs.unlinkSync(file);

@@ -157,9 +157,14 @@ async function run(now, input, argv) {
   return {};
 }
 
-if (require.main === module) {
-  readInput()
-    .then((input) => run(Date.now(), input, process.argv.slice(2)))
+// Read stdin, answer, exit zero. A function rather than a bare block because
+// the installer's launcher calls it: see install-antigravity.js, which writes a
+// two-line launcher beside hooks.json so the hook command carries no path and
+// therefore no quotes for `cmd /c` to mangle.
+function main(argv) {
+  const args = argv || [];
+  return readInput()
+    .then((input) => run(Date.now(), input, args))
     .then(
       (result) => {
         process.stdout.write(JSON.stringify(result || {}) + '\n');
@@ -169,11 +174,13 @@ if (require.main === module) {
         // Hooks block the agent loop here, so a failure has to be silent and
         // well formed rather than loud - and on PreToolUse, well formed means
         // an explicit allow, never a bare {} that reads as a refusal.
-        const pre = process.argv.slice(2).join(' ').includes('--event PreToolUse');
+        const pre = args.join(' ').includes('--event PreToolUse');
         process.stdout.write(JSON.stringify(pre ? ALLOW : {}) + '\n');
         process.exit(0);
       }
     );
 }
 
-module.exports = { EVENTS, ALLOW, eventFrom, toolNameOf, percentNow, run };
+if (require.main === module) main(process.argv.slice(2));
+
+module.exports = { EVENTS, ALLOW, eventFrom, toolNameOf, percentNow, run, main };

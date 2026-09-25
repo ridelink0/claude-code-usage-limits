@@ -312,16 +312,26 @@ async function run(now, hookInput) {
   // against the account rather than against a guess from its own transcript.
   try {
     if (usage.isCodex()) {
-      await require('./codex.js').refreshIfStale({ now, maxAgeMs: every, timeoutMs: 4000 });
+      // Never waited on inside the hook. `codex app-server` can take longer to
+      // answer cold than this hook is allowed to live, and a killed PostToolUse
+      // hook is a tool call that stalls. The child writes the meter file and
+      // the next pulse reads it.
+      await require('./codex.js').refreshIfStale({ now, maxAgeMs: every, detach: true });
     } else {
       const cached = usage.collect(now);
-      await live.refreshIfStale({
-        now,
-        maxAgeMs: every,
-        cacheFetchedAtMs: cached.snapshotFetchedAt,
-        accountUuid: usage.accountUuid(),
-        timeoutMs: 4000,
-      });
+      // Sized from what is left of the hook's ten seconds, not from a constant:
+      // this hook interrupts work in progress, so being late is worse here than
+      // anywhere else.
+      const waitMs = brief.refreshBudgetMs({ reserveMs: SCAN_BUDGET_MS + 1000 });
+      if (waitMs > 0) {
+        await live.refreshIfStale({
+          now,
+          maxAgeMs: every,
+          cacheFetchedAtMs: cached.snapshotFetchedAt,
+          accountUuid: usage.accountUuid(),
+          timeoutMs: waitMs,
+        });
+      }
     }
   } catch (err) {
     // The reading on disk is still there.

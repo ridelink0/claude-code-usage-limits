@@ -64,12 +64,38 @@ const DEFAULTS = {
 // A hook has ten seconds; the reading gets four of them at most.
 const REFRESH_TIMEOUT_MS = 4000;
 
+// What the hook is actually given before it is killed. Claude Code and Codex
+// both use ten seconds (hooks/hooks.json, install-codex-hook.js).
+const HOOK_BUDGET_MS = 10000;
+
 // The hook is given ten seconds, and a live reading may take four of them, so
 // the transcript scan gets five and the last second is slack. A warm scan
 // takes about a quarter of a second; this is the guard for the first run on a
 // machine with months of transcripts, where the alternative is the hook being
 // killed and Claude being told nothing at all.
 const SCAN_BUDGET_MS = 5000;
+
+// How long the live reading may actually wait, given how much of the hook's ten
+// seconds is already gone.
+//
+// Four seconds for the reading plus five for the scan plus a second of slack
+// only adds up if the hook starts at zero, and it never does: node's own
+// start-up, the requires, and reading the hook payload all come out of the same
+// budget, and on a loaded machine that is most of a second before this line is
+// reached. `process.uptime()` is the honest elapsed figure. Past the point
+// where the scan would no longer fit, the reading on disk is used as it is
+// rather than the hook being killed with nothing to say.
+function refreshBudgetMs(options) {
+  const opts = options || {};
+  const configured = Number(
+    opts.hookBudgetMs !== undefined ? opts.hookBudgetMs : process.env.USAGE_LIMITS_HOOK_BUDGET_MS
+  );
+  const total = Number.isFinite(configured) && configured > 0 ? configured : HOOK_BUDGET_MS;
+  const elapsed = Number.isFinite(opts.elapsedMs) ? opts.elapsedMs : process.uptime() * 1000;
+  const reserve = Number.isFinite(opts.reserveMs) ? opts.reserveMs : SCAN_BUDGET_MS + 1000;
+  const most = Number.isFinite(opts.maxMs) ? opts.maxMs : REFRESH_TIMEOUT_MS;
+  return Math.max(0, Math.min(most, Math.round(total - elapsed - reserve)));
+}
 
 // How far into the hook arming may still start. See relayState: the task
 // registration is about a second and the hook is allowed ten.
@@ -1495,21 +1521,29 @@ async function run(now, hookInput, opts) {
     } else if (usage.isCodex()) {
       // Codex only writes its meter when it makes a request, so between turns
       // the newest figure can be half an hour old. Ask it, the way /status
-      // does, when the reading has aged.
+      // does, when the reading has aged - but never inside this hook. The
+      // reading means starting `codex app-server`, whose cold start alone has
+      // been measured past four seconds, and Codex kills a hook at ten. So the
+      // refresh is started detached and the next hook reads what it wrote.
       await require('./codex.js').refreshIfStale({
         now,
         maxAgeMs: refreshSeconds * SECOND,
-        timeoutMs: REFRESH_TIMEOUT_MS,
+        detach: true,
       });
     } else {
       const cached = usage.collect(now);
-      await live.refreshIfStale({
-        now,
-        maxAgeMs: refreshSeconds * SECOND,
-        cacheFetchedAtMs: cached.snapshotFetchedAt,
-        accountUuid: usage.accountUuid(),
-        timeoutMs: REFRESH_TIMEOUT_MS,
-      });
+      const waitMs = refreshBudgetMs();
+      // No room left in the hook for a network call: the figure on disk stands
+      // and the next prompt tries again.
+      if (waitMs > 0) {
+        await live.refreshIfStale({
+          now,
+          maxAgeMs: refreshSeconds * SECOND,
+          cacheFetchedAtMs: cached.snapshotFetchedAt,
+          accountUuid: usage.accountUuid(),
+          timeoutMs: waitMs,
+        });
+      }
     }
   } catch (err) {
     // The reading on disk is still there.
@@ -1773,6 +1807,10 @@ function withBugcheck(text) {
 module.exports = { withBugcheck, sayOnce, shapeOf, saidFile, REPEAT_MS, staleVersionFor, relayNewsFor, installedVersion, runningVersion,
   readSaid, standingSaid, markStanding, standingShortFor, STANDING_SHORT, cacheMissWhyFor, missReason, MISS_RECENT_MS,
   DEFAULTS,
+  HOOK_BUDGET_MS,
+  REFRESH_TIMEOUT_MS,
+  SCAN_BUDGET_MS,
+  refreshBudgetMs,
   aheadOfPace,
   pacingMatters,
   PACE_MIN_SPAN_MS,
