@@ -256,8 +256,9 @@ A bracketed suffix on a model id (`claude-sonnet-5[1m]`) is stripped before
 the lookup: it marks a context-window variant of the same model, not a new
 one. Cache reads price at a tenth of the input rate unless a row carries a
 `cacheRead` figure of its own - Fable and Mythos 5.1 price reads outright at
-$0.25 per million, far under the tenth rule, and reads are the dominant input
-in exactly the long sessions where the difference matters.
+$0.25 per million (0.025x input) and Opus 5.5 at $0.20 (0.05x its $4 input),
+all under the tenth rule, and reads are the dominant input in exactly the long
+sessions where the difference matters.
 
 Until someone does, a model this table has not seen is priced at the average of
 the family its name contains: an unreleased `claude-opus-5-2` is charged at the

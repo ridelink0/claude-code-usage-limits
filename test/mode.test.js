@@ -298,8 +298,10 @@ test('the tier line says where the reading came from, not merely what it is', ()
     baseline: { model: 'claude-opus-4-5', effort: 'xhigh' },
     running: { model: 'claude-sonnet-4-5', effort: 'medium', source: 'this turn' },
   });
-  assert.match(line, /opus\/xhigh/);
-  assert.match(line, /sonnet\/medium/);
+  // The version is shown, not only the family: opus 4.5 and opus 5.5 are
+  // different models at different prices.
+  assert.match(line, /opus 4\.5\/xhigh/);
+  assert.match(line, /sonnet 4\.5\/medium/);
   assert.match(line, /this turn/);
   // Where they agree there is nothing interesting to say, so it is said once.
   const same = mode.tierLine({

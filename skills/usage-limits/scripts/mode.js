@@ -1057,9 +1057,15 @@ function tierNow(options) {
     settings = null;
   }
 
+  // The newest assistant message is the model that actually answered, which a
+  // settings alias ('opus') cannot say. The hook's own transcript_path is read
+  // first when the caller has it: it is the file this very turn is written to,
+  // where the session-id lookup has to find it under the config directory.
   let running = null;
   try {
-    const seen = sessionId ? usage.liveModel(sessionId) : null;
+    let seen = null;
+    if (opts.transcriptPath && typeof usage.transcriptModel === 'function') seen = usage.transcriptModel(opts.transcriptPath);
+    if (!(seen && seen.model) && sessionId) seen = usage.liveModel(sessionId);
     running = seen && seen.model ? seen.model : null;
   } catch (err) {
     running = null;
@@ -1112,6 +1118,150 @@ function sameFamily(a, b) {
   return left === right;
 }
 
+// The model as the brief names it: the family and the version. It used to be
+// the family alone, so claude-opus-5 and claude-opus-5-5 both printed "opus"
+// and a switch between them - a 20% price change, 60% on cache reads - was
+// invisible in the one line that exists to say what is producing the turn. A
+// bare alias ('opus') has no version to show and is shown as it is.
+function modelLabel(name) {
+  if (!name) return null;
+  let parsed = null;
+  try {
+    parsed = require('./usage.js').parseModelId(name);
+  } catch (err) {
+    parsed = null;
+  }
+  if (parsed) return parsed.version.length ? parsed.family + ' ' + parsed.version.join('.') : parsed.family;
+  const rank = modelRank(name);
+  return rank === null ? name : MODEL_ORDER[rank];
+}
+
+// Same model for the purpose of "is the running tier the baseline". Same
+// family, and where both sides carry a version, the same version: opus 5 and
+// opus 5.5 are different models at different prices, but a baseline of the
+// bare alias 'opus' says nothing about which Opus, so it disagrees with none.
+function sameModel(a, b) {
+  if (!sameFamily(a, b)) return false;
+  let left = null;
+  let right = null;
+  try {
+    const usage = require('./usage.js');
+    left = usage.parseModelId(a);
+    right = usage.parseModelId(b);
+  } catch (err) {
+    return true;
+  }
+  if (!left || !right || !left.version.length || !right.version.length) return true;
+  return left.version.join('.') === right.version.join('.');
+}
+
+function money(value) {
+  return Number.isInteger(value) ? '$' + value : '$' + value.toFixed(2);
+}
+
+// A newer model in the SAME family at a lower price is the cheapest saving
+// there is: no step down in tier, nothing given up, only the price. The advice
+// channel above only ever says "choose lower"; this says "choose newer", once
+// per session (brief.js keeps the count), and only from prices on record.
+//
+// What the user can do differs by host, and the sentence says only what is
+// real where it is read. In Claude Code, `/model <id>` switches the session and
+// saves the model as the default for new sessions (the picker's `s` key is the
+// this-session-only form), per code.claude.com/docs/en/model-config, read
+// 2026-09-25. A subagent with no model of its own falls through to the main
+// conversation's model (docs/en/sub-agents, same day), so a switch reaches
+// those from their next dispatch. Codex has no /model of that kind, so there
+// the only lever named is its config.
+//
+// The payback figure is exact arithmetic on the two rows, not an estimate of
+// the session: switching costs one write of the context at the new model's
+// write price instead of one read at the old read price, and every later turn
+// saves the difference in read price on that context. The context size cancels
+// out of the ratio, so the number of turns holds for any session. It counts the
+// reads alone; the cheaper input and output only shorten it.
+function newerModelAdvice(tier, options) {
+  const opts = options || {};
+  if (!tier) return null;
+  const usage = opts.usage || require('./usage.js');
+  if (typeof usage.newerSibling !== 'function') return null;
+  const base = tier.baseline || {};
+  const run = tier.running || {};
+  const hostName = opts.host || host.CLAUDE;
+  // A bound the user set outranks the price: nothing said points outside it.
+  const sibling = (model) => {
+    const found = model ? usage.newerSibling(model) : null;
+    return found && allows(opts.bounds, { model: found.to }) ? found : null;
+  };
+  const current = run.model || base.model;
+  const found = sibling(current);
+  // The relay resumes with its own --model when one is set (wake.js), so a
+  // session moved to the newer model still wakes on the old one. Claude Code
+  // only: that is where `relay model` feeds a Claude CLI.
+  const relayFound = hostName === host.CLAUDE && opts.relayModel ? sibling(opts.relayModel) : null;
+  if (!found && !relayFound) return null;
+
+  const name = (family, version) => family.charAt(0).toUpperCase() + family.slice(1) + ' ' + version.join('.');
+  const pct = (was, now) => Math.round((1 - now / was) * 100);
+  const prices = (pair) => {
+    const a = pair.fromRate;
+    const b = pair.toRate;
+    const bits = [];
+    if (b.input < a.input || b.output < a.output) {
+      bits.push(money(b.input) + '/' + money(b.output) + ' per million tokens in and out against ' + money(a.input) + '/' + money(a.output));
+    }
+    if (b.cacheRead < a.cacheRead) {
+      bits.push('cache reads ' + money(b.cacheRead) + ' against ' + money(a.cacheRead) + ', ' + pct(a.cacheRead, b.cacheRead) +
+        '% less on the reads that are most of what a long session spends');
+    }
+    return bits.join('; ');
+  };
+  const family = (pair) => pair.family.charAt(0).toUpperCase() + pair.family.slice(1);
+
+  const sentences = [];
+  if (found) {
+    const a = found.fromRate;
+    const b = found.toRate;
+    sentences.push(name(found.family, found.toVersion) + ' is a newer ' + family(found) + ' at a lower price than the ' +
+      name(found.family, found.fromVersion) + ' running here. At first-party API prices: ' + prices(found) +
+      '. Same tier and a newer release, so no step down.');
+    const pinnedAlready = base.model && String(base.model).toLowerCase().replace(/\[[^\]]*\]\s*$/, '').trim() === found.to;
+    if (hostName === host.CLAUDE) {
+      sentences.push('It is the user\'s switch, not yours: offer `/model ' + found.to + '`, which moves this session and saves it as the ' +
+        'default for new sessions' + (pinnedAlready ? ' (settings.json already names it, so new sessions start on it either way)' : '') +
+        '. Subagents given no model of their own (and no CLAUDE_CODE_SUBAGENT_MODEL) run on the session\'s model, so they follow from their next dispatch.');
+      // Only where the switch can be made mid-session is its one-off cost
+      // worth a number; elsewhere the offer is a pin for new sessions, which
+      // rebuild anyway.
+      if (b.cacheRead < a.cacheRead) {
+        const turns = (write) => Math.ceil(Math.round(((write * b.input - a.cacheRead) / (a.cacheRead - b.cacheRead)) * 100) / 100);
+        sentences.push('Switching rebuilds the prompt cache once; the cheaper reads alone repay that in about ' + turns(1.25) +
+          ' turns (' + turns(2) + ' on the one-hour cache).');
+      } else {
+        sentences.push('Switching rebuilds the prompt cache once, so on a large context it is worth making at the next session start rather than now.');
+      }
+    } else if (hostName === host.CODEX) {
+      sentences.push('It is the user\'s setting, not yours: offer pinning model = "' + found.to + '" in config.toml for new sessions.');
+    } else {
+      sentences.push('It is the user\'s setting, not yours: offer choosing ' + found.to + ' in this host\'s own model setting.');
+    }
+  }
+  if (relayFound) {
+    const same = found && found.to === relayFound.to && found.from === relayFound.from;
+    sentences.push('Relay wakes are pinned to ' + opts.relayModel + ' on their own' +
+      (same ? '' : ', and ' + name(relayFound.family, relayFound.toVersion) + ' is a newer ' + family(relayFound) +
+        ' at a lower price (' + prices(relayFound) + ')') +
+      ', so a resumed run starts on the older model even after this session switches: offer `/usage-limits:relay model ' + relayFound.to +
+      '`, which is the user\'s setting too.');
+  }
+  const id = (found ? found.from + '->' + found.to : '') + (relayFound ? '|relay:' + relayFound.from + '->' + relayFound.to : '');
+  return {
+    id,
+    from: found ? found.from : null,
+    to: found ? found.to : null,
+    relay: relayFound ? { from: relayFound.from, to: relayFound.to } : null,
+    text: sentences.join(' '),
+  };
+}
 // One clause for the brief, or two lines for `--baseline`.
 //
 // Where the baseline and the running tier agree there is nothing interesting
@@ -1124,16 +1274,12 @@ function tierLine(tier, options) {
   if (!tier) return null;
   const base = tier.baseline || {};
   const run = tier.running || {};
-  const shortModel = (name) => {
-    const rank = modelRank(name);
-    return rank === null ? name : MODEL_ORDER[rank];
-  };
-  const runningText = [shortModel(run.model) || shortModel(base.model), run.effort || base.effort].filter(Boolean).join('/');
+  const runningText = [modelLabel(run.model) || modelLabel(base.model), run.effort || base.effort].filter(Boolean).join('/');
   if (!runningText) return null;
-  const baseText = [shortModel(base.model), base.effort].filter(Boolean).join('/');
+  const baseText = [modelLabel(base.model), base.effort].filter(Boolean).join('/');
   const differs =
     baseText && runningText !== baseText &&
-    (!sameFamily(run.model || base.model, base.model) || (run.effort || base.effort) !== base.effort);
+    (!sameModel(run.model || base.model, base.model) || (run.effort || base.effort) !== base.effort);
   const source = run.source ? ' (' + run.source + ')' : '';
   if (opts.terse) {
     return differs ? runningText + source + ', yours ' + baseText : runningText + source;
@@ -1876,6 +2022,9 @@ module.exports = {
   ultracodeName,
   topTier,
   tierLine,
+  modelLabel,
+  sameModel,
+  newerModelAdvice,
   ledger,
   explain,
   list,

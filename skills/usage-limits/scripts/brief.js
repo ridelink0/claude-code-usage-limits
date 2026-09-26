@@ -160,7 +160,7 @@ function readSaid() {
   }
 }
 function keepSaidFor(key) {
-  return /#(standing|cachemiss|stale|relaylast)$/.test(key) ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  return /#(standing|cachemiss|stale|relaylast|newer)$/.test(key) ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
 }
 
 // A plugin update takes effect when Claude Code restarts, so a session that
@@ -201,6 +201,30 @@ function staleVersionFor(sessionId, now, dir) {
   writeSaid(all, at);
   return 'usage-limits ' + installed + ' is installed but this session still runs ' + running +
     ', because a plugin update applies at the next start; a relay or cap set here follows the older rules until then.';
+}
+// A newer model of the same family at a lower price, said once a session.
+// Once is the rule every recommendation here keeps: the fact does not change
+// from prompt to prompt, and repeating it would be the plugin charging for its
+// own presence. Keyed on the pair, so a session that moves to a different model
+// with its own newer sibling hears about that one.
+function newerModelFor(sessionId, advice, now) {
+  if (!advice || !advice.text) return null;
+  const at = Number.isFinite(now) ? now : Date.now();
+  const key = String(sessionId || '_') + '#newer';
+  const all = readSaid();
+  const entry = all[key];
+  if (entry && entry.seen === advice.id && Number.isFinite(entry.at) && at - entry.at < keepSaidFor(key)) return null;
+  all[key] = { at, seen: advice.id };
+  writeSaid(all, at);
+  return advice.text;
+}
+// The model the relay resumes with, when one is set: wake.js passes it as --model.
+function relayModelNow() {
+  try {
+    return relay.settings(relay.read()).model || null;
+  } catch (err) {
+    return null;
+  }
 }
 // How the last relay ended is news once. It used to ride along for six hours
 // after any relay ended, on every prompt of every session: on 2026-09-22 a wake
@@ -784,6 +808,7 @@ function briefText(input) {
   if (parts.tier) sentences.push(parts.tier);
   // Once per session, and only when the installed version is not this one.
   if (parts.staleVersion) sentences.push(parts.staleVersion);
+  if (parts.newerModel) sentences.push(parts.newerModel);
   const bounded = mode.boundsNote(bounds);
   if (bounded) sentences.push(bounded);
   if (parts.planChanged) {
@@ -1403,7 +1428,7 @@ function briefText(input) {
     // The one recommendation this session is allowed, in its short form. It
     // still cites the measurement, still names the command: terse is fewer
     // words, not less evidence.
-    const adviceText = parts.adviceText ? ' ' + parts.adviceText : '';
+    const adviceText = (parts.adviceText ? ' ' + parts.adviceText : '') + (parts.newerModel ? ' ' + parts.newerModel : '');
     return (
       sentences[0] + caveat + (parts.tier ? ' ' + parts.tier : '') + (bounded ? ' ' + bounded : '') + adviceText +
       (escapeSentence ? ' ' + escapeSentence : '') +
@@ -1904,7 +1929,10 @@ async function run(now, hookInput, opts) {
   // What tier is producing this turn, and what the user's own baseline is.
   // Read, displayed, never written.
   const terse = budget.policy.briefStyle === 'terse';
-  const tier = mode.tierLine(mode.tierNow({ sessionId, now, usage, env: process.env }), { terse });
+  const tierReading = mode.tierNow({ sessionId, now, usage, env: process.env, transcriptPath: hookInput && hookInput.transcript_path });
+  const tier = mode.tierLine(tierReading, { terse });
+  // Muted advice is muted for this too: it is a recommendation like the others.
+  const newerAdvice = budget.advice && budget.advice.off ? null : mode.newerModelAdvice(tierReading, { usage, host: usage.currentHost(), bounds: budget.bounds, relayModel: relayModelNow() });
 
   // The recommendation channel. The measured fit sentence IS the
   // recommendation - it cites this account's own numbers and names the exact
@@ -1959,6 +1987,7 @@ async function run(now, hookInput, opts) {
     standingShort,
     cacheMissWhy: cacheMissWhyFor(sessionId, now),
     staleVersion: staleVersionFor(sessionId, now),
+    newerModel: newerModelFor(sessionId, newerAdvice, now),
     adviceText: terse && offering ? advice.text : null,
     relay: carry,
     voiceNote,
@@ -2065,7 +2094,7 @@ function withBugcheck(text) {
   return text;
 }
 
-module.exports = { wallFeatures, sweepDebris, withBugcheck, sayOnce, shapeOf, saidFile, REPEAT_MS, staleVersionFor, relayNewsFor, installedVersion, runningVersion,
+module.exports = { wallFeatures, sweepDebris, withBugcheck, sayOnce, shapeOf, saidFile, REPEAT_MS, staleVersionFor, newerModelFor, relayNewsFor, installedVersion, runningVersion,
   readSaid, standingSaid, markStanding, standingShortFor, STANDING_SHORT, cacheMissWhyFor, missReason, MISS_RECENT_MS,
   DEFAULTS,
   HOOK_BUDGET_MS,

@@ -29,6 +29,9 @@ The rest:
   (or whichever mode you want) as well: a resume does **not** inherit the
   session's permission mode, so without one it will sit waiting for an
   approval nobody is there to give. `show off` makes it a headless run instead.
+- `model <id>` - the `--model` a resumed run starts with; `model` alone goes
+  back to the default. It is separate from `/model` in the session, so a wake
+  pinned to an older model stays on it until this is changed.
 - `voice on|off` - carry how you write in the hand-off, so the resumed session
   answers in your voice without being reminded. On by default.
 - `bugcheck on|always|off` - the hand-off asks for two bug passes before anything

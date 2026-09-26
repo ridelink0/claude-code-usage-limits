@@ -1120,7 +1120,23 @@ There are two separate things people mean by "change the model":
 
 `claude-usage-limits mode --baseline` shows both side by side. The budget line
 now says the tier as well, and where the reading came from, because the number
-that decides what a turn costs was the one number the line never printed.
+that decides what a turn costs was the one number the line never printed. It
+names the version, not only the family (`opus 5.5/xhigh`, not `opus/xhigh`),
+read from the newest assistant message in the session's transcript: a settings
+alias such as `opus` cannot say which Opus answered.
+
+When the model running is an older release of a family that has a newer one at
+a lower price - Opus 5 or 4.8 against Opus 5.5 ($4/$20, cache reads $0.20
+against $0.50), Fable 5 against Fable 5.1 (reads $0.25 against $1) - the brief
+says so once per session, with the prices and how many turns the one-off cache
+rebuild takes to repay. In Claude Code it offers `/model <id>`, which switches
+the session and saves the model as the default for new sessions; elsewhere it
+offers the host's own model setting and names no slash command. A relay whose
+own `model` is pinned to the older release is named too, since a wake starts
+with that `--model` whatever the session switched to. Releases on
+either side of the 4.7 tokenizer change are not compared, because a price per
+token is not like for like across it. `mode --no-advice` mutes this with the
+rest of the advice.
 
 What Claude can genuinely move, stated without embroidery: the model on an
 `Agent` call, and the model and effort inside a `Workflow` script. Its own
