@@ -62,6 +62,10 @@ const RATES = {
   'claude-mythos-5-1': { input: 10, output: 50, cacheRead: 0.25 },
   'claude-fable-5': { input: 10, output: 50 },
   'claude-mythos-5': { input: 10, output: 50 },
+  // Opus 5.5 prices reads outright: $0.20 is 0.05x its input, half the tenth
+  // rule every other Opus follows (platform.claude.com/docs/en/about-claude/pricing,
+  // read 2026-09-25). Left to the multiplier it would be priced at $0.40.
+  'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2 },
   'claude-opus-5': { input: 5, output: 25 },
   'claude-opus-4-8': { input: 5, output: 25 },
   'claude-opus-4-7': { input: 5, output: 25 },
@@ -128,6 +132,83 @@ function isKnownModel(model) {
 const CACHE_WRITE_5M = 1.25;
 const CACHE_WRITE_1H = 2;
 const CACHE_READ = 0.1;
+
+// The effective cache-read price of a row, in $/MTok.
+function readRateOf(rate) {
+  return Number.isFinite(rate.cacheRead) ? rate.cacheRead : rate.input * CACHE_READ;
+}
+
+// A model id taken apart into the family word and the version numbers:
+// 'claude-opus-5-5' is opus [5, 5], 'us.anthropic.claude-opus-5-v1:0' is
+// opus [5]. A dated snapshot suffix (20250929) is not part of the version, and a
+// bare alias such as 'opus' has no version at all, so nothing is claimed about
+// which release it resolved to. Mythos stays mythos here: it is priced with
+// Fable, but it is not the same model line.
+function parseModelId(model) {
+  const id = normalizeModel(model);
+  const found = id.match(/(haiku|sonnet|opus|mythos|fable)((?:-\d+)*)/);
+  if (!found) return null;
+  const version = [];
+  for (const part of found[2].split('-').filter(Boolean)) {
+    if (part.length > 2) break;
+    version.push(Number(part));
+  }
+  return { family: found[1], version };
+}
+
+function compareVersions(a, b) {
+  const length = Math.max(a.length, b.length);
+  for (let i = 0; i < length; i += 1) {
+    const diff = (a[i] || 0) - (b[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+// Claude 4.7 and later count text with a newer tokenizer that produces about
+// 30% more tokens for the same text (pricing page, read 2026-09-25). A price per
+// token across that line is not a like-for-like price, so a sibling on the other
+// side of it is never offered as the cheaper one.
+function sameTokenizer(a, b) {
+  return (compareVersions(a, [4, 7]) >= 0) === (compareVersions(b, [4, 7]) >= 0);
+}
+
+// The newest release of the SAME family that is newer than this one and no
+// dearer on any rate - input, output or cache reads - and cheaper on at least
+// one. That is a saving with no step down in tier. Only a model whose own price
+// is on record qualifies: comparing against a family average would be
+// comparing against a guess.
+function newerSibling(model, table) {
+  const rates = table || RATES;
+  const me = parseModelId(model);
+  if (!me || !me.version.length) return null;
+  const from = 'claude-' + me.family + '-' + me.version.join('-');
+  const mine = rates[from];
+  if (!mine) return null;
+  let best = null;
+  for (const id of Object.keys(rates)) {
+    const other = parseModelId(id);
+    if (!other || other.family !== me.family || !other.version.length) continue;
+    if (compareVersions(other.version, me.version) <= 0) continue;
+    if (!sameTokenizer(other.version, me.version)) continue;
+    const theirs = rates[id];
+    const noDearer = theirs.input <= mine.input && theirs.output <= mine.output && readRateOf(theirs) <= readRateOf(mine);
+    const cheaper = theirs.input < mine.input || theirs.output < mine.output || readRateOf(theirs) < readRateOf(mine);
+    if (!noDearer || !cheaper) continue;
+    if (!best || compareVersions(other.version, best.version) > 0) best = { id, version: other.version, rate: theirs };
+  }
+  if (!best) return null;
+  const shape = (rate) => ({ input: rate.input, output: rate.output, cacheRead: readRateOf(rate) });
+  return {
+    family: me.family,
+    from,
+    fromVersion: me.version,
+    fromRate: shape(mine),
+    to: best.id,
+    toVersion: best.version,
+    toRate: shape(best.rate),
+  };
+}
 
 // `family` marks a window that caps one model family rather than the account
 // as a whole. It is what tells the rest of the file that a window cannot stop
@@ -4282,6 +4363,8 @@ module.exports = {
   WINDOWS,
   rateFor,
   familyOf,
+  parseModelId,
+  newerSibling,
   familyAverage,
   familiesInUse,
   appliesTo,

@@ -63,7 +63,9 @@ test('cache reads use the per-model rate when one is stated', () => {
 
 test('rateFor falls back to the family when the id is unknown', () => {
   assert.deepStrictEqual(usage.rateFor('claude-sonnet-9-9'), { input: 2.5, output: 12.5 });
-  assert.deepStrictEqual(usage.rateFor('CLAUDE-OPUS-9'), { input: 5, output: 25 });
+  // The Opus average takes in every Opus row: four at $5/$25 and Opus 5.5 at
+  // $4/$20, so (4 x 5 + 4) / 5 = 4.8 in and (4 x 25 + 20) / 5 = 24 out.
+  assert.deepStrictEqual(usage.rateFor('CLAUDE-OPUS-9'), { input: 4.8, output: 24 });
   assert.deepStrictEqual(usage.rateFor(''), { input: 5, output: 25 });
   assert.deepStrictEqual(usage.rateFor(undefined), { input: 5, output: 25 });
 });
