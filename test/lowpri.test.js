@@ -743,6 +743,46 @@ test('the mid-turn pulse follows the brief onto the weekly, so the two never dis
     assert.strictEqual(quiet, '', quiet);
   }));
 
+test('a deferral to a time the user named is still honoured, with a note that a 5-hour wait buys nothing', () =>
+  isolated(() => {
+    const lowpri = fresh('lowpri');
+    const defer = fresh('defer');
+    const five = { percent: 99, resetsAt: T + HOUR, windowKey: 'five_hour' };
+
+    // The user named a time, so unlike an automatic wake this is never refused.
+    const plain = defer.plan({ now: T, when: 'reset', binding: five });
+    assert.strictEqual(plain.ok, true);
+    assert.doesNotMatch(plain.notes.join(' '), /low-priority/);
+
+    const noted = defer.plan({ now: T, when: 'reset', binding: five, lowPriorityAck: true });
+    assert.strictEqual(noted.ok, true, 'still scheduled: a deferral is the user deciding');
+    // Two notes apply at once here, and the second one is the one that matters.
+    // plan() used to return only the first, which would have dropped it.
+    assert.ok(noted.notes.length >= 2, JSON.stringify(noted.notes));
+    assert.match(noted.notes.join(' '), /waiting for it buys nothing/);
+    // And the confirmation the user reads prints all of them.
+    const said = defer.confirmation({ clock: noted.clock, label: noted.label, in: noted.in, items: null, resetNote: noted.resetNote, notes: noted.notes });
+    assert.match(said, /waiting for it buys nothing/);
+    assert.match(said, /the window will have reset by then/);
+
+    // And a weekly wall gets no such note: that reset is still a real one.
+    const weekly = { percent: 99, resetsAt: T + 2 * DAY, windowKey: 'seven_day' };
+    const forWeekly = defer.plan({ now: T, when: 'in 30m', binding: weekly, lowPriorityAck: true });
+    assert.doesNotMatch(forWeekly.notes.join(' '), /low-priority/);
+
+    // The reader behind it is Claude-Code-only, like every other one.
+    lowpri.acknowledge({ on: true, windowKey: 'five_hour', resetsAt: T + HOUR, now: T });
+    const argv = process.argv;
+    try {
+      process.argv = [argv[0], argv[1]];
+      assert.strictEqual(defer.lowPriorityAcknowledged(T + MINUTE), true);
+      process.argv = [argv[0], argv[1], '--host', 'codex'];
+      assert.strictEqual(defer.lowPriorityAcknowledged(T + MINUTE), false, 'not Codex\'s fact');
+    } finally {
+      process.argv = argv;
+    }
+  }));
+
 test('nothing in this module throws on a machine with no Claude Code state at all', () =>
   isolated(() => {
     const lowpri = fresh('lowpri');

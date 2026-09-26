@@ -140,7 +140,10 @@ function confirmation(parts) {
   const tail = [];
   tail.push('Nothing has been started');
   if (parts.items) tail.push(parts.items + ' saved');
-  if (parts.resetNote) tail.push(parts.resetNote);
+  // Every note, not only the first: two can apply at once.
+  for (const note of parts.notes && parts.notes.length ? parts.notes : [parts.resetNote]) {
+    if (note) tail.push(note);
+  }
   return line + tail.join('; ') + '. Run "defer cancel" to call it off.';
 }
 
@@ -154,7 +157,7 @@ function bindingReset(now) {
     usage.setHost(host.detect(process.argv.slice(2), process.env));
     const collected = usage.collect(now);
     const utilization = collected && collected.utilization;
-    if (!utilization) return { resetsAt: null, percent: null };
+    if (!utilization) return { resetsAt: null, percent: null, windowKey: null };
     let worst = null;
     for (const key of Object.keys(utilization)) {
       const window = utilization[key];
@@ -163,12 +166,24 @@ function bindingReset(now) {
       if (!Number.isFinite(percent)) continue;
       const resets = Date.parse(window.resets_at);
       if (!worst || percent > worst.percent) {
-        worst = { percent, resetsAt: Number.isFinite(resets) ? resets : null };
+        worst = { percent, resetsAt: Number.isFinite(resets) ? resets : null, windowKey: key };
       }
     }
     return worst || { resetsAt: null, percent: null };
   } catch (err) {
-    return { resetsAt: null, percent: null };
+    return { resetsAt: null, percent: null, windowKey: null };
+  }
+}
+
+// Claude Code only, like every other reader of this fact: /low-priority is its
+// slash command against its account, and Codex files a five-hour window under the
+// same key.
+function lowPriorityAcknowledged(now) {
+  try {
+    if (host.detect(process.argv.slice(2), process.env) !== host.CLAUDE) return false;
+    return Boolean(require('./lowpri.js').readAck(now));
+  } catch (err) {
+    return false;
   }
 }
 
@@ -198,13 +213,29 @@ function plan(options) {
       notes.push('note: that is before the window resets at ' + formatClock(binding.resetsAt));
     }
   }
+  // A deferral is a time the user named, so it is honoured whatever else is
+  // true - unlike an automatic relay wake, which the acknowledgement refuses.
+  // But waiting for a 5-hour reset this session carries straight past is
+  // waiting for nothing, and that is worth one line before the task is
+  // registered rather than after it fires.
+  if (options.lowPriorityAck && binding.windowKey === 'five_hour') {
+    notes.push(
+      'note: you have said /low-priority is on, so this session carries past the 5-hour reset ' +
+        'and waiting for it buys nothing - the weekly is the window that still stops work'
+    );
+  }
   return {
     ok: true,
     at: when.at,
     label: when.label,
     clock: formatClock(when.at),
     in: when.at - now,
+    // resetNote is the first of them, kept because the confirmation and the
+    // tests have always read that field. `notes` is all of them, because there
+    // can now be two and dropping the second would have hidden the one fact
+    // worth printing: that waiting for this reset buys nothing.
     resetNote: notes[0] || null,
+    notes,
   };
 }
 
@@ -256,7 +287,7 @@ function main(argv, now) {
   }
 
   const binding = bindingReset(at);
-  const decided = plan({ now: at, when: first, binding });
+  const decided = plan({ now: at, when: first, binding, lowPriorityAck: lowPriorityAcknowledged(at) });
   if (!decided.ok) return decided.error;
 
   const id = sessionId(args, process.env);
@@ -304,6 +335,7 @@ function main(argv, now) {
     in: decided.in,
     items,
     resetNote: decided.resetNote,
+    notes: decided.notes,
   });
 }
 
@@ -317,4 +349,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { parseWhen, formatClock, formatSpan, confirmation, plan, status, cancel, main, MINUTE, HOUR };
+module.exports = { lowPriorityAcknowledged, parseWhen, formatClock, formatSpan, confirmation, plan, status, cancel, main, MINUTE, HOUR };

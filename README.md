@@ -418,6 +418,13 @@ would fire into a session that never stopped. A weekly wall still arms. The
 acknowledgement lapses by itself when the 5-hour window it was made against
 resets.
 
+A deferral is different from a wake, and is treated differently. `defer` is a
+time **you** named, so it is always scheduled — but if you defer to `reset` while
+low-priority is acknowledged, the confirmation says that this session carries
+past the 5-hour reset and waiting for it buys nothing. The mid-turn pulse follows
+the brief onto the weekly too, out of the same function, so the two can never
+report different windows.
+
 **The graceful wrap-up note.** Claude Code can inject its own "finish up"
 instruction at the wall. The mechanism is real, and the gate is
 `tengu_lantern_wick_mode` — the bundle's own normalizer keeps only `"wrap-up"`
@@ -1295,7 +1302,7 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-895 tests over the pricing, the window arithmetic, plan and credit detection,
+901 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, the mid-turn pulse, the after-reply tally and the session history, job forecasting,
 per-project attribution, the Codex reader and its installer, the CLI,
 packaging, the settings save/restore, and what Claude Code's own wall-time
