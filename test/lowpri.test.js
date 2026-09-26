@@ -130,10 +130,26 @@ test('the offer never invents copy the server did not send', () => {
 test('the account snapshot is the file that carries a meter, the way usage.js picks it', () =>
   isolated((dir) => {
     const lowpri = fresh('lowpri');
-    // A migration stub with no meter must not win.
+    // A migration stub with no meter must not answer "offered".
+    //
+    // This deliberately does NOT assert which file snapshot() returns when the
+    // only candidate is the stub. Two files are in play - the one beside
+    // CLAUDE_CONFIG_DIR and the real ~/.claude.json - and only one of them is a
+    // fixture, so an assertion about the winner reads differently on a machine
+    // that has a real snapshot and on CI, which has none. The first version of
+    // this test made exactly that mistake: it passed here because the home file
+    // carried a meter and failed on all four CI runners, which is a test lying
+    // about the code rather than the code being wrong.
+    //
+    // What IS the same everywhere, and is the behaviour that matters, is that
+    // nothing in a stub can be mistaken for a provisioned account.
     fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ someMachineId: 'x' }));
     const stub = lowpri.snapshot();
-    assert.ok(!stub || !stub.someMachineId || stub.cachedUsageUtilization, 'a stub with no meter is not the snapshot');
+    const fromStub = lowpri.offer(stub);
+    if (stub && stub.someMachineId) {
+      assert.strictEqual(fromStub.known, false, 'a stub carries no feature cache, so nothing is known');
+      assert.strictEqual(fromStub.offered, false);
+    }
     fs.writeFileSync(
       path.join(dir, '.claude.json'),
       JSON.stringify(account({ cachedGrowthBookFeatures: { tengu_toasty_breeze: TOASTY } }))
