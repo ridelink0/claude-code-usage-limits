@@ -149,7 +149,8 @@ test('the state file is written atomically and leaves nothing behind', () =>
     mode.main(['max']);
     const written = fs.readFileSync(mode.modeFile(), 'utf8');
     assert.strictEqual(JSON.parse(written).mode, 'max', 'the file is complete JSON, not a half write');
-    const strays = fs.readdirSync(dir).filter((name) => name.indexOf('.tmp') !== -1);
+    // Both temporary suffixes this plugin has used: .tmp before 1.39.6, .usage-limits-tmp since.
+    const strays = fs.readdirSync(dir).filter((name) => name.endsWith('.tmp') || name.endsWith('.usage-limits-tmp'));
     assert.deepStrictEqual(strays, [], 'the temporary file is renamed, not left');
   }));
 

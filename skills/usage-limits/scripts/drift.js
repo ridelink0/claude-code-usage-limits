@@ -19,6 +19,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const atomic = require('./atomic.js');
 const host = require('./host.js');
 const codex = require('./codex.js');
 
@@ -102,13 +103,11 @@ function modeSummary(codexHome) {
     .sort((a, b) => b.turns - a.turns);
 }
 
+// Same beside-and-rename as reading.js: the pulse and the prompt hook can both
+// land here in the same second. A refused rename is retried, and on failure
+// the temporary file is removed before this throws: see atomic.js.
 function writeAtomic(file, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  // Same beside-and-rename as reading.js: the pulse and the prompt hook can
-  // both land here in the same second.
-  const tmp = file + '.' + process.pid + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data));
-  fs.renameSync(tmp, file);
+  atomic.writeFileAtomic(file, JSON.stringify(data));
 }
 
 // `previous` and `next` are both entries in reading.js's own shape - see

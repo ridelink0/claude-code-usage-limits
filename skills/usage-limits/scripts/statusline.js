@@ -21,6 +21,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const atomic = require('./atomic.js');
+
 function configDir() {
   return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 }
@@ -62,10 +64,7 @@ function readState() {
 // Replace through a temporary file so an interrupted run cannot leave
 // settings.json half written.
 function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = file + '.usage-limits-tmp';
-  fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', 'utf8');
-  fs.renameSync(temp, file);
+  atomic.writeFileAtomic(file, JSON.stringify(value, null, 2) + '\n');
 }
 
 // The launcher. It is deliberately dumb: find feed.js, hand over, and if that

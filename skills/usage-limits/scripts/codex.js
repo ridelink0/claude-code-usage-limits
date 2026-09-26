@@ -23,6 +23,7 @@ const os = require('os');
 const path = require('path');
 const readline = require('readline');
 
+const atomic = require('./atomic.js');
 const host = require('./host.js');
 
 const MINUTE = 60 * 1000;
@@ -815,13 +816,9 @@ function readLiveMeter() {
 
 function writeLiveMeter(reading) {
   try {
-    const file = liveFile();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const temp = file + '.' + process.pid + '.usage-limits-tmp';
-    fs.writeFileSync(temp, JSON.stringify(reading), 'utf8');
-    fs.renameSync(temp, file);
-    return true;
+    return atomic.tryWriteFileAtomic(liveFile(), JSON.stringify(reading));
   } catch (err) {
+    // A reading that will not serialise is not written either.
     return false;
   }
 }

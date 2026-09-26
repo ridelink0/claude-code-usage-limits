@@ -31,6 +31,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const atomic = require('./atomic.js');
 const host = require('./host.js');
 
 const PLUGIN = 'usage-limits';
@@ -144,10 +145,7 @@ function rulesText() {
 }
 
 function writeFile(file, text) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = file + '.' + process.pid + '.tmp';
-  fs.writeFileSync(tmp, text, 'utf8');
-  fs.renameSync(tmp, file);
+  atomic.writeFileAtomic(file, text);
 }
 
 function installed() {

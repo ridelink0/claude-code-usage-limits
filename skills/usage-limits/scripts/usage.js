@@ -21,6 +21,7 @@ const os = require('os');
 const path = require('path');
 const readline = require('readline');
 
+const atomic = require('./atomic.js');
 const host = require('./host.js');
 const codex = require('./codex.js');
 const live = require('./live.js');
@@ -836,18 +837,10 @@ function readScanCache() {
 // sees either the old whole or the new whole. A rename Windows refuses leaves
 // nothing behind, and the caller carries on with what is on disk.
 function writeJsonAtomic(file, value) {
-  const temp = file + '.' + process.pid + '.usage-limits-tmp';
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(temp, JSON.stringify(value), 'utf8');
-    fs.renameSync(temp, file);
-    return true;
+    return atomic.tryWriteFileAtomic(file, JSON.stringify(value));
   } catch (err) {
-    try {
-      fs.unlinkSync(temp);
-    } catch (gone) {
-      // Nothing to clean up.
-    }
+    // A value that will not serialise is not written either.
     return false;
   }
 }

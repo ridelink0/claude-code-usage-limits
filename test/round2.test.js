@@ -114,7 +114,7 @@ test('a status line set between two on runs is what off will restore', () => {
 test('relay and reading state files are written whole or not at all', () =>
   withConfigDir((dir) => {
     relay.configure({ enabled: true });
-    assert.strictEqual(fs.readdirSync(dir).filter((name) => name.endsWith('.tmp')).length, 0, 'no temp file is left behind');
+    assert.strictEqual(fs.readdirSync(dir).filter((name) => name.endsWith('.tmp') || name.endsWith('.usage-limits-tmp')).length, 0, 'no temp file is left behind');
     assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'usage-limits-relay.json'), 'utf8')).config.enabled, true);
   }));
 

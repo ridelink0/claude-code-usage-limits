@@ -31,6 +31,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const atomic = require('./atomic.js');
 const host = require('./host.js');
 const codex = require('./codex.js');
 
@@ -480,10 +481,7 @@ function read() {
 }
 
 function writeAtomic(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = file + '.' + process.pid + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n');
-  fs.renameSync(tmp, file);
+  atomic.writeFileAtomic(file, JSON.stringify(value, null, 2) + '\n');
 }
 
 // Never throws for the same reason read() does not.

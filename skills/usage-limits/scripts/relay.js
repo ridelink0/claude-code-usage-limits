@@ -34,6 +34,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
+const atomic = require('./atomic.js');
 const host = require('./host.js');
 const voice = require('./voice.js');
 
@@ -353,9 +354,7 @@ function preflightPrompts(cwd, config, options) {
 // reader that lands between the truncate and the write of a plain writeFileSync
 // sees half a file; the rename is the only step another process can observe.
 function writeAtomic(file, text) {
-  const tmp = file + '.' + process.pid + '.tmp';
-  fs.writeFileSync(tmp, text);
-  fs.renameSync(tmp, file);
+  atomic.writeFileAtomic(file, text);
 }
 
 function write(state) {

@@ -13,6 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const atomic = require('./atomic.js');
 const usage = require('./usage.js');
 const host = require('./host.js');
 const tally = require('./tally.js');
@@ -1450,6 +1451,20 @@ const GEMINI_UNREADABLE =
 const LIMIT_REACHED =
   '[usage-limits] The meter says the usage limit is reached. Start nothing new: save the work, write the hand-off note in this turn, and end the turn.';
 
+// Temporary files a killed process left behind: a hook that ran into its
+// timeout between writing one and renaming it. Nothing else can clean them,
+// and on 2026-09-25 about seventy had piled up in ~/.claude. Once per prompt
+// is often enough and costs one directory listing per home. The clock here
+// is always the real one, never the run's `now`: a stale file is judged by
+// its mtime, which is real time too. Never throws.
+function sweepDebris() {
+  try {
+    return atomic.sweep([configDir(), host.codexHome()], Date.now());
+  } catch (err) {
+    return 0;
+  }
+}
+
 async function run(now, hookInput, opts) {
   if (String(process.env.USAGE_LIMITS_BRIEF || '').toLowerCase() === 'off') return '';
 
@@ -1462,6 +1477,8 @@ async function run(now, hookInput, opts) {
   // animate in `off`, because nothing runs to tell it anything.
   const budget = mode.forSession({ sessionId });
   if (budget.policy.briefStyle === 'none') return guardLine(now, budget);
+
+  sweepDebris();
 
   // Settle host here, before any file is read. A caller that already knows the
   // host (agy-hook runs only inside Antigravity) says so, and that wins over
@@ -1804,7 +1821,7 @@ function withBugcheck(text) {
   return text;
 }
 
-module.exports = { withBugcheck, sayOnce, shapeOf, saidFile, REPEAT_MS, staleVersionFor, relayNewsFor, installedVersion, runningVersion,
+module.exports = { sweepDebris, withBugcheck, sayOnce, shapeOf, saidFile, REPEAT_MS, staleVersionFor, relayNewsFor, installedVersion, runningVersion,
   readSaid, standingSaid, markStanding, standingShortFor, STANDING_SHORT, cacheMissWhyFor, missReason, MISS_RECENT_MS,
   DEFAULTS,
   HOOK_BUDGET_MS,

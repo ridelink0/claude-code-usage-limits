@@ -26,6 +26,8 @@ const http = require('http');
 const https = require('https');
 const { execFileSync } = require('child_process');
 
+const atomic = require('./atomic.js');
+
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const BETA = 'oauth-2025-04-20';
 // Claude Code gives the call five seconds; so does this.
@@ -328,22 +330,10 @@ function readLive() {
 
 // Through a temporary file named for this process, so a reader never sees
 // half a reading and two writers never share a temp file. A rename that fails
-// (Windows, with the target held open) leaves nothing behind.
+// (Windows, with the target held open) is retried, and one that still fails
+// leaves nothing behind: see atomic.js.
 function writeAtomic(file, text) {
-  const temp = file + '.' + process.pid + '.usage-limits-tmp';
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(temp, text, 'utf8');
-    fs.renameSync(temp, file);
-    return true;
-  } catch (err) {
-    try {
-      fs.unlinkSync(temp);
-    } catch (gone) {
-      // Nothing to clean up.
-    }
-    return false;
-  }
+  return atomic.tryWriteFileAtomic(file, text);
 }
 
 function writeLive(snapshot) {

@@ -14,6 +14,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const atomic = require('./atomic.js');
+
 const KEEP_SESSIONS = 8;
 // A session that has said nothing for this long is not working, whatever its
 // last word was: a crash never sends Stop.
@@ -68,22 +70,8 @@ function mark(state, sessionId, extra, now) {
     if (extra && extra.model) entry.model = String(extra.model);
     else if (previous.model) entry.model = previous.model;
     all[sessionId || '_'] = entry;
-    const file = activityFile();
-    const temp = file + '.' + process.pid + '.usage-limits-tmp';
-    try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(temp, JSON.stringify(trim(all)), 'utf8');
-      fs.renameSync(temp, file);
-    } catch (err) {
-      // A rename Windows refused leaves nothing behind.
-      try {
-        fs.unlinkSync(temp);
-      } catch (gone) {
-        // Nothing to clean up.
-      }
-      return false;
-    }
-    return true;
+    // A rename Windows refused leaves nothing behind: see atomic.js.
+    return atomic.tryWriteFileAtomic(activityFile(), JSON.stringify(trim(all)));
   } catch (err) {
     return false;
   }

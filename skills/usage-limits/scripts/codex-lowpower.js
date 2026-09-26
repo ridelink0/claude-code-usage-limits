@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const atomicWrite = require('./atomic.js');
 const KEYS = ['model', 'model_reasoning_effort'];
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
@@ -118,9 +119,8 @@ function read(file, fallback) {
   try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; }
 }
 function atomic(file, text) {
-  const temp = file + '.' + process.pid + '.tmp';
-  try { fs.writeFileSync(temp, text, { encoding: 'utf8', mode: 0o600 }); fs.renameSync(temp, file); }
-  finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
+  // Throws on failure, as before, with the temporary file already removed.
+  atomicWrite.writeFileAtomic(file, text, { encoding: 'utf8', mode: 0o600 });
 }
 function checkState(state) {
   if (!state) return;

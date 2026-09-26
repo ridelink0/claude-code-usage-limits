@@ -24,6 +24,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const atomic = require('./atomic.js');
 const drift = require('./drift.js');
 
 // Older than this and the spend it measured is history: turns have happened
@@ -102,10 +103,9 @@ function record(binding, now, codexHome) {
     // here in the same second, and a reader between a truncate and a write
     // would see half a file.
     const file = readingFile(codexHome);
-    const tmp = file + '.' + process.pid + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(all));
-    fs.renameSync(tmp, file);
-    return true;
+    // A refused rename is retried and a failed one leaves nothing behind: see
+    // atomic.js. The caller only ever needed to know whether it landed.
+    return atomic.tryWriteFileAtomic(file, JSON.stringify(all));
   } catch (err) {
     return false;
   }

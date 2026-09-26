@@ -22,6 +22,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const atomic = require('./atomic.js');
+
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MANAGED_KEYS = ['effortLevel', 'model'];
 const DEFAULTS = { effortLevel: 'low' };
@@ -50,10 +52,7 @@ function readJson(file) {
 // Replace through a temporary file so an interrupted run cannot leave
 // settings.json half written.
 function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = file + '.usage-limits-tmp';
-  fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', 'utf8');
-  fs.renameSync(temp, file);
+  atomic.writeFileAtomic(file, JSON.stringify(value, null, 2) + '\n');
 }
 
 function parseArgs(argv) {
