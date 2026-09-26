@@ -354,7 +354,11 @@ test('the brief says the /low-priority line at the wall: what it costs, that rep
   assert.match(text, /weekly/i, 'it says which budget it spends');
   assert.match(text, /paus/i, 'it says replies can pause');
   // The one thing it must never imply: that anything here can switch it on.
-  assert.match(text, /you type it|type it yourself|yours to type/i);
+  // The brief is read by the model, where "you" is the model, so the typist
+  // has to be named as the user; "you type it yourself" said the opposite.
+  assert.match(text, /only\s+the user can type/i);
+  assert.match(text, /you cannot run a slash command/i);
+  assert.doesNotMatch(text, /you type it|type it yourself|yours to type/i);
   assert.doesNotMatch(text, /I will (turn|switch) (it )?on/i);
   // A possibility, not a promise: the arm is in a response header nothing here sees.
   assert.match(text, /if the wall offers it|may offer|is not guaranteed/i);
@@ -378,6 +382,12 @@ test('above the weekly threshold the brief says do not use it, and why', () => {
   assert.match(text, /\/low-priority/);
   assert.match(text, /not worth it|do not|don't/i);
   assert.match(text, /94/, 'it cites the weekly figure it judged on');
+  // One user's bug report (anthropics/claude-code#92544) is a report, not a
+  // measurement, and the decision is the user's to make, not the model's.
+  assert.match(text, /one user has reported/i);
+  assert.doesNotMatch(text, /has been measured/i);
+  assert.match(text, /only the user can type it/i);
+  assert.doesNotMatch(text, /the answer is no/i);
 });
 
 test('with no offer on this account the brief never mentions /low-priority', () => {
@@ -537,7 +547,8 @@ test('run() actually puts the /low-priority line in front of Claude, not just br
     const text = await brief.run(now, { session_id: 'sess-lowpri', cwd: dir });
     assert.match(text, /\/low-priority/, text);
     assert.match(text, /weekly limit, which is at 45%/, text);
-    assert.match(text, /you\s+type it yourself/, text);
+    assert.match(text, /only\s+the user can type/, text);
+    assert.doesNotMatch(text, /you\s+type it yourself/, text);
     assert.doesNotMatch(text, /20 minutes/);
 
     // And with the flag absent the very same account says nothing about it.
@@ -798,4 +809,215 @@ test('nothing in this module throws on a machine with no Claude Code state at al
       lowpri.advise({ now: T });
       lowpri.forBrief({ now: T });
     });
+  }));
+
+// ---------------------------------------------------------------------------
+// The adversarial pass, 2026-09-26. Five defects the first build shipped, each
+// found by running the real hooks as child processes with a crafted
+// CLAUDE_CONFIG_DIR rather than by calling the functions.
+// ---------------------------------------------------------------------------
+
+test('acknowledged with no weekly to brake on, the brief does not claim the figures are the weekly', () =>
+  isolatedAsync(async (dir) => {
+    const lowpri = fresh('lowpri');
+    const brief = fresh('brief');
+    const now = Date.now();
+    // Provisioned, at the 5-hour wall, and NO seven_day window at all - which
+    // happens on a snapshot that has not carried one yet.
+    fs.writeFileSync(
+      path.join(dir, '.claude.json'),
+      JSON.stringify({
+        oauthAccount: { accountUuid: 'acct-nw', organizationType: 'claude_max' },
+        cachedGrowthBookFeatures: { tengu_toasty_breeze: TOASTY },
+        cachedUsageUtilization: {
+          fetchedAtMs: now,
+          accountUuid: 'acct-nw',
+          utilization: { five_hour: { utilization: 99, resets_at: new Date(now + 40 * MINUTE).toISOString() } },
+        },
+      })
+    );
+    lowpri.acknowledge({ on: true, windowKey: 'five_hour', resetsAt: now + 40 * MINUTE, now });
+    const text = await brief.run(now, { session_id: 'nw-1', cwd: dir });
+    // wallFeatures cannot swap, so the 5-hour window is still what the figures
+    // describe - and the sentence must not contradict them.
+    assert.match(text, /binding window is 5-hour/, text);
+    assert.doesNotMatch(text, /the figures above are the weekly/, text);
+    assert.doesNotMatch(text, /brake is the weekly window and not the 5-hour one/, text);
+    // It still says the acknowledgement was heard, and says what to do about it.
+    assert.match(text, /no usable weekly reading/, text);
+    assert.match(text, /still the one to plan against/, text);
+  }));
+
+test('acknowledged with the weekly already binding on its own still gets the swapped wording', () =>
+  isolatedAsync(async (dir) => {
+    const lowpri = fresh('lowpri');
+    const brief = fresh('brief');
+    const now = Date.now();
+    // The ordinary shape after a while at lower priority: the 5-hour window has
+    // rolled over and reads low, the weekly is the wall. No swap is needed
+    // because the weekly is binding already, and the sentence is still true.
+    fs.writeFileSync(
+      path.join(dir, '.claude.json'),
+      JSON.stringify({
+        oauthAccount: { accountUuid: 'acct-wb', organizationType: 'claude_max' },
+        cachedGrowthBookFeatures: { tengu_toasty_breeze: TOASTY },
+        cachedUsageUtilization: {
+          fetchedAtMs: now,
+          accountUuid: 'acct-wb',
+          utilization: {
+            five_hour: { utilization: 5, resets_at: new Date(now + 40 * MINUTE).toISOString() },
+            seven_day: { utilization: 70, resets_at: new Date(now + 2 * DAY).toISOString() },
+          },
+        },
+      })
+    );
+    lowpri.acknowledge({ on: true, windowKey: 'five_hour', resetsAt: now + 40 * MINUTE, now });
+    const text = await brief.run(now, { session_id: 'wb-1', cwd: dir });
+    assert.match(text, /binding window is weekly/, text);
+    assert.match(text, /the figures above are the weekly/, text);
+  }));
+
+test('an acknowledgement with no readable reset lapses after the window it belongs to, instead of living for ever', () =>
+  isolated(() => {
+    const lowpri = fresh('lowpri');
+    const now = T;
+    // This is exactly what mode.js writes when no five_hour reset was readable.
+    lowpri.acknowledge({ on: true, windowKey: null, resetsAt: null, now });
+    const fresh1 = lowpri.readAck(now);
+    assert.ok(fresh1, 'it counts right away');
+    assert.strictEqual(fresh1.expiryKnown, false, 'and says the expiry is not the real reset');
+    assert.strictEqual(fresh1.expiresAt, now + lowpri.ACK_MAX_MS);
+    assert.ok(lowpri.readAck(now + lowpri.ACK_MAX_MS - MINUTE), 'still on just inside the window');
+    assert.strictEqual(lowpri.readAck(now + lowpri.ACK_MAX_MS), null, 'and spent at the end of it');
+    // Three days later is the case that was live before: it read as ON.
+    assert.strictEqual(lowpri.readAck(now + 3 * DAY), null);
+  }));
+
+test('a record with no usable timestamp is not a record, so nothing prints "Invalid Date"', () =>
+  isolated((dir) => {
+    const lowpri = fresh('lowpri');
+    const mode = fresh('mode');
+    fs.writeFileSync(
+      path.join(dir, 'usage-limits-lowpri.json'),
+      JSON.stringify({ ack: { on: true, at: 'nope', resetsAt: 'nope' } })
+    );
+    assert.strictEqual(lowpri.readAck(T), null, 'a hand-edited file is not an acknowledgement');
+    const said = mode.main(['--low-priority']);
+    assert.doesNotMatch(said, /Invalid Date/, said);
+    assert.match(said, /has not been acknowledged/, said);
+  }));
+
+test('a statement that could not be saved is never reported as recorded', () =>
+  isolated((dir) => {
+    const lowpri = fresh('lowpri');
+    const mode = fresh('mode');
+    // A directory where the state file goes: the write can never succeed.
+    fs.mkdirSync(path.join(dir, 'usage-limits-lowpri.json'));
+    const written = lowpri.acknowledge({ on: true, windowKey: 'five_hour', resetsAt: T + HOUR, now: T });
+    assert.strictEqual(written.saved, false, 'acknowledge reports the failure');
+
+    const said = mode.main(['--low-priority', 'on']);
+    assert.doesNotMatch(said, /^Recorded/, said);
+    assert.match(said, /NOT recorded/, said);
+    assert.match(said, /could not be written/, said);
+    // And it does not then claim to be on.
+    assert.match(mode.main(['--low-priority']), /has not been acknowledged/);
+  }));
+
+test('a wake armed by hand for the 5-hour reset says that low-priority makes it a second start', () =>
+  isolated((dir) => {
+    const lowpri = fresh('lowpri');
+    const relay = fresh('relay');
+    const host = require('../skills/usage-limits/scripts/host.js');
+    lowpri.acknowledge({ on: true, windowKey: 'five_hour', resetsAt: Date.now() + HOUR, now: Date.now() });
+    // armable() is the gate the hooks go through; the by-hand command did not.
+    const refused = relay.armable({
+      now: Date.now(),
+      sessionId: 'byhand-1',
+      hostName: host.CLAUDE,
+      binding: { key: 'five_hour', percentUsed: 99, resetsAt: Date.now() + HOUR },
+      work: { hasWork: true, pending: 1, todos: [] },
+      config: Object.assign({}, relay.settings(relay.read()), { enabled: true, at: 75, armOn: 'threshold' }),
+      atCompletion: true,
+    });
+    assert.strictEqual(refused.ok, false);
+    assert.match(refused.why, /low-priority is acknowledged on/);
+    // And the acknowledgement is what the by-hand path now has to read, so the
+    // note it appends is not silent about the same fact.
+    assert.ok(lowpri.readAck(Date.now()), 'the record the by-hand path reads');
+    assert.strictEqual(typeof relay.armByHand, 'function', 'and the path that has to say it');
+  }));
+
+// ---------------------------------------------------------------------------
+// The second adversarial pass, 2026-09-25 late. Each of these was reproduced by
+// running mode.js and brief.js as child processes against a crafted config
+// directory before it was fixed.
+// ---------------------------------------------------------------------------
+
+test('a state file holding an array is not a state, so "on" really is recorded', () =>
+  isolated((dir) => {
+    const lowpri = fresh('lowpri');
+    const mode = fresh('mode');
+    // JSON.stringify drops a named property set on an array, so this used to
+    // write [] back, report saved:true, and print "Recorded".
+    fs.writeFileSync(path.join(dir, 'usage-limits-lowpri.json'), '[]');
+    const said = mode.main(['--low-priority', 'on']);
+    assert.match(said, /^Recorded/, said);
+    assert.ok(lowpri.readAck(Date.now()), 'and the next read finds it');
+    assert.match(mode.main(['--low-priority']), /acknowledged low-priority ON/);
+  }));
+
+test('a snapshot whose 5-hour reset is already past does not stamp that past time on the record', () =>
+  isolated((dir) => {
+    const lowpri = fresh('lowpri');
+    const mode = fresh('mode');
+    const now = Date.now();
+    // Six hours old: the five_hour reset it carries has already gone by.
+    fs.writeFileSync(
+      path.join(dir, '.claude.json'),
+      JSON.stringify({
+        oauthAccount: { accountUuid: 'acct-past' },
+        cachedGrowthBookFeatures: { tengu_toasty_breeze: TOASTY },
+        cachedUsageUtilization: {
+          fetchedAtMs: now - 6 * HOUR,
+          accountUuid: 'acct-past',
+          utilization: {
+            five_hour: { utilization: 97, resets_at: new Date(now - HOUR).toISOString() },
+            seven_day: { utilization: 40, resets_at: new Date(now + 2 * DAY).toISOString() },
+          },
+        },
+      })
+    );
+    const said = mode.main(['--low-priority', 'on']);
+    assert.match(said, /^Recorded/, said);
+    // It used to say "lapses on its own at <an hour ago>" and then be gone.
+    assert.match(said, /No 5-hour reset time was readable/, said);
+    const ack = lowpri.readAck(Date.now());
+    assert.ok(ack, 'the statement survives the next read');
+    assert.strictEqual(ack.expiryKnown, false);
+    assert.ok(ack.expiresAt > Date.now());
+  }));
+
+test('a clear that could not be written is never reported as cleared', () =>
+  isolated(() => {
+    const lowpri = fresh('lowpri');
+    const mode = fresh('mode');
+    const atomic = require('../skills/usage-limits/scripts/atomic.js');
+    lowpri.acknowledge({ on: true, windowKey: 'five_hour', resetsAt: Date.now() + HOUR, now: Date.now() });
+    const real = atomic.writeFileAtomic;
+    atomic.writeFileAtomic = () => {
+      throw new Error('EPERM: simulated');
+    };
+    let said;
+    try {
+      said = mode.main(['--low-priority', 'off']);
+    } finally {
+      atomic.writeFileAtomic = real;
+    }
+    assert.doesNotMatch(said, /^Cleared/, said);
+    assert.match(said, /NOT cleared/, said);
+    assert.ok(lowpri.readAck(Date.now()), 'and the record really is still there');
+    // With the write working again, off clears it.
+    assert.match(mode.main(['--low-priority', 'off']), /^Cleared/);
+    assert.strictEqual(lowpri.readAck(Date.now()), null);
   }));

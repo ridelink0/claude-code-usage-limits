@@ -1496,11 +1496,30 @@ async function armByHand(rest) {
   });
   if (!result.ok) return 'Could not arm: ' + result.error;
   if (text) saveContinuation(sessionId, text);
+  // armable() refuses a 5-hour wake while low-priority is acknowledged, and
+  // this path never went through it: `relay arm --session <id>` booked the wake
+  // anyway and said nothing, which is the double-start the whole gate exists to
+  // prevent. An explicit command is still honoured - it is what somebody typed
+  // - but it says what `defer reset` says, so the person deciding has the fact.
+  let lowPriorityNote = '';
+  if (binding.key === 'five_hour' && usage.currentHost() === host.CLAUDE) {
+    try {
+      if (lowpri.readAck(now)) {
+        lowPriorityNote =
+          ' Note: you have said /low-priority is on, so this session carries past the 5-hour reset ' +
+          'on its own and this wake would start the work a second time. Arm against the weekly ' +
+          'instead, or say usage-mode --low-priority off if it has ended; "relay cancel" calls this one off.';
+      }
+    } catch (err) {
+      // A missing or unreadable record is not a reason to refuse a command.
+    }
+  }
   return (
     'Armed by hand for session ' + sessionId.slice(0, 8) + ': wake at ' +
       new Date(result.record.wakeAt).toLocaleString() + ' via ' + result.record.how + '.' +
       (result.record.preflight && result.record.preflight.length ? ' Pre-answered: ' + result.record.preflight.join(', ') + '.' : '') +
-      (text ? ' Continuation saved.' : ' No continuation yet - add one with: relay note "<text>"')
+      (text ? ' Continuation saved.' : ' No continuation yet - add one with: relay note "<text>"') +
+      lowPriorityNote
   );
 }
 

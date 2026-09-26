@@ -1028,35 +1028,53 @@ function briefText(input) {
   // style drops only what reads the same every turn. This does not.
   const lp = parts.lowPriority || null;
   let lowPrioritySentence = null;
-  if (lp && lp.state === 'acknowledged') {
+  // The acknowledged sentence describes the SWAP, so it may only be said when
+  // the swap really happened. wallFeatures refuses to swap unless there is a
+  // weekly window with a live percentage and a known reset, and this branch
+  // used to fire on the acknowledgement alone - so on an account with no
+  // readable weekly the brief said "binding window is 5-hour 99% used" in one
+  // clause and "the figures above are the weekly" in the next. A line that
+  // contradicts the numbers printed beside it is worse than no line: it tells
+  // the model to ignore a wall that is still there.
+  if (lp && lp.state === 'acknowledged' && lp.weeklyBinding) {
     lowPrioritySentence = (
-      'You have said /low-priority is on, so the brake is the weekly window and not the 5-hour one: ' +
+      'The user has said /low-priority is on, so the brake is the weekly window and not the 5-hour one: ' +
         (Number.isFinite(lp.fiveHourPercent)
           ? 'the 5-hour limit is at ' + lp.fiveHourPercent + '% and no longer stops this session, '
           : 'the 5-hour limit no longer stops this session, ') +
         'the figures above are the weekly, and replies may pause while lower priority waits for spare ' +
-        'capacity. Whether it is still on cannot be read from here, so if it has ended say so with ' +
-        'usage-mode --low-priority off and the 5-hour wall counts again. It also draws on a separate ' +
+        'capacity. Whether it is still on cannot be read from here, so if the user says it has ended, ' +
+        'record that with usage-mode --low-priority off and the 5-hour wall counts again. It also draws on a separate ' +
         'weekly lower-priority allowance that is exposed to no hook and no file, so nothing here can ' +
         'track how much of that is left.'
     );
+  } else if (lp && lp.state === 'acknowledged') {
+    // Acknowledged, but there is no weekly reading to brake on, so the figures
+    // above are still the window they say they are and the wall is still real.
+    lowPrioritySentence = (
+      'The user has said /low-priority is on, which spends the weekly limit instead of stopping at the ' +
+        '5-hour one - but there is no usable weekly reading here to brake on, so the figures above are ' +
+        'the window named beside them and that window is still the one to plan against. /usage (the ' +
+        'user types it) refreshes the account snapshot; until it has a weekly, treat the limit above as real.'
+    );
   } else if (lp && lp.advise && lp.advise.kind === 'offer') {
     lowPrioritySentence = (
-      'If the wall offers it, /low-priority carries this session past the 5-hour limit at lower ' +
+      'If the wall offers it, /low-priority can carry this session past the 5-hour limit at lower ' +
         'priority instead of stopping: it spends the weekly limit, which is at ' +
         lp.advise.weeklyPercent + '% and so has room, and replies may pause while it waits for spare ' +
-        'capacity - the wait and its ceiling are set by the server per request. It is a toggle: you ' +
-        'type it yourself and run it again to stop, and nothing here can switch it on for you. Say ' +
-        'in one line that it is there; if it is taken, usage-mode --low-priority on is what makes ' +
-        'this line brake on the weekly instead.'
+        'capacity - the wait and its ceiling are set by the server per request. It is a toggle only ' +
+        'the user can type, and type again to stop: you cannot run a slash command, and nothing here ' +
+        'can switch it on. Tell the user in one line that it is there; if the user says it is taken, ' +
+        'usage-mode --low-priority on is what makes this line brake on the weekly instead.'
     );
   } else if (lp && lp.advise && lp.advise.kind === 'hold') {
     lowPrioritySentence = (
       'The wall may offer /low-priority here, and it is not worth taking: it spends the weekly limit, ' +
         'which is already at ' + lp.advise.weeklyPercent + '% - past the ' + lp.advise.threshold +
         ' per cent this plugin will recommend it at - and it draws on a weekly lower-priority ' +
-        'allowance as well, which has been measured emptying most of a week in a couple of hours. ' +
-        'Say in one line that the answer is no and why; waiting out the 5-hour reset is the cheaper move.'
+        'allowance as well, which one user has reported burning through almost a week of usage in a ' +
+        'couple of hours. The choice is the user\'s, and only the user can type it: say in one line ' +
+        'that this plugin advises against it and why; waiting out the 5-hour reset is the cheaper move.'
     );
   }
   if (lowPrioritySentence) sentences.push(lowPrioritySentence);
@@ -1074,7 +1092,8 @@ function briefText(input) {
       'A once-weekly manual session reset appears to be available on this account (/limit-reset). It ' +
         'only works while you are actually AT a limit, and the work it unlocks still spends the weekly, ' +
         'so it moves the 5-hour wall rather than adding budget. How many are left is not readable from ' +
-        'here - the CLI asks the server for that. It is yours to type, like /low-priority.'
+        'here - the CLI asks the server for that. Like /low-priority, only the user can type it; you ' +
+        'cannot run a slash command.'
     );
   }
   if (parts.session) {
@@ -1524,9 +1543,17 @@ function wallFeatures(now, binding, windows, hostName) {
       if (weekly && Number.isFinite(weekly.percentUsed) && !weekly.stale && Number.isFinite(weekly.resetsAt)) {
         out.binding = weekly;
         out.swapped = true;
-        out.lowPriority = Object.assign({}, info, { weeklyBinding: true });
       }
     }
+    // Whether the weekly really is the window the figures describe, which is
+    // what the acknowledged sentence claims. True when the swap just happened
+    // AND when the weekly was already binding on its own - the 5-hour window
+    // reading low is the ordinary case for a session that has been running at
+    // lower priority for a while. False when there was no weekly to brake on,
+    // and then the sentence has to say so instead of claiming otherwise.
+    out.lowPriority = Object.assign({}, info, {
+      weeklyBinding: Boolean(out.binding && out.binding.key === 'seven_day'),
+    });
   } catch (err) {
     // Nothing about these features is worth a failed prompt.
   }

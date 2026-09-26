@@ -1505,7 +1505,12 @@ function main(argv) {
         const usage = require('./usage.js');
         const windows = usage.snapshotWindows(usage.collect(now), now, null) || [];
         const five = windows.find((w) => w && w.key === 'five_hour');
-        if (five && Number.isFinite(five.resetsAt)) {
+        // Only a reset still ahead. A stale snapshot carries the reset of a
+        // window that has already rolled over, and stamping that on the record
+        // printed "Recorded ... lapses at" a time already gone - and the very
+        // next read found it spent, so the statement vanished. The next reset
+        // is unknown then, and the record takes the five-hour ceiling instead.
+        if (five && Number.isFinite(five.resetsAt) && five.resetsAt > now) {
           windowKey = 'five_hour';
           resetsAt = five.resetsAt;
         }
@@ -1513,7 +1518,18 @@ function main(argv) {
         // No reading is not a reason to refuse the user's own statement; the
         // record simply has no expiry to hang on.
       }
-      lowpri.acknowledge({ on: true, windowKey, resetsAt, now });
+      const written = lowpri.acknowledge({ on: true, windowKey, resetsAt, now });
+      // A write that did not happen is never reported as one. With a directory
+      // sitting where the state file goes this said "Recorded" and the next
+      // brief behaved as though nothing had been said.
+      if (!written.saved) {
+        return [
+          'NOT recorded: ' + written.file + ' could not be written, so nothing was saved and the ' +
+            'brief will go on treating the 5-hour window as a real wall.',
+          '',
+          'Check that the path is a writable file and not a directory, then run this again.',
+        ].join('\n');
+      }
       logChange({ plane: 'mode', key: 'low-priority', from: 'unknown', to: 'on', by: 'user', reason: null }, now);
       return [
         'Recorded: you have switched /low-priority on.',
@@ -1530,14 +1546,25 @@ function main(argv) {
         '',
         resetsAt
           ? 'This lapses on its own at ' + new Date(resetsAt).toLocaleString() + ', when the 5-hour window resets.'
-          : 'No 5-hour reset time was readable, so this has no expiry: clear it by hand when it ends.',
+          : 'No 5-hour reset time was readable, so this lapses at ' +
+            new Date(now + lowpri.ACK_MAX_MS).toLocaleString() + ' instead - five hours, the length of ' +
+            'the window the toggle belongs to, which is the longest it could honestly still be true. ' +
+            'Run /usage and set it again if it is still on then.',
         '',
         detail,
       ].join('\n');
     }
     if (asked === 'off' || asked === 'no' || asked === 'false') {
       const had = lowpri.readAck(now);
-      lowpri.acknowledge({ on: false, now });
+      const cleared = lowpri.acknowledge({ on: false, now });
+      // The same rule as "on": a clear that did not reach the file is not
+      // reported as one, because the record it failed to remove still steers
+      // the brief at the weekly.
+      if (had && !cleared.saved) {
+        return 'NOT cleared: ' + cleared.file + ' could not be written, so the acknowledgement is still ' +
+          'there and the brief will go on braking on the weekly until it lapses at ' +
+          new Date(had.expiresAt).toLocaleString() + '. Check that the file is writable, then run this again.';
+      }
       logChange({ plane: 'mode', key: 'low-priority', from: had ? 'on' : 'unknown', to: 'off', by: 'user', reason: null }, now);
       return had
         ? 'Cleared: low-priority is off again, so the 5-hour window counts as a wall from the next prompt.'
@@ -1550,9 +1577,15 @@ function main(argv) {
     const wrap = lowpri.wrapUp(account);
     const auto = lowpri.autoContinue();
     return [
+      // readAck drops a record with no usable timestamp, so there is no longer
+      // a path that prints "at Invalid Date" here, and the expiry is always a
+      // real time: the window's reset, or five hours from the statement.
       ack
         ? 'You have acknowledged low-priority ON, at ' + new Date(ack.at).toLocaleString() +
-          (Number.isFinite(ack.resetsAt) ? ', lapsing at ' + new Date(ack.resetsAt).toLocaleString() : ', with no expiry') + '.'
+          (Number.isFinite(ack.expiresAt)
+            ? ', lapsing at ' + new Date(ack.expiresAt).toLocaleString() +
+              (ack.expiryKnown ? ' when the 5-hour window resets' : ' (no reset time was readable, so this is five hours from the statement)')
+            : '') + '.'
         : 'Low-priority has not been acknowledged, so the plugin treats the 5-hour window as a real wall.',
       '',
       'It is a toggle you type yourself. The model cannot run a slash command, and /low-priority is ' +

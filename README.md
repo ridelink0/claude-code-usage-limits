@@ -393,20 +393,20 @@ relayed run either.
 At the wall with weekly headroom, the line looks like this:
 
 ```
-If the wall offers it, /low-priority carries this session past the 5-hour limit
-at lower priority instead of stopping: it spends the weekly limit, which is at
-45% and so has room, and replies may pause while it waits for spare capacity -
-the wait and its ceiling are set by the server per request. It is a toggle: you
-type it yourself and run it again to stop, and nothing here can switch it on
-for you.
+If the wall offers it, /low-priority can carry this session past the 5-hour
+limit at lower priority instead of stopping: it spends the weekly limit, which
+is at 45% and so has room, and replies may pause while it waits for spare
+capacity - the wait and its ceiling are set by the server per request. It is a
+toggle only the user can type, and type again to stop: you cannot run a slash
+command, and nothing here can switch it on.
 ```
 
 **The recommendation has a number behind it.** It is offered only while the
 weekly is at or below **80 per cent** and the 5-hour window is the binding wall.
 Above that the brief actively says not to, and cites the figure: low-priority
 spends the weekly *and* draws on a weekly allowance whose size is exposed to no
-hook and no file, and a real user measured it emptying most of a week in a
-couple of hours. No wait time is ever printed, because the retry and the ceiling
+hook and no file, and one user has reported it burning through almost a week of
+usage in a couple of hours (anthropics/claude-code#92544). No wait time is ever printed, because the retry and the ceiling
 come from `lowPriorityRetryAfterSeconds` and `lowPriorityMaxWaitSeconds` on each
 response — any fixed "20 seconds, 20 minutes" would be invented.
 

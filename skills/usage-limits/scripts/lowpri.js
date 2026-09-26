@@ -95,7 +95,7 @@ const MAX_COOLOFF_MINUTES = 1440;
 // The recommendation rule, in one number so it can be argued with.
 //
 // /low-priority spends the weekly and draws on a weekly allowance whose size is
-// exposed nowhere a hook can read, and a real user measured it burning "almost
+// exposed nowhere a hook can read, and one user has reported it burning "almost
 // a week of usage in a couple hours"
 // (github.com/anthropics/claude-code/issues/92544). So it is worth naming only
 // while the weekly still has real room. At or below this it is offered; above
@@ -105,6 +105,22 @@ const WEEKLY_HEADROOM_MAX = 80;
 // Past this the 5-hour window is the wall, which is the only place the CLI
 // offers the toggle at all.
 const WALL_PERCENT = 90;
+
+// How long an acknowledgement with no readable reset time is allowed to live.
+//
+// The record is meant to lapse at the reset of the window it belongs to. When
+// that reset could not be read - a session with no account snapshot, or a
+// snapshot with no five_hour entry - the record used to be written with
+// resetsAt null, and readAck only lapsed a FINITE resetsAt. So it never lapsed:
+// a record written once went on redirecting the headroom maths at the weekly
+// for ever. Probed on 2026-09-26 with an acknowledgement three days old and the
+// 5-hour window reading 0 per cent, and the brief still said the 5-hour limit
+// "no longer stops this session".
+//
+// The window the toggle is offered at is five hours long, so an
+// acknowledgement made against it cannot honestly outlive five hours from when
+// it was made. That is the ceiling, not a guess at when it really ended.
+const ACK_MAX_MS = 5 * 60 * 60 * 1000;
 
 function configDir() {
   return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
@@ -276,9 +292,13 @@ function autoContinue() {
 // session where the 5-hour wall is real again.
 // ---------------------------------------------------------------------------
 
+// An array is an object too, and JSON.stringify drops a named property set on
+// one: a state file holding `[]` made acknowledge() write `[]` straight back,
+// report saved:true, and usage-mode print "Recorded" for a statement that the
+// next read could not find. Only a plain object is a state.
 function readState() {
   const parsed = readJson(stateFile());
-  return parsed && typeof parsed === 'object' ? parsed : {};
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
 }
 
 function writeState(state) {
@@ -290,14 +310,20 @@ function writeState(state) {
   }
 }
 
+// `saved` is reported, never assumed. A state path that cannot be written -
+// a directory sitting where the file goes, a read-only home - used to return
+// the record anyway, so usage-mode printed "Recorded: you have switched
+// /low-priority on" and then the very next brief behaved as though nothing had
+// been said. Telling somebody their statement was recorded when it was not is
+// the one thing this module must not do.
 function acknowledge(input) {
   const options = input || {};
   const now = Number.isFinite(options.now) ? options.now : Date.now();
   if (!options.on) {
     const state = readState();
     delete state.ack;
-    writeState(state);
-    return { on: false, at: now };
+    const saved = writeState(state);
+    return { on: false, at: now, saved, file: stateFile() };
   }
   const record = {
     on: true,
@@ -307,18 +333,35 @@ function acknowledge(input) {
   };
   const state = readState();
   state.ack = record;
-  writeState(state);
-  return record;
+  const saved = writeState(state);
+  return Object.assign({}, record, { saved, file: stateFile() });
+}
+
+// When a record stops being true: the reset of the window it was stamped
+// against, or - when that could not be read - ACK_MAX_MS after it was made.
+// Both are returned as `expiresAt` so a caller never has to work it out twice
+// and get a different answer.
+function ackExpiry(ack) {
+  if (!ack) return null;
+  if (Number.isFinite(ack.resetsAt)) return ack.resetsAt;
+  if (Number.isFinite(ack.at)) return ack.at + ACK_MAX_MS;
+  return null;
 }
 
 function readAck(now) {
   const at = Number.isFinite(now) ? now : Date.now();
   const state = readState();
   const ack = state.ack;
-  if (!ack || ack.on !== true) return null;
-  // Past the reset of the window it was recorded against, the fact is spent.
-  if (Number.isFinite(ack.resetsAt) && at >= ack.resetsAt) return null;
-  return ack;
+  if (!ack || typeof ack !== 'object' || ack.on !== true) return null;
+  // A record with no usable timestamp is not a record. It printed as
+  // "acknowledged ... at Invalid Date" before this, off a hand-edited or
+  // half-written file, which is the plugin quoting garbage back as fact.
+  if (!Number.isFinite(ack.at)) return null;
+  // Past the reset of the window it was recorded against - or past the length
+  // of that window, when no reset was readable - the fact is spent.
+  const expiresAt = ackExpiry(ack);
+  if (Number.isFinite(expiresAt) && at >= expiresAt) return null;
+  return Object.assign({}, ack, { expiresAt, expiryKnown: Number.isFinite(ack.resetsAt) });
 }
 
 // Exactly three states, and activeKnown is false in every one of them.
@@ -404,6 +447,8 @@ module.exports = {
   MAX_COOLOFF_MINUTES,
   WEEKLY_HEADROOM_MAX,
   WALL_PERCENT,
+  ACK_MAX_MS,
+  ackExpiry,
   configDir,
   stateFile,
   accountFiles,
