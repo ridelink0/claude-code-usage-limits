@@ -550,6 +550,18 @@ test('the once-a-week session reset this account holds is named at the 5-hour wa
   });
   assert.doesNotMatch(weeklyWall, /limit-reset/, weeklyWall);
 
+  // The CLI refuses a reset while lower priority runs ("Resets can't be used
+  // while you continue at lower priority"). With no weekly reading the brief
+  // cannot swap, so the 5-hour window is still binding - and it must still not
+  // offer the reset once the user has said low-priority is on.
+  const acknowledged = brief.briefText({
+    binding: Object.assign({}, FIVE_HOUR),
+    turnsLeft: 2,
+    pressure: 'tight',
+    lowPriority: Object.assign({}, lp, { state: 'acknowledged', weeklyBinding: false }),
+  });
+  assert.doesNotMatch(acknowledged, /limit-reset/, acknowledged);
+
   const roomy = brief.briefText({
     binding: Object.assign({}, FIVE_HOUR, { percentUsed: 20 }),
     turnsLeft: 200,

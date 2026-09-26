@@ -1103,7 +1103,10 @@ function briefText(input) {
   const resetVariant = lp && lp.resetGrant ? lp.resetVariant || 'grant' : null;
   const resetPressure = parts.pressure === 'tight' || parts.pressure === 'gone';
   const fiveHourWall = Boolean(parts.binding && parts.binding.key === 'five_hour');
-  if (resetVariant === 'weekly' && resetPressure && fiveHourWall) {
+  // Acknowledged is checked on its own as well as through the binding: with no
+  // weekly reading the brief cannot swap, the 5-hour window stays binding, and
+  // the reset would be offered to a session the CLI will not reset.
+  if (resetVariant === 'weekly' && resetPressure && fiveHourWall && lp.state !== 'acknowledged') {
     sentences.push(
       'This account is set up for a manual session reset (/limit-reset): once a week it resets the ' +
         '5-hour limit, and the work it unlocks still counts toward the weekly, so it moves the 5-hour ' +
