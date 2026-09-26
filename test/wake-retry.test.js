@@ -25,11 +25,12 @@ const path = require('node:path');
 
 const wake = require('../skills/usage-limits/scripts/wake.js');
 const relay = require('../skills/usage-limits/scripts/relay.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const SSL = 'API Error: Unable to connect to API: SSL certificate hostname mismatch';
 
 function isolate() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-wake-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-wake-'));
   process.env.CLAUDE_CONFIG_DIR = dir;
   return dir;
 }

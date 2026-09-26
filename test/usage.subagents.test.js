@@ -12,6 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const usage = require('../skills/usage-limits/scripts/usage.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -159,7 +160,7 @@ test('the report reads subagent transcripts and says how many calls they made', 
 });
 
 test('readClaudeEvents finds the agents a Workflow runs, two directories down', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-workflows-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-workflows-'));
   const project = path.join(dir, 'projects', 'C--proj');
   fs.mkdirSync(path.join(project, SESSION, 'subagents', 'workflows', 'wf_1'), { recursive: true });
   fs.writeFileSync(path.join(project, SESSION + '.jsonl'), line('main', NOW - MINUTE) + '\n');

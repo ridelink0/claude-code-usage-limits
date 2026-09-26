@@ -7,12 +7,13 @@ const os = require('node:os');
 const path = require('node:path');
 
 const activity = require('../skills/usage-limits/scripts/activity.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const MINUTE = 60 * 1000;
 const NOW = Date.parse('2026-09-05T12:00:00.000Z');
 
 function withConfigDir(fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-activity-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-activity-'));
   const before = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = dir;
   try {
@@ -94,7 +95,7 @@ test('a corrupt file is an empty one', () =>
 test('mark never throws, even where it cannot write', () => {
   const before = process.env.CLAUDE_CONFIG_DIR;
   // A file where the directory should be: nothing can be created under it.
-  const blocker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-activity-')), 'blocker');
+  const blocker = path.join(tempdirs.make(path.join(os.tmpdir(), 'usage-limits-activity-')), 'blocker');
   fs.writeFileSync(blocker, 'x');
   process.env.CLAUDE_CONFIG_DIR = path.join(blocker, 'sub');
   try {

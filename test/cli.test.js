@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const cli = require('../bin/cli.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 // Collect what the command prints instead of letting it reach the runner.
 function capture(fn) {
@@ -115,7 +116,7 @@ test('--help lists the panel and the status line installer', async () => {
 });
 
 test('statusline status runs through the cli against the config dir', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-cli-statusline-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-cli-statusline-'));
   const before = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = dir;
   try {

@@ -13,6 +13,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const usage = require('../skills/usage-limits/scripts/usage.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -249,7 +250,7 @@ test('the status line leaves out a per-model weekly for a model that is not runn
   // it read 57% during the session that found this. Fixtures must not be able
   // to lose to the developer's own account.
   const savedDir = process.env.CLAUDE_CONFIG_DIR;
-  process.env.CLAUDE_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-test-'));
+  process.env.CLAUDE_CONFIG_DIR = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-test-'));
   try {
     const collected = { now: NOW, utilization: snapshot(), settings: { model: 'opus', effortLevel: 'high' } };
     // Shown, because hiding a limit outright is worse than over-reporting one

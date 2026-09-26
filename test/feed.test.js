@@ -11,6 +11,7 @@ const feed = require('../skills/usage-limits/scripts/feed.js');
 const view = require('../skills/usage-limits/scripts/view.js');
 const bars = require('../skills/usage-limits/scripts/bars.js');
 const statusline = require('../skills/usage-limits/scripts/statusline.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const script = path.join(__dirname, '..', 'skills', 'usage-limits', 'scripts', 'feed.js');
 const HOUR = 60 * 60 * 1000;
@@ -40,7 +41,7 @@ function account(now) {
 }
 
 function tempConfig(withSnapshot) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-feed-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-feed-'));
   const data = withSnapshot === false ? { cachedUsageUtilization: {} } : account(Date.now());
   fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify(data));
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ model: 'claude-opus-5' }));
@@ -71,7 +72,7 @@ function run(dir, input, env) {
 // A Codex home with one rollout in it, carrying the meter Codex writes beside
 // every request: 15% of the week spent, which the display shows as 85% left.
 function codexHome(usedPercent) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-codexhome-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-codexhome-'));
   const day = path.join(dir, 'sessions', '2026', '09', '06');
   fs.mkdirSync(day, { recursive: true });
   const at = new Date().toISOString();

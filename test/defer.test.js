@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const defer = require('../skills/usage-limits/scripts/defer.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -140,7 +141,7 @@ test('cancel records a readable outcome, not an object', () => {
   const relay = require('../skills/usage-limits/scripts/relay.js');
 
   const saved = process.env.CLAUDE_CONFIG_DIR;
-  process.env.CLAUDE_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-defer-'));
+  process.env.CLAUDE_CONFIG_DIR = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-defer-'));
   try {
     const state = relay.read();
     state.armed = {
@@ -182,7 +183,7 @@ test('relay.arm honours an exact wake time', () => {
   const os = require('node:os');
   const path = require('node:path');
   const savedDir = process.env.CLAUDE_CONFIG_DIR;
-  process.env.CLAUDE_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-arm-'));
+  process.env.CLAUDE_CONFIG_DIR = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-arm-'));
   try {
   const now = Date.now();
   const target = now + 90 * MINUTE;

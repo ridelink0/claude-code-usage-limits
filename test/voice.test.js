@@ -8,6 +8,7 @@ const path = require('node:path');
 
 const voice = require('../skills/usage-limits/scripts/voice.js');
 const host = require('../skills/usage-limits/scripts/host.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const NOW = Date.parse('2026-09-08T12:00:00.000Z');
 
@@ -20,7 +21,7 @@ test('voiceFile writes under the Codex home when running as Codex, not ~/.claude
   process.env.CODEX_HOME = codexDir;
   // A Claude-shaped config dir still set alongside it: under Codex this must
   // be ignored, the way every other state-writing script ignores it too.
-  process.env.CLAUDE_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-voice-claude-'));
+  process.env.CLAUDE_CONFIG_DIR = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-voice-claude-'));
   try {
     assert.strictEqual(host.detect(process.argv.slice(2), process.env), host.CODEX);
     assert.strictEqual(voice.voiceFile(), path.join(codexDir, 'usage-limits-voice.json'));

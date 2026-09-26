@@ -298,3 +298,55 @@ test('no script renames a file except through atomic.js', () => {
   }
   assert.deepStrictEqual(offenders, []);
 });
+
+// The second leak, and the one 60bc2e5 did not cover: the SUITE's own temp
+// directories. That commit stopped the `.usage-limits-tmp` files a refused
+// rename or a killed hook left behind; it never touched the directories the
+// tests themselves make with mkdtempSync. Measured on 2026-09-25 after it
+// landed: 82 usage-limits-* folders added to %TEMP% by every full run, with
+// 2,774 already piled up.
+//
+// The rule, checked rather than remembered: a test file that makes a temporary
+// directory has to be the thing that removes it - either through
+// tools/test-tempdirs.js, which removes them all when the file's process exits,
+// or with its own rmSync. A file with neither leaks one directory per run for
+// ever, and nothing else in the suite will ever notice.
+test('every test file that makes a temporary directory also gets rid of it', () => {
+  const dir = path.join(__dirname);
+  const offenders = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith('.test.js')) continue;
+    const source = fs.readFileSync(path.join(dir, name), 'utf8');
+    if (!/\bmkdtempSync\s*\(/.test(source)) continue;
+    const routed = /tempdirs\.(make|track)\s*\(/.test(source);
+    const removes = /\brmSync\s*\(/.test(source);
+    if (!routed && !removes) offenders.push(name);
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    'these test files create temporary directories and never remove them - use tools/test-tempdirs.js'
+  );
+});
+
+test('the temp-directory helper removes everything it made', () => {
+  const tempdirs = require('../tools/test-tempdirs.js');
+  const a = tempdirs.make('ul-helper-a-');
+  const b = tempdirs.make(path.join(os.tmpdir(), 'ul-helper-b-'));
+  // Both forms: a bare prefix and the full template the call sites build. An
+  // absolute template joined onto os.tmpdir() again is not a path on Windows.
+  assert.ok(fs.existsSync(a) && fs.existsSync(b));
+  assert.ok(path.isAbsolute(a) && path.isAbsolute(b));
+  assert.strictEqual(path.dirname(a), path.dirname(b));
+  // Contents go too, not just an empty directory.
+  fs.writeFileSync(path.join(a, 'x.json'), '{}');
+  fs.mkdirSync(path.join(b, 'deep', 'deeper'), { recursive: true });
+  tempdirs.cleanup();
+  assert.strictEqual(fs.existsSync(a), false);
+  assert.strictEqual(fs.existsSync(b), false);
+  assert.strictEqual(tempdirs.made.size, 0);
+  // A second cleanup, and a directory somebody else already removed, are both
+  // fine: this runs on process exit, where throwing would be the worst place.
+  tempdirs.track(path.join(os.tmpdir(), 'ul-helper-gone-does-not-exist'));
+  assert.doesNotThrow(() => tempdirs.cleanup());
+});

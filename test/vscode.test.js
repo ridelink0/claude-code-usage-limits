@@ -13,6 +13,7 @@ const path = require('node:path');
 const Module = require('node:module');
 
 const build = require('../vscode/build.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const root = path.join(__dirname, '..');
 const HOUR = 60 * 60 * 1000;
@@ -84,7 +85,7 @@ test('the extension activates, paints the status bar and renders the view', asyn
   const libDir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-vscode-lib-'));
   build.copyScripts(libDir, '0.0.0-test');
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-vscode-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-vscode-'));
   const now = Date.now();
   fs.writeFileSync(
     path.join(dir, '.claude.json'),

@@ -8,11 +8,12 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const statusline = require('../skills/usage-limits/scripts/statusline.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const root = path.join(__dirname, '..');
 
 function withConfigDir(fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-statusline-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-statusline-'));
   const before = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = dir;
   try {

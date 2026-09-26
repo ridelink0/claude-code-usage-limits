@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const relay = require('../skills/usage-limits/scripts/relay.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const NOW = Date.parse('2026-09-14T10:00:00Z');
 const WANTED = Date.parse('2026-09-14T14:30:00Z');
@@ -98,7 +99,7 @@ test('a failed re-arm leaves the previous wake in place', () => {
   const os = require('node:os');
   const path = require('node:path');
   const saved = process.env.CLAUDE_CONFIG_DIR;
-  process.env.CLAUDE_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-rearm-'));
+  process.env.CLAUDE_CONFIG_DIR = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-rearm-'));
   try {
     const now = Date.now();
     const first = relay.arm({

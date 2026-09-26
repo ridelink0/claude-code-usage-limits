@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const SCRIPTS = path.join(__dirname, '..', 'skills', 'usage-limits', 'scripts');
 
@@ -54,7 +55,7 @@ test('the Antigravity installer narrows PreToolUse to the fan-out tools', () => 
 
 function runHook(args, stdin, env) {
   const { spawnSync } = require('node:child_process');
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ul-agy-'));
+  const home = tempdirs.make(path.join(os.tmpdir(), 'ul-agy-'));
   const result = spawnSync(process.execPath, [path.join(SCRIPTS, 'agy-hook.js'), ...args], {
     input: stdin,
     encoding: 'utf8',

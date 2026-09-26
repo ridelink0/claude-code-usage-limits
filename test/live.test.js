@@ -8,11 +8,12 @@ const path = require('node:path');
 const http = require('node:http');
 
 const live = require('../skills/usage-limits/scripts/live.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const NOW = Date.parse('2026-09-05T12:00:00.000Z');
 
 function tempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-live-'));
+  return tempdirs.make(path.join(os.tmpdir(), 'usage-limits-live-'));
 }
 
 function withConfigDir(dir, fn) {

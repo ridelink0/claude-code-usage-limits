@@ -8,9 +8,10 @@ const path = require('path');
 
 const host = require('../skills/usage-limits/scripts/host.js');
 const usage = require('../skills/usage-limits/scripts/usage.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 function tempDir(name) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-' + name + '-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-' + name + '-'));
   return dir;
 }
 

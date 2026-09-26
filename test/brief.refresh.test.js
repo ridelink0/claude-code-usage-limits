@@ -13,6 +13,7 @@ const http = require('node:http');
 
 const brief = require('../skills/usage-limits/scripts/brief.js');
 const live = require('../skills/usage-limits/scripts/live.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const HOUR = 60 * 60 * 1000;
 
@@ -29,7 +30,7 @@ function serve(body) {
 
 test('the before-prompt line refreshes an aged reading the way /usage would', async () => {
   const now = Date.now();
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-brief-refresh-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-brief-refresh-'));
   const resets = new Date(now + 2 * HOUR).toISOString();
   const weekly = new Date(now + 3 * 24 * HOUR).toISOString();
   fs.writeFileSync(

@@ -23,6 +23,7 @@ const path = require('node:path');
 const mode = require('../skills/usage-limits/scripts/mode.js');
 const drift = require('../skills/usage-limits/scripts/drift.js');
 const brief = require('../skills/usage-limits/scripts/brief.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const NOW = Date.parse('2026-09-08T21:00:00.000Z');
 
@@ -1400,7 +1401,7 @@ test('ultracode is reported as ultracode, not as the xhigh it resolves to', () =
   const os = require('node:os');
   const path = require('node:path');
   const saved = process.env.CLAUDE_CONFIG_DIR;
-  process.env.CLAUDE_CONFIG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-uc-'));
+  process.env.CLAUDE_CONFIG_DIR = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-uc-'));
   try {
     const activity = require('../skills/usage-limits/scripts/activity.js');
     const now = Date.now();

@@ -13,6 +13,7 @@ const path = require('node:path');
 
 const usage = require('../skills/usage-limits/scripts/usage.js');
 const live = require('../skills/usage-limits/scripts/live.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const NOW = Date.parse('2026-09-05T12:00:00.000Z');
 const MINUTE = 60 * 1000;
@@ -25,7 +26,7 @@ function snapshot(percent) {
 }
 
 function setup(cacheAt, cachePercent) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-collect-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-collect-'));
   const account = { oauthAccount: { accountUuid: 'acc', organizationType: 'claude_max' } };
   // An empty object keeps accountFile() on this file: with no snapshot key at
   // all it would fall through to the real ~/.claude.json.

@@ -11,6 +11,7 @@ const { spawnSync } = require('node:child_process');
 const panel = require('../skills/usage-limits/scripts/panel.js');
 const view = require('../skills/usage-limits/scripts/view.js');
 const bars = require('../skills/usage-limits/scripts/bars.js');
+const tempdirs = require('../tools/test-tempdirs.js');
 
 const script = path.join(__dirname, '..', 'skills', 'usage-limits', 'scripts', 'panel.js');
 const HOUR = 60 * 60 * 1000;
@@ -40,7 +41,7 @@ function account(now) {
 }
 
 function tempConfig(model) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-panel-'));
+  const dir = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-panel-'));
   fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify(account(Date.now())));
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ model: model || 'claude-opus-5' }));
   return dir;
@@ -281,7 +282,7 @@ test('USAGE_LIMITS_FETCH=off is the same as --no-fetch', async () => {
 
 test('under Codex the panel reads the Codex meter and says so in the title', () => {
   const dir = tempConfig('claude-opus-5');
-  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-limits-codex-home-'));
+  const codexHome = tempdirs.make(path.join(os.tmpdir(), 'usage-limits-codex-home-'));
   const result = run(dir, ['--once', '--no-fetch', '--host', 'codex'], { CODEX_HOME: codexHome });
   assert.strictEqual(result.status, 0, result.stderr);
   assert.match(result.stdout, /Codex usage/);
