@@ -310,11 +310,40 @@ test('a manual session reset is reported only when there is something readable t
   // resets_left comes from a live endpoint, so the count is never claimed.
   assert.strictEqual(granted.resetsLeft, null);
 
-  // A null grant, which is what this account actually holds, is not a grant.
+  // A null grant is not a grant.
   assert.strictEqual(
     lowpri.sessionReset(account({ cachedUsageUtilization: { fetchedAtMs: T, utilization: { cedar_ember: null } } })).present,
     false
   );
+  assert.strictEqual(flagged.variant, 'grant');
+
+  // The variant this account actually holds, read from ~/.claude.json on
+  // 2026-09-25: the once-a-week session reset. The first build read only
+  // tengu_cedar_ember and called this account grant-less.
+  const weekly = lowpri.sessionReset(
+    account({ cachedGrowthBookFeatures: { tengu_nifty_lemur: { enabled: true, version: 1 } } })
+  );
+  assert.strictEqual(weekly.present, true);
+  assert.strictEqual(weekly.variant, 'weekly');
+  assert.strictEqual(weekly.resetsLeft, null);
+
+  // Both on: the CLI prefers the grant, and so does this.
+  assert.strictEqual(
+    lowpri.sessionReset(
+      account({ cachedGrowthBookFeatures: { tengu_nifty_lemur: { enabled: true }, tengu_cedar_ember: { enabled: true } } })
+    ).variant,
+    'grant'
+  );
+
+  // The CLI reads enabled === true on a plain object and nothing else. A
+  // switched-off flag is a truthy object, and it is not a reset on offer.
+  for (const off of [{ enabled: false }, {}, [], 'yes', 1, null]) {
+    assert.strictEqual(
+      lowpri.sessionReset(account({ cachedGrowthBookFeatures: { tengu_nifty_lemur: off, tengu_cedar_ember: off } })).present,
+      false,
+      JSON.stringify(off)
+    );
+  }
 });
 
 test('usage credits are reported as unavailable when the org has switched them off', () => {
@@ -474,24 +503,89 @@ test('a manual session reset is named at the wall only when one is actually read
   const brief = fresh('brief');
   const parts = { binding: Object.assign({}, FIVE_HOUR), turnsLeft: 2, pressure: 'tight' };
   const none = brief.briefText(Object.assign({}, parts, { lowPriority: { state: 'absent', advise: null, resetGrant: false } }));
-  assert.doesNotMatch(none, /limit-reset/, 'this account has no grant, so nothing is said');
+  assert.doesNotMatch(none, /limit-reset/, 'no reset on the account, so nothing is said');
 
-  const some = brief.briefText(Object.assign({}, parts, { lowPriority: { state: 'absent', advise: null, resetGrant: true } }));
+  // The counted grant (tengu_cedar_ember). Its own copy has a use-by date, a
+  // count and an early-use path, so "once a week" and "only at a limit" - which
+  // the first build said for it - are not claimed.
+  const some = brief.briefText(
+    Object.assign({}, parts, { lowPriority: { state: 'absent', advise: null, resetGrant: true, resetVariant: 'grant' } })
+  );
   assert.match(some, /\/limit-reset/);
-  assert.match(some, /still spends the weekly/);
-  assert.match(some, /only works while you are actually AT a limit/);
+  assert.match(some, /refilling your limits/);
+  assert.doesNotMatch(some, /once a week|once-weekly/i);
+  assert.doesNotMatch(some, /only works while|only at a/i);
   assert.match(some, /not readable from here/, 'resets_left is never claimed');
   assert.doesNotMatch(some, /\d+ resets? left/);
+  assert.match(some, /only the user can type it; you cannot run a slash command/);
 
   // Not while there is room: at 20 per cent nobody needs telling.
   const roomy = brief.briefText({
     binding: Object.assign({}, FIVE_HOUR, { percentUsed: 20 }),
     turnsLeft: 200,
     pressure: 'roomy',
-    lowPriority: { state: 'absent', advise: null, resetGrant: true },
+    lowPriority: { state: 'absent', advise: null, resetGrant: true, resetVariant: 'grant' },
   });
   assert.doesNotMatch(roomy, /limit-reset/);
 });
+
+test('the once-a-week session reset this account holds is named at the 5-hour wall, in its own terms, and nowhere else', () => {
+  const brief = fresh('brief');
+  const lp = { state: 'absent', advise: null, resetGrant: true, resetVariant: 'weekly' };
+  const atWall = brief.briefText({ binding: Object.assign({}, FIVE_HOUR), turnsLeft: 2, pressure: 'tight', lowPriority: lp });
+  assert.match(atWall, /\/limit-reset/);
+  assert.match(atWall, /once a week it resets the 5-hour limit/);
+  assert.match(atWall, /still counts toward the weekly/);
+  assert.match(atWall, /not readable from here/);
+  assert.match(atWall, /only the user can type it; you cannot run a slash command/);
+  assert.doesNotMatch(atWall, /\d+ resets? left/);
+
+  // At a WEEKLY wall a reset of the 5-hour limit cannot help, so it is not
+  // offered as though it could.
+  const weeklyWall = brief.briefText({
+    binding: Object.assign({}, WEEKLY, { percentUsed: 97, turnsLeft: 3 }),
+    turnsLeft: 3,
+    pressure: 'tight',
+    lowPriority: lp,
+  });
+  assert.doesNotMatch(weeklyWall, /limit-reset/, weeklyWall);
+
+  const roomy = brief.briefText({
+    binding: Object.assign({}, FIVE_HOUR, { percentUsed: 20 }),
+    turnsLeft: 200,
+    pressure: 'roomy',
+    lowPriority: lp,
+  });
+  assert.doesNotMatch(roomy, /limit-reset/);
+});
+
+test('the reset is read end to end from the flag this account really carries', () =>
+  isolatedAsync(async (dir) => {
+    const brief = fresh('brief');
+    fresh('lowpri');
+    const now = Date.now();
+    fs.writeFileSync(
+      path.join(dir, '.claude.json'),
+      JSON.stringify({
+        oauthAccount: { accountUuid: 'acct-lemur', organizationType: 'claude_max' },
+        cachedGrowthBookFeatures: {
+          tengu_nifty_lemur: { enabled: true, version: 1, noticeLine: '/limit-reset to reset your session limit now' },
+        },
+        cachedUsageUtilization: {
+          fetchedAtMs: now,
+          accountUuid: 'acct-lemur',
+          utilization: {
+            five_hour: { utilization: 97, resets_at: new Date(now + 40 * MINUTE).toISOString() },
+            seven_day: { utilization: 45, resets_at: new Date(now + 2 * DAY).toISOString() },
+            cedar_ember: null,
+          },
+        },
+      })
+    );
+    const text = await brief.run(now, { session_id: 'lemur-1', cwd: dir });
+    assert.match(text, /\/limit-reset/, text);
+    assert.match(text, /once a week it resets the 5-hour limit/, text);
+  }));
 
 test("an armed resume relay says the CLI's own auto-continue would carry the same session, so both must not fire", () => {
   const brief = fresh('brief');

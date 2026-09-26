@@ -442,13 +442,19 @@ wake. So when a resume relay is armed and this is on, the brief says so: the
 wake is the route for a session that will be **closed** at the reset, and both
 firing for the same reset would start the work twice and spend the weekly twice.
 
-**`/limit-reset`**, the once-weekly manual session reset, is detected but not
-built on: this account holds no grant (`tengu_cedar_ember` absent,
-`cachedUsageUtilization.cedar_ember` null), so a feature resting on it would be
-untestable. If a grant appears, the brief names it at the wall, says it only
-works while you are actually at a limit, and says the work it unlocks still
-spends the weekly. It never reports how many are left — `resets_left` comes from
-a live endpoint and appears in no file a hook can read.
+**`/limit-reset`** is one command behind two different server flags, and the
+brief words each in its own copy's terms. `tengu_nifty_lemur` is the
+once-a-week reset of the 5-hour session limit ("uses weekly limit · 1/week",
+"your weekly limit still applies"); `tengu_cedar_ember` is a counted grant with
+a use-by date that "refills your limits". The account this was built on carries
+`tengu_nifty_lemur` enabled and no `tengu_cedar_ember`. When the budget is tight
+and the 5-hour window is the wall, the brief names the weekly reset, says the
+work it unlocks still counts toward the weekly, and says only the user can type
+it; at a weekly wall it says nothing, because resetting the 5-hour limit cannot
+help there. It never reports whether this week's reset is used or how many
+grants are left — both come from a live endpoint and appear in no file a hook
+can read. A flag counts only when it is a plain object with `enabled: true`,
+the way the CLI reads it.
 
 **Grace is not weekly spend.** The allowance the wall gives you is metered in
 its own per-window meters (`anthropic-ratelimit-unified-grace-5h-utilization`

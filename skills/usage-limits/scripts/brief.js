@@ -1078,22 +1078,46 @@ function briefText(input) {
     );
   }
   if (lowPrioritySentence) sentences.push(lowPrioritySentence);
-  // A manual session reset, if this account ever gets one.
+  // A manual reset behind /limit-reset, when this account holds one.
   //
-  // /limit-reset refills the 5-hour window, works only AT a limit, and is once a
-  // week - and the work it unlocks still spends the weekly, which is the part
-  // worth saying out loud. This account holds no grant today
-  // (tengu_cedar_ember absent, cachedUsageUtilization.cedar_ember null), so the
-  // sentence is a detector rather than a feature: nothing is claimed about how
-  // many resets are left, because resets_left is served by a live endpoint and
-  // appears in no file a hook can read.
-  if (lp && lp.resetGrant && (parts.pressure === 'tight' || parts.pressure === 'gone')) {
+  // Two server flags sit behind the one command and they are different offers,
+  // so each is worded in its own copy's terms and nothing is borrowed across
+  // (lowpri.sessionReset has the bundle strings):
+  //
+  //   'weekly' (tengu_nifty_lemur, which this account has): resets the 5-hour
+  //   session limit, once a week, and the work still counts toward the weekly.
+  //   So it only helps when the 5-hour window is the wall - said at a weekly
+  //   wall it would be advice that cannot work - and the first build, reading
+  //   only the other flag, never said it at all.
+  //
+  //   'grant' (tengu_cedar_ember): a counted reset with a use-by date that
+  //   "refills your limits". Its copy does not say it spends the weekly, and it
+  //   has an early-use path, so neither "once a week" nor "only at a limit" is
+  //   claimed for it.
+  //
+  // Neither is counted: whether this week's reset is already used, and how
+  // many grants are left, are served by the API and appear in no file. And the
+  // CLI refuses a reset while lower priority runs ("Resets can't be used while
+  // you continue at lower priority"), which is why the weekly variant stays
+  // silent once the brief has swapped to the weekly, and the grant says so.
+  const resetVariant = lp && lp.resetGrant ? lp.resetVariant || 'grant' : null;
+  const resetPressure = parts.pressure === 'tight' || parts.pressure === 'gone';
+  const fiveHourWall = Boolean(parts.binding && parts.binding.key === 'five_hour');
+  if (resetVariant === 'weekly' && resetPressure && fiveHourWall) {
     sentences.push(
-      'A once-weekly manual session reset appears to be available on this account (/limit-reset). It ' +
-        'only works while you are actually AT a limit, and the work it unlocks still spends the weekly, ' +
-        'so it moves the 5-hour wall rather than adding budget. How many are left is not readable from ' +
-        'here - the CLI asks the server for that. Like /low-priority, only the user can type it; you ' +
-        'cannot run a slash command.'
+      'This account is set up for a manual session reset (/limit-reset): once a week it resets the ' +
+        '5-hour limit, and the work it unlocks still counts toward the weekly, so it moves the 5-hour ' +
+        'wall rather than adding budget. The server decides whether it can be used right now, and ' +
+        "whether this week's is already used is not readable from here. Like /low-priority, only the user can type " +
+        'it; you cannot run a slash command.'
+    );
+  } else if (resetVariant === 'grant' && resetPressure) {
+    sentences.push(
+      'This account appears to hold a limit reset (/limit-reset), which the CLI describes as refilling ' +
+        'your limits while the weekly reset day stays put. How many are left and until when is not ' +
+        'readable from here - the CLI asks the server for that.' +
+        (lp.state === 'acknowledged' ? ' The CLI will not use one while lower priority is on.' : '') +
+        ' Like /low-priority, only the user can type it; you cannot run a slash command.'
     );
   }
   if (parts.session) {

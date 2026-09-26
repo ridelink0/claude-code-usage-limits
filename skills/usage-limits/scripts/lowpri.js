@@ -39,13 +39,14 @@
 //   30-minute freshness cutoff on cached window readings, nothing to do with
 //   this.)
 //
-//   /limit-reset - a once-weekly manual refill of the 5-hour window, usable
-//   only AT a limit, whose work still spends the weekly. Gated on
-//   tengu_cedar_ember, which is ABSENT from this account's feature cache, with
-//   cachedUsageUtilization.utilization.cedar_ember null. So there is nothing to
-//   spend here and nothing is built on it: only a detector that starts
-//   reporting if a grant ever appears. resets_left is served by a live
-//   endpoint, never a file, so the count is never claimed.
+//   /limit-reset - a manual reset, behind two different server flags (see
+//   sessionReset below). tengu_nifty_lemur is the once-a-week reset of the
+//   5-hour session limit whose work still counts toward the weekly, and THIS
+//   ACCOUNT HAS IT (enabled:true). tengu_cedar_ember is a counted grant with a
+//   use-by date, absent here, with cachedUsageUtilization.utilization.cedar_ember
+//   null. Nothing is spent by the plugin - only the user can type the command -
+//   and whether this week's reset is used, or how many grants are left, is
+//   served by the API and never a file, so neither is ever claimed.
 //
 //   The graceful wrap-up note - the CLI injecting "finish up" at the wall. The
 //   mechanism is real and the treatment TEXT is provisioned on this machine
@@ -81,6 +82,7 @@ const atomic = require('./atomic.js');
 
 const FLAG = 'tengu_toasty_breeze';
 const RESET_FLAG = 'tengu_cedar_ember';
+const SESSION_RESET_FLAG = 'tengu_nifty_lemur';
 const WRAPUP_MODE_FLAG = 'tengu_lantern_wick_mode';
 const WRAPUP_TEXT_FLAG = 'tengu_lantern_wick_text';
 const NEAR_WALL_FLAG = 'tengu_vellum_anchor';
@@ -219,16 +221,53 @@ function offer(account) {
   };
 }
 
-// The manual session reset. Detected, never spent: this account holds no grant,
-// so a feature built on it would be untestable here.
+// A flag object the way the CLI reads one: a plain object whose `enabled` is
+// exactly true. The bundle's own readers are
+//   function qae(){let e=x("tengu_nifty_lemur",{});return typeof e==="object"&&e!==null&&!Array.isArray(e)?e:{}}
+//   function pme(){return qae().enabled===!0}
+// and the same shape for tengu_cedar_ember ($Z()). Truthiness is not enough:
+// `{ enabled: false }` is a truthy object, and the first build counted it as a
+// reset on offer.
+function flagEnabled(gb, key) {
+  if (!gb || !Object.prototype.hasOwnProperty.call(gb, key)) return false;
+  const value = gb[key];
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && value.enabled === true);
+}
+
+// The manual reset behind /limit-reset. Detected, never spent.
+//
+// There are TWO server flags behind the one command, and they describe
+// different things, so the brief must not word one in the other's terms:
+//
+//   tengu_nifty_lemur - "Reset your session limit now and keep working; once a
+//   week, still counts toward your weekly limit" (the command's description
+//   when this is the variant). Its notice: "/limit-reset to reset your session
+//   limit now · uses weekly limit · 1/week". THIS ACCOUNT HAS IT: enabled:true,
+//   version 1, read from ~/.claude.json on 2026-09-25. The first build looked
+//   only at tengu_cedar_ember, called the account grant-less, and so never said
+//   a word about a reset the account actually holds.
+//
+//   tengu_cedar_ember - "Use an available limit reset and keep working". A
+//   counted grant: "Refills your {limits} now · your weekly reset day stays
+//   {week}", "{resets} left · use by {deadline}", and an early-use path ("You
+//   haven't reached a limit yet - use your reset anyway?"). Not once a week,
+//   not only at a limit, and whether it spends the weekly is not in its copy.
+//
+// The CLI prefers cedar_ember when both are on (its description reads
+// `$Z()?"Use an available limit reset...":"Reset your session limit now..."`),
+// so this does too. Whether this week's reset is already spent, and how many
+// grants are left, come from the server and appear in no file.
 function sessionReset(account) {
   const gb = features(account);
   const util = utilization(account);
-  const flagged = Boolean(gb && Object.prototype.hasOwnProperty.call(gb, RESET_FLAG) && gb[RESET_FLAG]);
+  const grantFlag = flagEnabled(gb, RESET_FLAG);
+  const weeklyFlag = flagEnabled(gb, SESSION_RESET_FLAG);
   const grant = util && util.cedar_ember ? util.cedar_ember : null;
+  const variant = grantFlag || grant ? 'grant' : weeklyFlag ? 'weekly' : null;
   return {
     known: Boolean(gb || util),
-    present: Boolean(flagged || grant),
+    present: variant !== null,
+    variant,
     // resets_left is served from /api/organizations/<uuid>/reset_rate_limits,
     // not from any file a hook can read, so it stays unreported.
     resetsLeft: null,
@@ -431,6 +470,7 @@ function forBrief(input) {
     weeklyPercent: weekly && Number.isFinite(weekly.percentUsed) ? Math.round(weekly.percentUsed) : null,
     fiveHourPercent: five && Number.isFinite(five.percentUsed) ? Math.round(five.percentUsed) : null,
     resetGrant: sessionReset(account).present,
+    resetVariant: sessionReset(account).variant,
     credits: credits(account),
     autoContinue: autoContinue(),
   };
@@ -439,6 +479,7 @@ function forBrief(input) {
 module.exports = {
   FLAG,
   RESET_FLAG,
+  SESSION_RESET_FLAG,
   WRAPUP_MODE_FLAG,
   WRAPUP_TEXT_FLAG,
   NEAR_WALL_FLAG,
@@ -455,6 +496,7 @@ module.exports = {
   snapshot,
   offer,
   sessionReset,
+  flagEnabled,
   wrapUp,
   credits,
   autoContinue,

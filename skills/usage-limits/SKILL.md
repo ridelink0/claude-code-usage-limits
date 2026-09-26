@@ -625,10 +625,11 @@ longer stops at. **Record it only when they said so.** Whether it is running is
 in the CLI's process memory and readable nowhere, so nothing here may infer it,
 and `mode --low-priority off` is how it is taken back.
 
-The same applies to `/limit-reset`, the once-weekly manual session reset: the
-line names it only if a grant is actually readable, it only works while you are
-at a limit, the work it unlocks still spends the weekly, and how many are left is
-not knowable from here.
+The same applies to `/limit-reset`, the manual reset: only the user can type
+it. The line names it only when the account's flags say it is set up. The
+once-a-week kind resets the 5-hour limit and its work still counts toward the
+weekly, so it is named only at a 5-hour wall; whether this week's is already
+used, and how many of the counted kind are left, is not knowable from here.
 
 And if the budget line says Claude Code is injecting its own wrap-up note at this
 wall, follow that note: it is more specific than anything here, and two
