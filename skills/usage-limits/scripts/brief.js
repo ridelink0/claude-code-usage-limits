@@ -24,6 +24,7 @@ const reading = require('./reading.js');
 const voice = require('./voice.js');
 const mode = require('./mode.js');
 const feed = require('./feed.js');
+const lowpri = require('./lowpri.js');
 
 const SECOND = 1000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -511,6 +512,11 @@ const CACHED_BINDING_FIELDS = [
   'msToReset',
   'refusedAt',
   'refusedResetsAt',
+  // What the room that is left buys, per window. Needed because the binding
+  // window can be swapped for the weekly once low-priority is acknowledged, and
+  // a swapped window with the old window's turn count would be the brief
+  // quoting two different budgets in one sentence.
+  'turnsLeft',
 ];
 
 function cacheableBinding(binding) {
@@ -1003,6 +1009,74 @@ function briefText(input) {
       );
     }
   }
+  // /low-priority: the other thing that is not stopping.
+  //
+  // Three rules this block exists to keep. It says nothing at all unless the
+  // account is provisioned for the command, because advertising a slash command
+  // an account does not have is worse than silence. It never implies that the
+  // plugin or the model can switch it on - Claude cannot type a slash command,
+  // and the command is declared supportsNonInteractive:false, so it is unusable
+  // in a headless or relayed run as well. And it words the offer as a
+  // possibility, because the real gate is an experiment arm in a response
+  // header that nothing here will ever see.
+  //
+  // No wait time is printed. The retry and the ceiling come from
+  // lowPriorityRetryAfterSeconds and lowPriorityMaxWaitSeconds on each
+  // response, so any fixed number would be invented.
+  // Kept in a variable as well as pushed, for the same reason as the escape: it
+  // is the difference between stopping at the 5-hour wall and not, and the terse
+  // style drops only what reads the same every turn. This does not.
+  const lp = parts.lowPriority || null;
+  let lowPrioritySentence = null;
+  if (lp && lp.state === 'acknowledged') {
+    lowPrioritySentence = (
+      'You have said /low-priority is on, so the brake is the weekly window and not the 5-hour one: ' +
+        (Number.isFinite(lp.fiveHourPercent)
+          ? 'the 5-hour limit is at ' + lp.fiveHourPercent + '% and no longer stops this session, '
+          : 'the 5-hour limit no longer stops this session, ') +
+        'the figures above are the weekly, and replies may pause while lower priority waits for spare ' +
+        'capacity. Whether it is still on cannot be read from here, so if it has ended say so with ' +
+        'usage-mode --low-priority off and the 5-hour wall counts again. It also draws on a separate ' +
+        'weekly lower-priority allowance that is exposed to no hook and no file, so nothing here can ' +
+        'track how much of that is left.'
+    );
+  } else if (lp && lp.advise && lp.advise.kind === 'offer') {
+    lowPrioritySentence = (
+      'If the wall offers it, /low-priority carries this session past the 5-hour limit at lower ' +
+        'priority instead of stopping: it spends the weekly limit, which is at ' +
+        lp.advise.weeklyPercent + '% and so has room, and replies may pause while it waits for spare ' +
+        'capacity - the wait and its ceiling are set by the server per request. It is a toggle: you ' +
+        'type it yourself and run it again to stop, and nothing here can switch it on for you. Say ' +
+        'in one line that it is there; if it is taken, usage-mode --low-priority on is what makes ' +
+        'this line brake on the weekly instead.'
+    );
+  } else if (lp && lp.advise && lp.advise.kind === 'hold') {
+    lowPrioritySentence = (
+      'The wall may offer /low-priority here, and it is not worth taking: it spends the weekly limit, ' +
+        'which is already at ' + lp.advise.weeklyPercent + '% - past the ' + lp.advise.threshold +
+        ' per cent this plugin will recommend it at - and it draws on a weekly lower-priority ' +
+        'allowance as well, which has been measured emptying most of a week in a couple of hours. ' +
+        'Say in one line that the answer is no and why; waiting out the 5-hour reset is the cheaper move.'
+    );
+  }
+  if (lowPrioritySentence) sentences.push(lowPrioritySentence);
+  // A manual session reset, if this account ever gets one.
+  //
+  // /limit-reset refills the 5-hour window, works only AT a limit, and is once a
+  // week - and the work it unlocks still spends the weekly, which is the part
+  // worth saying out loud. This account holds no grant today
+  // (tengu_cedar_ember absent, cachedUsageUtilization.cedar_ember null), so the
+  // sentence is a detector rather than a feature: nothing is claimed about how
+  // many resets are left, because resets_left is served by a live endpoint and
+  // appears in no file a hook can read.
+  if (lp && lp.resetGrant && (parts.pressure === 'tight' || parts.pressure === 'gone')) {
+    sentences.push(
+      'A once-weekly manual session reset appears to be available on this account (/limit-reset). It ' +
+        'only works while you are actually AT a limit, and the work it unlocks still spends the weekly, ' +
+        'so it moves the 5-hour wall rather than adding budget. How many are left is not readable from ' +
+        'here - the CLI asks the server for that. It is yours to type, like /low-priority.'
+    );
+  }
   if (parts.session) {
     sentences.push(
       'This session: ' + parts.session.turns + ' turns, ' +
@@ -1102,6 +1176,23 @@ function briefText(input) {
       );
     }
   }
+  // The relay was built for a CLI that stopped dead at the wall. Since 2.1.234
+  // Claude Code waits out the reset and continues the same open session by
+  // itself, and the setting that does it is ON BY DEFAULT
+  // (autoContinueAtUsageLimit, code.claude.com/docs/en/settings-reference). In
+  // place, with the context intact, that is strictly better than a wake: no
+  // hand-off file to re-read and nothing lost. So the wake is the route for a
+  // session that will be CLOSED, and saying so is what stops both firing for the
+  // same reset - which would run the work twice and spend the weekly twice.
+  if (carry && carry.armed && carry.armed.mode === 'resume' && parts.autoContinue && parts.autoContinue.value) {
+    relaySentences.push(
+      'Claude Code\'s own "Continue automatically at usage limit" is on (' + parts.autoContinue.source +
+        '), so if this terminal is still open at the reset the CLI carries THIS session across by ' +
+        'itself, in place, with its context intact - better than any wake. The wake is the route for a ' +
+        'session that is closed by then. Both firing for the same reset would start the work twice and ' +
+        'spend the weekly twice, so if the terminal is staying open, one of the two is worth standing down.'
+    );
+  }
   if (carry && carry.last) {
     relaySentences.push(
       'The last relay ' +
@@ -1124,7 +1215,25 @@ function briefText(input) {
   // near the wall is to make being cut off cheap - order the work, save as you
   // go, keep a note of where things stand - not to shrink the work until it is
   // guaranteed to fit.
-  const instruction =
+  // Whether Claude Code itself is giving the wrap-up instruction at this wall.
+  //
+  // Confirmed mechanism, gated on a flag this plugin reads rather than assumed:
+  // the CLI injects its own "finish up" note when tengu_lantern_wick_mode is
+  // "wrap-up" or "next-steps". On this machine that flag reads "off", so the
+  // plugin's own instruction stands and nothing changes. When it flips, two
+  // agents telling the model to wind down in different words is worse than one,
+  // so this line stands down and says who is speaking instead.
+  //
+  // Not when an escape is live: the escape says the budget is still there, and
+  // deferring to a note that says the opposite would be the plugin handing over
+  // at the one moment it disagrees.
+  const hostWrapsUpNow =
+    Boolean(parts.hostWrapsUp) && !escapeText && (parts.pressure === 'tight' || parts.pressure === 'gone');
+  const instruction = hostWrapsUpNow
+    ? 'Claude Code is injecting its own wrap-up note at this wall, so it gives the instruction and this ' +
+      'line does not repeat it. Follow that note; the figures above are the ones to quote, and the ' +
+      'session total below is what to close with.'
+    :
     // The escape outranks everything below it. A session that stops while a
     // command would have carried it on has not been careful, it has quit - and
     // that is a real session: the Fable weekly hit 89 per cent, the line said
@@ -1252,6 +1361,7 @@ function briefText(input) {
     return (
       sentences[0] + caveat + (parts.tier ? ' ' + parts.tier : '') + (bounded ? ' ' + bounded : '') + adviceText +
       (escapeSentence ? ' ' + escapeSentence : '') +
+      (lowPrioritySentence ? ' ' + lowPrioritySentence : '') +
       (parts.pressure !== 'roomy' && relaySentences.length ? ' ' + relaySentences.join(' ') : '') +
       '\n' + instruction + directive
     );
@@ -1375,6 +1485,41 @@ function relayState(now, hookInput, binding, sessionId) {
     // Nothing about carrying work forward is worth breaking the prompt for.
     return null;
   }
+}
+
+// What Claude Code's own wall-time features change about this brief.
+//
+// Only one of them changes a number. An acknowledged /low-priority retires the
+// 5-hour wall - the session carries straight past that reset at lower priority,
+// spending the weekly - so the window that actually stops the work becomes the
+// weekly, and the brief has to brake on that one instead. The swap happens here,
+// once, so the pressure, the relay and the sentence all describe the same
+// window; doing it in three places is how they come to describe two.
+//
+// Never on a guess. `acknowledged` means the user said so through
+// usage-mode --low-priority on, and that record lapses at the reset of the
+// window it was recorded against. Whether low-priority is really running is in
+// the CLI's process memory and readable nowhere; see lowpri.js.
+function wallFeatures(now, binding, windows) {
+  const out = { binding, lowPriority: null, hostWrapsUp: false, swapped: false };
+  try {
+    const account = lowpri.snapshot();
+    const info = lowpri.forBrief({ account, now, binding, windows });
+    out.lowPriority = info;
+    out.hostWrapsUp = lowpri.wrapUp(account).hostWrapsUp;
+    out.autoContinue = info.autoContinue;
+    if (info.state === 'acknowledged' && binding && binding.key === 'five_hour') {
+      const weekly = lowpri.weeklyOf(windows);
+      if (weekly && Number.isFinite(weekly.percentUsed) && !weekly.stale && Number.isFinite(weekly.resetsAt)) {
+        out.binding = weekly;
+        out.swapped = true;
+        out.lowPriority = Object.assign({}, info, { weeklyBinding: true });
+      }
+    }
+  } catch (err) {
+    // Nothing about these features is worth a failed prompt.
+  }
+  return out;
 }
 
 // The one line `off` will ever say, and only when it has been asked for.
@@ -1629,10 +1774,35 @@ async function run(now, hookInput, opts) {
     writeCache(mergeCache(all, sessionId, view, KEEP_SESSIONS));
   }
 
-  const binding = view.binding;
+  // Settled before the pressure, the relay and the line are decided, so all
+  // three describe the same window.
+  const wall = wallFeatures(now, view.binding, view.windows);
+  const binding = wall.binding;
+  // The turn count belongs to whichever window is now binding. Carrying the
+  // 5-hour count onto a weekly window would put two budgets in one sentence.
+  const turnsLeftNow = wall.swapped
+    ? (Number.isFinite(binding.turnsLeft) ? binding.turnsLeft : null)
+    : view.turnsLeft;
+  const othersSummaryNow = wall.swapped
+    ? summariseOthers(view.windows || [], binding.key)
+    : view.othersSummary;
+  // Everything derived from the window that WAS binding has to go with it.
+  //
+  // The escape route was worked out for the 5-hour window - "this window is
+  // scoped to one model, so switching model retires it" - and the sentence that
+  // prints it is gated on the binding window's percentage. Left in place after
+  // the swap it would describe one window while the figures beside it described
+  // another, which is the exact confusion the binding window exists to prevent.
+  // Same for the critical list, which excludes whichever window was binding: the
+  // weekly would otherwise be both the binding window and a "note that" warning
+  // about itself.
+  const escapeNow = wall.swapped ? null : view.escape || null;
+  const criticalNow = wall.swapped
+    ? (view.critical || []).filter((other) => other.label !== binding.label)
+    : view.critical || [];
   const { active, share } = activeShare(view.sessions, all, now, sessionId);
-  const yourTurnsLeft = Number.isFinite(view.turnsLeft)
-    ? Math.max(1, Math.round(view.turnsLeft * share))
+  const yourTurnsLeft = Number.isFinite(turnsLeftNow)
+    ? Math.max(1, Math.round(turnsLeftNow * share))
     : null;
   // Only a short runway is worth saying. Quoting it when there are hours left
   // would make the line longer without making it more useful.
@@ -1681,7 +1851,7 @@ async function run(now, hookInput, opts) {
   const offering = advice.ok && !advice.alreadyOffered;
   if (offering) mode.adviceOffer(advice.id, sessionId, now);
 
-  const pressureNow = pressure(binding, now, config, Number.isFinite(yourTurnsLeft) ? yourTurnsLeft : view.turnsLeft);
+  const pressureNow = pressure(binding, now, config, Number.isFinite(yourTurnsLeft) ? yourTurnsLeft : turnsLeftNow);
   // Fast mode changes what the window's figures mean, so a toggle is a change
   // worth saying even when nothing else has moved.
   const fastMode = fastModeFor(sessionId);
@@ -1696,12 +1866,17 @@ async function run(now, hookInput, opts) {
     budget.name,
     pressureNow,
     binding && Number.isFinite(binding.percentUsed) ? Math.round(binding.percentUsed / 5) * 5 : 'x',
-    view.escape ? view.escape.kind : '-',
+    escapeNow ? escapeNow.kind : '-',
     tier || '-',
     active > 1 ? 'shared' : 'solo',
     carry && carry.armed ? 'relay' : '-',
     offering ? 'advice' : '-',
     fastMode ? 'fast' : '-',
+    // An acknowledgement, or the wall starting to offer the toggle, changes what
+    // the line says and which window it brakes on. Leaving it out of the digest
+    // would let `max` swallow exactly the prompt on which that changed.
+    wall.lowPriority ? wall.lowPriority.state + (wall.lowPriority.advise ? ':' + wall.lowPriority.advise.kind : '') : '-',
+    wall.hostWrapsUp ? 'wrapup' : '-',
   ].join('|');
   if (!budget.policy.briefWhenUnchanged && pressureNow === 'roomy') {
     const slots = readCache();
@@ -1741,10 +1916,10 @@ async function run(now, hookInput, opts) {
       binding && binding.family && Number.isFinite(binding.percentUsed) && binding.percentUsed >= HALF_SPENT
         ? familyLabel(binding.family)
         : null,
-    othersSummary: view.othersSummary,
-    escape: view.escape || null,
+    othersSummary: othersSummaryNow,
+    escape: escapeNow,
     host: usage.currentHost(),
-    turnsLeft: view.turnsLeft,
+    turnsLeft: turnsLeftNow,
     effortWarning: view.effortWarning || null,
     // Once per setting, and once per session, and never after a decline: the
     // advice rules above decide, and the sentence itself is unchanged.
@@ -1760,13 +1935,17 @@ async function run(now, hookInput, opts) {
     rebuilt: Boolean(binding && binding.estimated),
     staleWindows: view.staleWindows || 0,
     planChanged: Boolean(view.planChanged),
-    critical: view.critical || [],
+    critical: criticalNow,
     pointsSinceSnapshot: (binding && binding.pointsSinceSnapshot) || 0,
     correctionUnreliable: Boolean(binding && binding.correctionUnreliable),
     pointsBeyondSnapshot: (binding && binding.pointsBeyondSnapshot) || 0,
     snapshotAge: view.snapshotAge,
     snapshotStale: Number.isFinite(view.snapshotAgeMs) && view.snapshotAgeMs >= SNAPSHOT_TRUST_MS,
     fastMode,
+    // Claude Code's own wall-time features, as far as they are readable.
+    lowPriority: wall.lowPriority,
+    hostWrapsUp: wall.hostWrapsUp,
+    autoContinue: wall.autoContinue || null,
     // The turn count that matters for this session is its share of a shared
     // budget, not the whole window's. Escalating on the whole window meant a
     // count that looked comfortable while the part actually available here was

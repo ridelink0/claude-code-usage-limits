@@ -34,6 +34,7 @@ const path = require('path');
 const atomic = require('./atomic.js');
 const host = require('./host.js');
 const codex = require('./codex.js');
+const lowpri = require('./lowpri.js');
 
 // ---------------------------------------------------------------------------
 // The policy table
@@ -1459,6 +1460,103 @@ function main(argv) {
     adviceMute(false);
     logChange({ plane: 'mode', key: 'advice', from: 'off', to: 'on', by: 'user', reason: null }, now);
     return 'Recommendations are back on, capped at one per session and never repeated once declined.';
+  }
+  // Whether the user has switched /low-priority on.
+  //
+  // This is a RECORD of something the user said, not a reading. Claude Code
+  // keeps the live state in process memory and writes it nowhere - not to
+  // ~/.claude.json, not to ~/.claude/state, and no hook payload or status-line
+  // field carries it - so the plugin cannot know. What it can do is take the
+  // user's word, stamp it with the window it belongs to, and let it lapse at
+  // that window's reset, which is when low-priority ends anyway.
+  //
+  // Nothing else may write this. The model cannot type a slash command, so it
+  // cannot have turned low-priority on, so it has nothing to acknowledge.
+  if (flag('--low-priority')) {
+    const asked = String(value('--low-priority') || '').trim().toLowerCase();
+    const account = lowpri.snapshot();
+    const provisioned = lowpri.offer(account);
+    const detail = provisioned.offered
+      ? 'This account is provisioned for it (' + lowpri.FLAG + ' enabled' +
+        (provisioned.version ? ', config version ' + provisioned.version : '') + '), though the ' +
+        'offer itself also depends on an experiment arm that arrives in a response header, so it ' +
+        'is not guaranteed to appear at every wall.'
+      : provisioned.known
+        ? 'This account is NOT provisioned for it right now (' + lowpri.FLAG + ' is present and disabled), ' +
+          'so the wall will not offer it.'
+        : 'Whether this account is provisioned for it is unknown: ' + lowpri.FLAG + ' has never been ' +
+          'seen in the feature cache, which is the absence of a fact rather than the fact of an absence.';
+    if (asked === 'on' || asked === 'yes' || asked === 'true') {
+      // Stamp it with the 5-hour window it belongs to, so the fact lapses when
+      // that window resets instead of steering the headroom maths for ever.
+      let windowKey = null;
+      let resetsAt = null;
+      try {
+        const usage = require('./usage.js');
+        const windows = usage.snapshotWindows(usage.collect(now), now, null) || [];
+        const five = windows.find((w) => w && w.key === 'five_hour');
+        if (five && Number.isFinite(five.resetsAt)) {
+          windowKey = 'five_hour';
+          resetsAt = five.resetsAt;
+        }
+      } catch (err) {
+        // No reading is not a reason to refuse the user's own statement; the
+        // record simply has no expiry to hang on.
+      }
+      lowpri.acknowledge({ on: true, windowKey, resetsAt, now });
+      logChange({ plane: 'mode', key: 'low-priority', from: 'unknown', to: 'on', by: 'user', reason: null }, now);
+      return [
+        'Recorded: you have switched /low-priority on.',
+        '',
+        'From here the brief brakes on your WEEKLY window rather than the 5-hour one, stops telling ' +
+          'you to wind down at the 5-hour wall, says replies may pause while lower priority waits for ' +
+          'spare capacity, and will not book a relay wake for the 5-hour reset - that reset is no ' +
+          'longer a wall this session stops at.',
+        '',
+        'What it costs, in Anthropic\'s own words: it uses your weekly limit, and it draws on a ' +
+          'separate weekly lower-priority allowance whose size is exposed to no hook and no file, so ' +
+          'the plugin cannot track it. Nothing here can tell whether it is still on, so when you ' +
+          'turn it off: mode --low-priority off',
+        '',
+        resetsAt
+          ? 'This lapses on its own at ' + new Date(resetsAt).toLocaleString() + ', when the 5-hour window resets.'
+          : 'No 5-hour reset time was readable, so this has no expiry: clear it by hand when it ends.',
+        '',
+        detail,
+      ].join('\n');
+    }
+    if (asked === 'off' || asked === 'no' || asked === 'false') {
+      const had = lowpri.readAck(now);
+      lowpri.acknowledge({ on: false, now });
+      logChange({ plane: 'mode', key: 'low-priority', from: had ? 'on' : 'unknown', to: 'off', by: 'user', reason: null }, now);
+      return had
+        ? 'Cleared: low-priority is off again, so the 5-hour window counts as a wall from the next prompt.'
+        : 'Nothing was recorded, so there was nothing to clear. Low-priority is off as far as this plugin knows.';
+    }
+    if (asked) {
+      return 'mode --low-priority takes "on" or "off". Say which; this is a record of what YOU did, so it is never guessed.';
+    }
+    const ack = lowpri.readAck(now);
+    const wrap = lowpri.wrapUp(account);
+    const auto = lowpri.autoContinue();
+    return [
+      ack
+        ? 'You have acknowledged low-priority ON, at ' + new Date(ack.at).toLocaleString() +
+          (Number.isFinite(ack.resetsAt) ? ', lapsing at ' + new Date(ack.resetsAt).toLocaleString() : ', with no expiry') + '.'
+        : 'Low-priority has not been acknowledged, so the plugin treats the 5-hour window as a real wall.',
+      '',
+      'It is a toggle you type yourself. The model cannot run a slash command, and /low-priority is ' +
+        'declared supportsNonInteractive:false, so it is unusable in a headless or relayed run as well.',
+      '',
+      detail,
+      '',
+      'Claude Code will ' + (wrap.hostWrapsUp ? '' : 'NOT ') + 'inject its own wrap-up note at the wall on ' +
+        'this machine (' + lowpri.WRAPUP_MODE_FLAG + ' is "' + wrap.mode + '")' +
+        (wrap.textProvisioned && !wrap.hostWrapsUp ? ', although the note text is provisioned' : '') + '.',
+      'Claude Code\'s own continue-after-reset is ' + (auto.value ? 'ON' : 'OFF') + ' (' + auto.source + ').',
+      '',
+      'To set it: mode --low-priority on   /   mode --low-priority off',
+    ].join('\n');
   }
   if (flag('--pin') || flag('--no-pin')) {
     const state = read();

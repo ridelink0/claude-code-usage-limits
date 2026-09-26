@@ -37,6 +37,7 @@ const { spawn, spawnSync } = require('child_process');
 const atomic = require('./atomic.js');
 const host = require('./host.js');
 const voice = require('./voice.js');
+const lowpri = require('./lowpri.js');
 
 const MINUTE = 60 * 1000;
 
@@ -1173,6 +1174,34 @@ function armable(input) {
   const raw = binding.percentUsed - Math.max(0, beyond);
   if (raw < config.at) return { ok: false, why: 'the account reads ' + Math.round(raw) + ' per cent; only the local estimate (' + Math.round(binding.percentUsed) + ') is past ' + config.at };
   if (!Number.isFinite(binding.resetsAt)) return { ok: false, why: 'the window has no known reset time' };
+  // /low-priority retires the 5-hour wall while it is on: the session carries
+  // straight past that reset at lower priority, spending the weekly. A wake
+  // booked for that reset would fire into a session that was never stopped -
+  // and with Claude Code's own autoContinueAtUsageLimit on by default, two
+  // things starting the same work is the one bug here that costs real weekly
+  // budget. So it is refused, in plain words, and only for that window: the
+  // weekly is a different wall and still arms.
+  //
+  // This reads the plugin's own acknowledgement, never a guess. Whether
+  // low-priority is actually running lives in the CLI's process memory and is
+  // readable nowhere; see lowpri.js.
+  if (binding.key === 'five_hour') {
+    let ack = null;
+    try {
+      ack = lowpri.readAck(options.now);
+    } catch (err) {
+      ack = null;
+    }
+    if (ack) {
+      return {
+        ok: false,
+        why:
+          'low-priority is acknowledged on, so the 5-hour reset is not a wall to wake after - ' +
+          'this session carries past it and spends the weekly instead. Only the weekly window ' +
+          'would be worth a wake; say so with usage-mode --low-priority off if it has been switched back off',
+      };
+    }
+  }
   if (!options.sessionId) return { ok: false, why: 'no session id' };
   const work = workWithContinuation(options.work, options.sessionId);
   if (!work.hasWork) return { ok: false, why: 'no plan or unfinished todo list to carry, and no saved continuation' };
