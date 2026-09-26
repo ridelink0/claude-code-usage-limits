@@ -118,6 +118,10 @@ test('the wake picks the record for its own id and leaves the other armed', asyn
       armIt(relay, 'bbbb-2', dir);
       const result = await wake.run(NOW + 61 * 60 * 1000, ['--id', 'bbbb-2'], {
         windowReopened: async () => ({ known: true, percent: 3 }),
+        // Online, stubbed: this is about which record a wake picks, not about
+        // whether this machine can reach the API. Left real, it took the
+        // offline branch and reported 'offline-gave-up'.
+        reachable: async () => ({ online: true, reason: 'ok', detail: null, results: [] }),
         userIsPresent: () => false,
         toast: () => {},
         capabilities: () => ({ claude: true, codex: false, computerUse: false }),

@@ -559,8 +559,17 @@ function mine(held, record) {
 }
 
 async function run(now, argv, overrides) {
+  // `reachable` belongs in here with the rest. Left out, the preflight below
+  // called the real network on every run of the retry tests, so the whole
+  // launch-failure suite passed only on a machine that could reach
+  // api.anthropic.com - and went red, in the offline branch, on a laptop with
+  // its wifi off or behind a TLS-inspecting proxy. That is the exact condition
+  // the relay is built for, so it is the last thing its tests should need.
   const deps = Object.assign(
-    { windowReopened, deliverClaude, deliverCodex, toast, userIsPresent, arm: relay.arm, capabilities: relay.capabilities },
+    {
+      windowReopened, deliverClaude, deliverCodex, toast, userIsPresent,
+      arm: relay.arm, capabilities: relay.capabilities, reachable: net.reachable,
+    },
     overrides || null
   );
   const id = argOf(argv, '--id');
@@ -618,7 +627,7 @@ async function run(now, argv, overrides) {
   // So: ask first, before spending a launch on it, and give being offline its
   // own much longer budget. A machine that cannot reach the API has not failed.
   // It is waiting, and waiting is free.
-  const link = await net.reachable({ timeoutMs: 8000 });
+  const link = await deps.reachable({ timeoutMs: 8000 });
   if (!link.online) {
     const offlineAttempt = (record.offlineAttempt || 0) + 1;
     if (offlineAttempt <= config.offlineAttempts) {

@@ -58,8 +58,17 @@ function armedRecord(extra) {
 
 // The window HAS reset (percent well under the threshold), the CLI is found,
 // and delivery fails. That is the exact shape of the real incident.
+// Online, stubbed, like every other outside effect here. Left to the real
+// network, the preflight in wake.run made this whole file pass or fail on
+// whether this machine could reach api.anthropic.com: on a laptop with its wifi
+// off - or behind a TLS-inspecting proxy, which is what this machine reads as -
+// every test below took the OFFLINE branch and never reached the launch it is
+// about. The offline branch has its own test at the bottom of the file.
+const ONLINE = async () => ({ online: true, reason: 'ok', detail: null, results: [] });
+
 function deps(state, failWith) {
   return {
+    reachable: ONLINE,
     windowReopened: async () => ({ known: true, percent: 3 }),
     deliverClaude: () => ({ ok: false, error: failWith }),
     deliverCodex: () => ({ ok: false, error: failWith }),
@@ -144,6 +153,7 @@ test('a retry that cannot be booked fails cleanly rather than hanging', async ()
   try {
     seed(armedRecord());
     const result = await wake.run(Date.now(), [], {
+      reachable: ONLINE,
       windowReopened: async () => ({ known: true, percent: 3 }),
       deliverClaude: () => ({ ok: false, error: SSL }),
       deliverCodex: () => ({ ok: false, error: SSL }),
@@ -167,6 +177,7 @@ test('a successful launch still does not retry', async () => {
     seed(armedRecord());
     const calls = { armCalls: [] };
     const result = await wake.run(Date.now(), [], {
+      reachable: ONLINE,
       windowReopened: async () => ({ known: true, percent: 3 }),
       deliverClaude: () => ({ ok: true, how: 'claude --resume' }),
       deliverCodex: () => ({ ok: true, how: 'codex' }),
@@ -218,6 +229,39 @@ test('rearming is bounded - the work gets maxRearms extra windows and then stops
 
     assert.equal(result.outcome, 'failed', 'a scheduled task that reschedules itself forever is worse than giving up');
     assert.equal(relay.read().armed, null);
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = saved;
+  }
+});
+
+// The branch the seam above uncovered. Until `reachable` was a dependency this
+// was untestable, so the preflight - the part that decides what happens to a
+// night's work on a laptop whose wifi is off - had no test at all, while six
+// tests that were not about it exercised it by accident.
+test('offline is waited out on its own longer budget, not spent from the launch attempts', async () => {
+  const saved = process.env.CLAUDE_CONFIG_DIR;
+  isolate();
+  try {
+    seed(armedRecord());
+    const calls = { armCalls: [] };
+    const base = deps(calls, SSL);
+    const result = await wake.run(Date.now(), [], Object.assign({}, base, {
+      reachable: async () => ({ online: false, reason: 'offline', detail: 'fetch failed', results: [] }),
+      // If the preflight works, nothing below it runs.
+      deliverClaude: () => {
+        throw new Error('the launch must not be attempted while offline');
+      },
+    }));
+
+    assert.equal(result.outcome, 'offline', result.outcome);
+    assert.equal(result.attempt, 1, 'the first offline try');
+    assert.ok(result.retryInMinutes > 0, 'it books a retry');
+    assert.equal(calls.armCalls.length, 1, 'and books it through arm()');
+    // The launch budget is untouched: being offline is not a failed launch.
+    const after = relay.read().armed;
+    assert.equal(after.offlineAttempt, 1);
+    assert.equal(after.attempt || 0, 0, 'the launch attempts are not spent on a network that is not there');
   } finally {
     if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = saved;
