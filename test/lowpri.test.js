@@ -630,6 +630,119 @@ test('when the weekly takes over as the binding window, nothing derived from the
     assert.doesNotMatch(lapsed, /brake is the weekly window/, lapsed);
   }));
 
+test('none of this is read, or said, in Codex or Antigravity', () =>
+  isolated((dir) => {
+    const lowpri = fresh('lowpri');
+    const brief = fresh('brief');
+    const host = require('../skills/usage-limits/scripts/host.js');
+    // A provisioned account, and an acknowledgement, both sitting on disk.
+    fs.writeFileSync(
+      path.join(dir, '.claude.json'),
+      JSON.stringify(account({ cachedGrowthBookFeatures: { tengu_toasty_breeze: TOASTY, tengu_lantern_wick_mode: 'wrap-up' } }))
+    );
+    lowpri.acknowledge({ on: true, windowKey: 'five_hour', resetsAt: T + HOUR, now: T });
+
+    // Claude Code reads it.
+    const mine = brief.wallFeatures(T, FIVE_HOUR, [FIVE_HOUR, WEEKLY], host.CLAUDE);
+    assert.strictEqual(mine.lowPriority.state, 'acknowledged');
+    assert.strictEqual(mine.hostWrapsUp, true);
+    assert.strictEqual(mine.swapped, true);
+
+    // The other two do not, and cannot be talked into it. /low-priority is a
+    // Claude Code slash command; naming it in Codex is telling Codex to reach
+    // for a control it does not have, against an account it is not spending.
+    for (const other of [host.CODEX, host.GEMINI]) {
+      const theirs = brief.wallFeatures(T, FIVE_HOUR, [FIVE_HOUR, WEEKLY], other);
+      assert.strictEqual(theirs.lowPriority, null, other);
+      assert.strictEqual(theirs.hostWrapsUp, false, other);
+      assert.strictEqual(theirs.swapped, false, other);
+      assert.strictEqual(theirs.binding, FIVE_HOUR, other + ' keeps its own binding window');
+      // And the sentence cannot be built from nothing.
+      const text = brief.briefText({
+        binding: FIVE_HOUR,
+        turnsLeft: 3,
+        pressure: 'tight',
+        lowPriority: theirs.lowPriority,
+        hostWrapsUp: theirs.hostWrapsUp,
+      });
+      assert.doesNotMatch(text, /low-priority/, other);
+      assert.doesNotMatch(text, /limit-reset/, other);
+    }
+
+    // The relay makes the same distinction, and it has to: Codex files a
+    // five-hour window under the same key, so an acknowledgement made against a
+    // Claude account must not refuse a Codex wake.
+    const relay = fresh('relay');
+    const config = Object.assign({}, relay.settings(relay.read()), { enabled: true, at: 80, armOn: 'threshold' });
+    const work = { hasWork: true, pending: 1, source: 'todos', todos: [{ status: 'pending', content: 'x' }], plan: null };
+    const five = { key: 'five_hour', label: '5-hour', percentUsed: 96, stale: false, resetsAt: T + HOUR };
+    assert.strictEqual(
+      relay.armable({ config, binding: five, sessionId: 's1', work, now: T, hostName: host.CLAUDE }).ok,
+      false,
+      'Claude Code refuses it'
+    );
+    for (const other of [host.CODEX, host.GEMINI]) {
+      assert.strictEqual(
+        relay.armable({ config, binding: five, sessionId: 's1', work, now: T, hostName: other }).ok,
+        true,
+        other + ' is unaffected by a Claude acknowledgement'
+      );
+    }
+
+    // And the command says so rather than quietly writing the wrong thing.
+    const mode = fresh('mode');
+    for (const [arg, name] of [['codex', 'Codex'], ['gemini', 'Antigravity']]) {
+      const before = process.argv;
+      process.argv = [before[0], before[1], '--host', arg];
+      try {
+        const answer = mode.main(['--low-priority', 'on', '--host', arg]);
+        assert.match(answer, new RegExp('does not exist in ' + name));
+      } finally {
+        process.argv = before;
+      }
+    }
+  }));
+
+test('the mid-turn pulse follows the brief onto the weekly, so the two never disagree', () =>
+  isolatedAsync(async (dir) => {
+    const lowpri = fresh('lowpri');
+    const pulse = fresh('pulse');
+    const now = Date.now();
+    fs.writeFileSync(
+      path.join(dir, '.claude.json'),
+      JSON.stringify({
+        oauthAccount: { accountUuid: 'acct-3', organizationType: 'claude_max' },
+        cachedGrowthBookFeatures: { tengu_toasty_breeze: TOASTY },
+        cachedUsageUtilization: {
+          fetchedAtMs: now,
+          accountUuid: 'acct-3',
+          utilization: {
+            five_hour: { utilization: 99, resets_at: new Date(now + 20 * MINUTE).toISOString() },
+            seven_day: { utilization: 94, resets_at: new Date(now + 2 * DAY).toISOString() },
+          },
+        },
+      })
+    );
+    const input = { session_id: 'pulse-lowpri', cwd: dir, tool_name: 'Bash', hook_event_name: 'PostToolUse' };
+    const before = await pulse.run(now, input);
+    assert.match(before, /5-hour/, before);
+
+    lowpri.acknowledge({ on: true, windowKey: 'five_hour', resetsAt: now + 20 * MINUTE, now });
+    const after = await pulse.run(now, Object.assign({}, input, { session_id: 'pulse-lowpri-2' }));
+    assert.match(after, /weekly/, after);
+    assert.doesNotMatch(after, /5-hour/, after);
+
+    // And with room on the weekly the pulse says nothing at all, rather than
+    // counting down a 5-hour wall this session has gone past. That silence is
+    // the feature: the pulse only speaks under pressure, and once low-priority
+    // is on the pressure is the weekly's.
+    const roomy = JSON.parse(fs.readFileSync(path.join(dir, '.claude.json'), 'utf8'));
+    roomy.cachedUsageUtilization.utilization.seven_day.utilization = 30;
+    fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify(roomy));
+    const quiet = await pulse.run(now, Object.assign({}, input, { session_id: 'pulse-lowpri-3' }));
+    assert.strictEqual(quiet, '', quiet);
+  }));
+
 test('nothing in this module throws on a machine with no Claude Code state at all', () =>
   isolated(() => {
     const lowpri = fresh('lowpri');

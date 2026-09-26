@@ -1185,7 +1185,14 @@ function armable(input) {
   // This reads the plugin's own acknowledgement, never a guess. Whether
   // low-priority is actually running lives in the CLI's process memory and is
   // readable nowhere; see lowpri.js.
-  if (binding.key === 'five_hour') {
+  //
+  // Claude Code only. Codex files a five-hour window under the same key, and
+  // /low-priority is a Claude Code slash command against a Claude account, so an
+  // acknowledgement made there must not refuse a Codex relay. The host is taken
+  // from the caller where it knows, and detected otherwise - the Codex and
+  // Antigravity hooks both pass --host.
+  const hostHere = options.hostName || host.detect(process.argv.slice(2), process.env);
+  if (binding.key === 'five_hour' && hostHere === host.CLAUDE) {
     let ack = null;
     try {
       ack = lowpri.readAck(options.now);

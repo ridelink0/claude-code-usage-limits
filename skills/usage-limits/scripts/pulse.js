@@ -342,11 +342,17 @@ async function run(now, hookInput) {
   if (quiet) return '';
 
   const data = await usage.report(now, { sessionId, budgetMs: SCAN_BUDGET_MS });
-  const binding = data.binding;
-  if (!binding) return '';
+  if (!data.binding) return '';
+  // The same swap the brief makes, out of the same function so the two can never
+  // disagree: once the user has said /low-priority is on, the weekly is the only
+  // brake left, and a mid-turn line still counting down the 5-hour window would
+  // undo the brief on every tool call. Claude Code only; see brief.wallFeatures.
+  const wall = brief.wallFeatures(now, data.binding, data.windows || [], usage.currentHost());
+  const binding = wall.binding;
   // This turn paid for the scan, so leave the corrected figure where the
-  // status line and --status can read it without paying for one.
-  reading.recordAll(data.windows || [binding], now, usage.isCodex() ? require('./codex.js').homeDir() : null);
+  // status line and --status can read it without paying for one. Every window,
+  // not the one that happens to be binding after the swap.
+  reading.recordAll(data.windows || [data.binding], now, usage.isCodex() ? require('./codex.js').homeDir() : null);
 
   // The same count and the same split as the brief, so the two lines never
   // disagree about how many sessions there are or how much of the budget is

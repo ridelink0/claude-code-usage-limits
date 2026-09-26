@@ -1473,6 +1473,16 @@ function main(argv) {
   // Nothing else may write this. The model cannot type a slash command, so it
   // cannot have turned low-priority on, so it has nothing to acknowledge.
   if (flag('--low-priority')) {
+    // Claude Code only, said plainly rather than by doing nothing. /low-priority
+    // is a Claude Code slash command against a Claude account; recording it under
+    // Codex or Antigravity would write a fact about the wrong agent's budget into
+    // the wrong agent's config directory.
+    const hostHere = host.detect(process.argv.slice(2), process.env);
+    if (hostHere !== host.CLAUDE) {
+      return '/low-priority is a Claude Code command and does not exist in ' +
+        (hostHere === host.CODEX ? 'Codex' : 'Antigravity') +
+        ', so there is nothing to record here. Use that host\'s own controls for the task in hand.';
+    }
     const asked = String(value('--low-priority') || '').trim().toLowerCase();
     const account = lowpri.snapshot();
     const provisioned = lowpri.offer(account);

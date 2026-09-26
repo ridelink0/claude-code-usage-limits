@@ -87,7 +87,7 @@ function armAtCompletion(now, hookInput, sessionId) {
   const binding = bindingFromCollect(usage.collect(now), now);
   if (!binding) return null;
 
-  const able = relay.armable({ config, binding, sessionId, work, atCompletion: true });
+  const able = relay.armable({ config, binding, sessionId, work, atCompletion: true, hostName: usage.currentHost() });
   if (!able.ok) return null;
 
   const armed = relay.arm({

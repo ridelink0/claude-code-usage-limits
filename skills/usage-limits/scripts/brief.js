@@ -1454,7 +1454,7 @@ function relayState(now, hookInput, binding, sessionId) {
       return { enabled: true, armed: mine, config, last: recent };
     }
     const work = relay.detectWork(hookInput && hookInput.transcript_path, {});
-    const able = relay.armable({ config, binding, sessionId, work });
+    const able = relay.armable({ config, binding, sessionId, work, hostName: usage.currentHost() });
     if (!able.ok) return { enabled: true, why: able.why, config, last: recent, work };
     // Registering a scheduled task measured 936 ms, and this hook has ten
     // seconds of which the live reading may take four and the scan five. A
@@ -1500,8 +1500,19 @@ function relayState(now, hookInput, binding, sessionId) {
 // usage-mode --low-priority on, and that record lapses at the reset of the
 // window it was recorded against. Whether low-priority is really running is in
 // the CLI's process memory and readable nowhere; see lowpri.js.
-function wallFeatures(now, binding, windows) {
+// Claude Code only, and settled before a single file is read.
+//
+// Every one of these features is Claude Code's: /low-priority and /limit-reset
+// are its slash commands, the wrap-up note is its injection, and
+// autoContinueAtUsageLimit is its setting. None of them exist in Codex or in
+// Antigravity, and ~/.claude.json describes an account neither of them is
+// running on. Reading it from inside another host would put a Claude Code
+// command in front of an agent that cannot type it, against a window it is not
+// spending - the same mistake as naming /effort in Codex, which this plugin is
+// otherwise careful never to make.
+function wallFeatures(now, binding, windows, hostName) {
   const out = { binding, lowPriority: null, hostWrapsUp: false, swapped: false };
+  if (hostName !== host.CLAUDE) return out;
   try {
     const account = lowpri.snapshot();
     const info = lowpri.forBrief({ account, now, binding, windows });
@@ -1776,7 +1787,7 @@ async function run(now, hookInput, opts) {
 
   // Settled before the pressure, the relay and the line are decided, so all
   // three describe the same window.
-  const wall = wallFeatures(now, view.binding, view.windows);
+  const wall = wallFeatures(now, view.binding, view.windows, usage.currentHost());
   const binding = wall.binding;
   // The turn count belongs to whichever window is now binding. Carrying the
   // 5-hour count onto a weekly window would put two budgets in one sentence.
@@ -2000,7 +2011,7 @@ function withBugcheck(text) {
   return text;
 }
 
-module.exports = { sweepDebris, withBugcheck, sayOnce, shapeOf, saidFile, REPEAT_MS, staleVersionFor, relayNewsFor, installedVersion, runningVersion,
+module.exports = { wallFeatures, sweepDebris, withBugcheck, sayOnce, shapeOf, saidFile, REPEAT_MS, staleVersionFor, relayNewsFor, installedVersion, runningVersion,
   readSaid, standingSaid, markStanding, standingShortFor, STANDING_SHORT, cacheMissWhyFor, missReason, MISS_RECENT_MS,
   DEFAULTS,
   HOOK_BUDGET_MS,
