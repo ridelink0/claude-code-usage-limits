@@ -55,6 +55,29 @@ Commands:
   the last one, naming it first.
 - `--ledger` - measured turns and cost per turn, per mode, from what replies
   actually cost.
+- `--low-priority` / `--low-priority on` / `--low-priority off` - whether YOU
+  have switched Claude Code's `/low-priority` on. With no argument it reports
+  what is recorded, whether this account is provisioned for the command at all,
+  whether Claude Code will inject its own wrap-up note at the wall on this
+  machine, and whether the CLI's own continue-after-reset is on.
+
+  **This is a record of something the user did, never a reading.** Claude Code
+  keeps the live low-priority state in process memory and writes it to no file:
+  not `~/.claude.json`, not `~/.claude/state`, and no hook payload or
+  status-line field carries it. So the plugin knows three things and not a
+  fourth - the account is provisioned (`tengu_toasty_breeze.enabled`), the user
+  has said it is on, or neither. It never claims it is running.
+
+  `on` changes three behaviours: the brief brakes on the **weekly** window
+  instead of the 5-hour one, it stops telling you to wind down at the 5-hour
+  wall, and the relay will not book a wake for the 5-hour reset - that reset is
+  no longer a wall this session stops at. The record lapses on its own when the
+  5-hour window it was made against resets, because that is when low-priority
+  ends. Say `off` if it ends sooner.
+
+  The model cannot type a slash command, and `/low-priority` is declared
+  `supportsNonInteractive: false`, so it is also unusable in a headless or
+  relayed run. Nothing here can switch it on.
 
 Two rules that hold in every mode:
 

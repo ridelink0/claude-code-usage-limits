@@ -350,6 +350,106 @@ The skill also requires Claude to say up front when a job will not fit in what
 is left, name what it is doing now, what it is leaving, and when the rest can
 happen, rather than starting and stopping halfway through an edit.
 
+## /low-priority, and Claude Code's own features at the wall
+
+Claude Code has grown its own machinery for the moment the 5-hour limit is hit.
+Some of it a hook can read and some of it cannot, and the whole of this
+section is about keeping that line straight — a plugin that guesses at the half
+it cannot see is worse at this than one that says nothing.
+
+**`/low-priority`** is a hidden toggle the CLI offers when the session (5-hour)
+limit is reached. It keeps the session working at reduced priority and spends
+your **weekly** limit, plus a separate weekly lower-priority allowance. Replies
+can pause while it waits for spare capacity. It appears in no changelog and in
+no documentation — there are zero mentions across all 405 versions of the
+bundled changelog back to 0.2.21 — and it is declared `isHidden: true`, so the
+only way anyone learns of it is the offer line at the wall.
+
+What the plugin can read is whether **your account is provisioned** for it, from
+one field in the same `~/.claude.json` it already parses for the meter:
+`cachedGrowthBookFeatures.tengu_toasty_breeze`. That costs no extra I/O, and it
+is re-read on every prompt rather than remembered, because the grant can be
+withdrawn mid-week.
+
+What the plugin **cannot** read is whether it is on right now. That state lives
+in the CLI's process memory and is written to no file — not `~/.claude.json`,
+not `~/.claude/state`, and no hook payload or status-line field carries it. So
+there are three states and never a fourth:
+
+| state | how it is known |
+| --- | --- |
+| **absent** | the account is not provisioned, and the plugin never mentions the command |
+| **offered** | provisioned, so the brief says it exists at the wall — as a possibility |
+| **acknowledged** | **you** said you switched it on: `mode --low-priority on` |
+
+Two further gates sit in front of the offer that nothing here will ever see: the
+experiment arm arrives in a response header, and the CLI withholds the offer
+during a cooloff and once the weekly allowance is spent. So the brief says "if
+the wall offers it", never "you can run it". And it never says the plugin or the
+model can switch it on: Claude cannot type a slash command, and the command is
+declared `supportsNonInteractive: false`, so it is unusable in a headless or
+relayed run either.
+
+At the wall with weekly headroom, the line looks like this:
+
+```
+If the wall offers it, /low-priority carries this session past the 5-hour limit
+at lower priority instead of stopping: it spends the weekly limit, which is at
+45% and so has room, and replies may pause while it waits for spare capacity -
+the wait and its ceiling are set by the server per request. It is a toggle: you
+type it yourself and run it again to stop, and nothing here can switch it on
+for you.
+```
+
+**The recommendation has a number behind it.** It is offered only while the
+weekly is at or below **80 per cent** and the 5-hour window is the binding wall.
+Above that the brief actively says not to, and cites the figure: low-priority
+spends the weekly *and* draws on a weekly allowance whose size is exposed to no
+hook and no file, and a real user measured it emptying most of a week in a
+couple of hours. No wait time is ever printed, because the retry and the ceiling
+come from `lowPriorityRetryAfterSeconds` and `lowPriorityMaxWaitSeconds` on each
+response — any fixed "20 seconds, 20 minutes" would be invented.
+
+Once you acknowledge it, three things change. The brief brakes on the **weekly**
+window instead of the 5-hour one, because that is the only brake left. It stops
+telling you to wind down at the 5-hour wall. And the relay **will not book a
+wake for the 5-hour reset** — this session carries straight past it, so a wake
+would fire into a session that never stopped. A weekly wall still arms. The
+acknowledgement lapses by itself when the 5-hour window it was made against
+resets.
+
+**The graceful wrap-up note.** Claude Code can inject its own "finish up"
+instruction at the wall. The mechanism is real, and the gate is
+`tengu_lantern_wick_mode` — the bundle's own normalizer keeps only `"wrap-up"`
+and `"next-steps"` and maps everything else to `"off"`. When it is on, this
+plugin stands down and says who is speaking, because two agents telling the
+model to wind down in different words is worse than one. When it is off, the
+plugin's own instruction stands. It is read, not assumed, so the right thing
+happens whichever way the flag is set. (The near-limit variant is a separate
+flag, `tengu_vellum_anchor`.)
+
+**`autoContinueAtUsageLimit`.** Since 2.1.234 Claude Code waits out the reset
+and continues the same open session by itself, and the setting is **on by
+default**. In place, with the context intact, that is better than any scheduled
+wake. So when a resume relay is armed and this is on, the brief says so: the
+wake is the route for a session that will be **closed** at the reset, and both
+firing for the same reset would start the work twice and spend the weekly twice.
+
+**`/limit-reset`**, the once-weekly manual session reset, is detected but not
+built on: this account holds no grant (`tengu_cedar_ember` absent,
+`cachedUsageUtilization.cedar_ember` null), so a feature resting on it would be
+untestable. If a grant appears, the brief names it at the wall, says it only
+works while you are actually at a limit, and says the work it unlocks still
+spends the weekly. It never reports how many are left — `resets_left` comes from
+a live endpoint and appears in no file a hook can read.
+
+**Grace is not weekly spend.** The allowance the wall gives you is metered in
+its own per-window meters (`anthropic-ratelimit-unified-grace-5h-utilization`
+and `-grace-7d-utilization`, with a `rateLimitGraceZone` naming which window it
+belongs to), not billed to the 7-day window. Its size arrives in response
+headers and appears in no hook payload, no status-line field and no file, so the
+plugin says nothing about how much of it is left rather than estimating.
+
 ## The relay: carrying a project across the reset
 
 The handoff has always had the same flaw. It gets written, and then it sits in
@@ -1170,7 +1270,8 @@ skills/usage-limits/scripts/      usage.js, brief.js, pulse.js, stop.js,
                                   recommend.js, panel.js, feed.js,
                                   statusline.js, live.js, view.js, bars.js,
                                   activity.js, reading.js, drift.js,
-                                  mode.js, voice.js, relay.js, wake.js
+                                  mode.js, voice.js, relay.js, wake.js,
+                                  lowpri.js
 skills/usage-limits/references/   the longer notes
 hooks/hooks.json                  runs brief.js before each prompt, pulse.js
                                   during long turns, stop.js after each reply
@@ -1182,6 +1283,7 @@ commands/statusline.md            the /usage-limits:statusline command
 commands/usage-mode.md            the /usage-mode command
 bin/cli.js                        the npx entry point
 tools/sync-version.js             keeps the manifest version in step
+tools/test-tempdirs.js            temp directories the suite deletes on exit
 vscode/                           the VS Code extension; build.js copies the
                                   scripts into vscode/lib and makes the vsix
 test/                             node --test, no dependencies
@@ -1193,10 +1295,11 @@ test/                             node --test, no dependencies
 node --test
 ```
 
-712 tests over the pricing, the window arithmetic, plan and credit detection,
+895 tests over the pricing, the window arithmetic, plan and credit detection,
 the status line, the before-prompt line, the mid-turn pulse, the after-reply tally and the session history, job forecasting,
 per-project attribution, the Codex reader and its installer, the CLI,
-packaging, and the settings save/restore.
+packaging, the settings save/restore, and what Claude Code's own wall-time
+features are readable as (/low-priority, the wrap-up note, autoContinueAtUsageLimit).
 
 The budget modes are checked as rules rather than examples: the whole stopping
 matrix is walked in every mode (640 lines), `off` must inject nothing at any

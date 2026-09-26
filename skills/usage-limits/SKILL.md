@@ -591,6 +591,49 @@ was not caution; it was quitting with a reason that sounded like one.
 Only when the switch is genuinely unavailable - no other window has room, or the
 user has ruled it out - does the checkpoint below apply.
 
+### /low-priority: the user's lever, never yours
+
+Claude Code has a hidden toggle, `/low-priority`, offered when the 5-hour session
+limit is reached. It keeps the session working at reduced priority and spends the
+**weekly** limit, plus a separate weekly lower-priority allowance; replies can
+pause while it waits for spare capacity.
+
+**You cannot switch it on.** You cannot type a slash command, and the command is
+declared `supportsNonInteractive: false`, so it does not work in a headless or
+relayed run either. What you may do is say, in one line, that it exists and what
+it costs - and only when the budget line has already said so, because the line is
+the only thing that knows whether this account is provisioned for it at all.
+Never volunteer it otherwise: telling a user to run a command their account does
+not have is worse than saying nothing.
+
+Three rules when the line does mention it:
+
+- **Word it as a possibility.** The offer is gated on an experiment arm that
+  arrives in a response header, and the CLI also withholds it during a cooloff
+  and once the weekly allowance is spent. "If the wall offers it", not "run it".
+- **Never invent a wait time.** The retry interval and its ceiling come from the
+  server on each response. There is no fixed number.
+- **If the line says not to, say not to, and why.** Above 80 per cent weekly it
+  is the wrong move: it spends the window that takes days to come back in order
+  to save one that comes back in hours.
+
+If the user tells you they have switched it on, the honest answer is to record
+it: `node scripts/mode.js --low-priority on`. From then the budget line brakes on
+the weekly instead of the 5-hour window, stops telling you to wind down at the
+5-hour wall, and the relay stops booking a wake for a reset this session no
+longer stops at. **Record it only when they said so.** Whether it is running is
+in the CLI's process memory and readable nowhere, so nothing here may infer it,
+and `mode --low-priority off` is how it is taken back.
+
+The same applies to `/limit-reset`, the once-weekly manual session reset: the
+line names it only if a grant is actually readable, it only works while you are
+at a limit, the work it unlocks still spends the weekly, and how many are left is
+not knowable from here.
+
+And if the budget line says Claude Code is injecting its own wrap-up note at this
+wall, follow that note: it is more specific than anything here, and two
+instructions to wind down in different words is worse than one.
+
 ## 6. Checkpoint before the wall
 
 When the binding window is under roughly 10 percent, or under about ten turns
@@ -865,7 +908,7 @@ stop.
 | `scripts/host.js` | Works out which agent this is running inside, so one host's percentages are never reported against the other's turns. |
 | `scripts/codex.js` | The Codex reader: the meter and the pace out of `~/.codex/sessions`, plus the live `--refresh` call. |
 | `scripts/install-codex-hook.js` | `status`, `on`, `off`. Installs the Codex-side instruction, which Claude Code does not need. |
-| `scripts/mode.js` | The budget mode: no arguments to report it, `max`/`high`/`standard`/`off` to set it, `auto`, `off --guard 95`, `--list`, `--explain <name>`, `--floor`/`--ceiling`/`--pin`, `--baseline`, `--advice`/`--no-advice`, `--history`, `undo`, `--ledger`. Reads settings.json and never writes it. |
+| `scripts/mode.js` | The budget mode: no arguments to report it, `max`/`high`/`standard`/`off` to set it, `auto`, `off --guard 95`, `--list`, `--explain <name>`, `--floor`/`--ceiling`/`--pin`, `--baseline`, `--advice`/`--no-advice`, `--history`, `undo`, `--ledger`, `--low-priority [on|off]`. Reads settings.json and never writes it. |
 | `scripts/lowpower.js` | `status`, `on`, `off`. Restores what it replaced. Claude Code only. |
 | `scripts/recommend.js` | The chooser behind `usage.js --recommend`: posture, then the effort and model commands for each lever. Not meant to be called by hand. |
 | `references/tactics.md` | Every lever that lowers cost, and why it works. |
@@ -879,6 +922,7 @@ stop.
 | `scripts/net.js` | Can this machine reach the API, and was a failed run the network's fault. Three probes, TLS-interception detection, and the backoff the offline retries use. |
 | `scripts/wake.js` | What the scheduler runs after the reset: re-checks the meter, then notifies or resumes. Never called by hand. |
 | `scripts/voice.js` | The local writing profile: `show`, `card`, `set "<instruction>"`, `clear`, `off`/`on`, `forget`. |
+| `scripts/lowpri.js` | What Claude Code's own features at the wall are readable as: whether this account is provisioned for `/low-priority`, whether a manual session reset grant exists, whether the CLI injects its own wrap-up note here, whether usage credits are available, whether `autoContinueAtUsageLimit` is on, and the record of the user saying they switched low-priority on. Reads only; never writes anything but that one record. |
 | `references/how-it-works.md` | Where the numbers come from and where they are soft. |
 
 ## Codex controls
