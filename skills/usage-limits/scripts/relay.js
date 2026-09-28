@@ -957,12 +957,57 @@ function taskAction(action) {
   return '"' + action.execute + '" ' + action.argument;
 }
 
+// THE SCHEDULER SWITCH.
+//
+// Task Scheduler is machine-wide. A fake HOME, a fake CLAUDE_CONFIG_DIR or a
+// test's temp folder changes where the relay keeps its records, and nothing at
+// all about where its wakes go. Found 2026-09-25 23:55: an adversarial run of
+// the relay hook with HOME and USERPROFILE pointed at sandbox folders
+// registered 8 REAL tasks, two of them for the real session id, which would
+// have resumed a second copy of the live conversation. So the real scheduler
+// is only touched when nothing says this is a test or a sandbox:
+//   USAGE_LIMITS_SCHEDULER=real     always real (the escape hatch)
+//   USAGE_LIMITS_SCHEDULER=dry-run  never real
+//   NODE_TEST_CONTEXT               set by `node --test` for every test file,
+//                                   and inherited by what a test spawns
+//   a redirected home               os.homedir() is not the account's own
+// A dry run registers nothing, cancels nothing, and says so in its answer.
+function sandboxedHome() {
+  let real;
+  try {
+    real = os.userInfo().homedir;
+  } catch (err) {
+    return false;
+  }
+  if (!real) return false;
+  const norm = (p) => {
+    const resolved = path.resolve(p).replace(/[\\/]+$/, '');
+    return process.platform === 'linux' ? resolved : resolved.toLowerCase();
+  };
+  return norm(real) !== norm(os.homedir());
+}
+
+function schedulerMode() {
+  const said = String(process.env.USAGE_LIMITS_SCHEDULER || '').trim().toLowerCase();
+  if (said === 'real') return { dry: false, why: null };
+  if (said === 'dry-run' || said === 'dry') return { dry: true, why: 'USAGE_LIMITS_SCHEDULER=' + said };
+  if (process.env.NODE_TEST_CONTEXT) return { dry: true, why: 'running under node --test' };
+  if (sandboxedHome()) return { dry: true, why: 'the home folder is redirected to ' + os.homedir() };
+  return { dry: false, why: null };
+}
+
+function dryRun(mode) {
+  return { ok: true, how: 'dry-run', dry: true, warning: 'no wake was registered (' + mode.why + ')' };
+}
+
 function scheduleWindows(when, argv, name, cwd, deadline) {
   // No time left is a plain refusal, not a hung hook - and not a launcher
   // written for a task that is never registered.
   if (Number.isFinite(deadline) && remainingMs(deadline, PS_ROUTE_MS) < 1500) {
     return { ok: false, error: 'no time left in this hook to register the wake; it will arm on the next prompt' };
   }
+  const mode = schedulerMode();
+  if (mode.dry) return dryRun(mode);
   let lastVerifyError = null;
   const date = new Date(when);
   const stamp =
@@ -1074,6 +1119,8 @@ function scheduleWindows(when, argv, name, cwd, deadline) {
 }
 
 function schedulePosix(when, argv, name, cwd, deadline) {
+  const mode = schedulerMode();
+  if (mode.dry) return dryRun(mode);
   const seconds = Math.max(60, Math.round((when - Date.now()) / 1000));
   // `at` is the right tool and is absent on most desktops now. A detached
   // sleeper is second best: it survives the terminal closing, but not a
@@ -1121,6 +1168,8 @@ function schedule(when, argv, name, cwd, deadline) {
 }
 
 function cancelSchedule(name) {
+  // A dry run never touches a task, including one a real run registered.
+  if (schedulerMode().dry) return true;
   if (process.platform === 'win32') {
     const run = spawnSync(
       'powershell.exe',
@@ -1915,7 +1964,7 @@ if (require.main === module) {
     );
 }
 
-module.exports = { workWithContinuation, reapLost, hiddenAction, headlessAvailable, HEADLESS_HOST, HIDDEN_HOST, BUGCHECK_LINE,
+module.exports = { workWithContinuation, reapLost, schedulerMode, sandboxedHome, hiddenAction, headlessAvailable, HEADLESS_HOST, HIDDEN_HOST, BUGCHECK_LINE,
   taskAction, wakeLauncherFile, wakeLauncherScript, writeWakeLauncher, sweepWakeLaunchers, batchArg, describeSpawn, PS_ROUTE_MS, SCHTASKS_MS,
   records, armedFor, putRecord, dropRecord, preflightPrompts, claudeJsonFile, projectKeys, isHome, launchDirFor, applySetting, settingIs,
   DEFAULTS,
