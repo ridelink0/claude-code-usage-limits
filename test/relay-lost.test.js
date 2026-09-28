@@ -66,7 +66,7 @@ test('a wake that never reported back is reaped as lost, and only then', () =>
   }));
 
 test('the scheduled task runs the launcher under a hidden PowerShell, its path quoted', () => {
-  const action = relay.hiddenAction("C:\\Users\\o'b\\.claude\\relay-task-sess1234.cmd", 'C:\\work');
+  const action = relay.hiddenAction("C:\\Users\\o'b\\.claude\\relay-task-sess1234.cmd", 'C:\\work', false);
   assert.match(action.execute, /powershell\.exe$/i);
   assert.ok(action.argument.startsWith('-NoProfile -NonInteractive -WindowStyle Hidden -Command "& '));
   assert.ok(action.argument.endsWith("'C:\\Users\\o''b\\.claude\\relay-task-sess1234.cmd'\""), 'the apostrophe is doubled for PowerShell');

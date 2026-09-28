@@ -47,7 +47,7 @@ test('the task action stays under 200 characters for a 100-character plugin path
   const relay = fresh();
   assert.ok(LONG_PLUGIN.length >= 100, 'the fixture path is ' + LONG_PLUGIN.length + ' characters');
   const launcher = 'C:\\Users\\somebody\\.claude\\relay-task-0f3b9c1e.cmd';
-  const action = relay.hiddenAction(launcher, 'C:\\Users\\somebody');
+  const action = relay.hiddenAction(launcher, 'C:\\Users\\somebody', false);
   const tr = relay.taskAction(action);
   assert.ok(tr.length < 200, tr.length + ' characters: ' + tr);
   assert.ok(tr.startsWith('"' + action.execute + '" -NoProfile -NonInteractive -WindowStyle Hidden -Command "& \''));
@@ -55,7 +55,7 @@ test('the task action stays under 200 characters for a 100-character plugin path
   // The launcher is where the long path goes, and it does not change the action.
   const script = relay.wakeLauncherScript([LONG_PLUGIN, '--id', ID, '--config-dir', 'C:\\Users\\somebody\\.claude']);
   assert.ok(script.includes('"' + LONG_PLUGIN + '"'));
-  assert.strictEqual(relay.taskAction(relay.hiddenAction(launcher, 'D:\\elsewhere')).length, tr.length);
+  assert.strictEqual(relay.taskAction(relay.hiddenAction(launcher, 'D:\\elsewhere', false)).length, tr.length);
 });
 
 test('the launcher holds the whole node command, each argument quoted for cmd', () =>

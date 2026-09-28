@@ -904,19 +904,50 @@ function verifyRegistration(state, next, wanted, now) {
   return { ok: true, nextRun: at };
 }
 
-const HIDDEN_HOST = path.join(process.env.SystemRoot || 'C:' + path.sep + 'Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const SYSTEM32 = path.join(process.env.SystemRoot || 'C:' + path.sep + 'Windows', 'System32');
+const HIDDEN_HOST = path.join(SYSTEM32, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const HEADLESS_HOST = path.join(SYSTEM32, 'conhost.exe');
+
+// conhost --headless arrived with the pseudoconsole in Windows 10 1809 (build
+// 17763). Older builds, and anything that is not Windows, keep the PowerShell
+// route alone.
+function headlessAvailable() {
+  if (process.platform !== 'win32') return false;
+  const build = Number(String(os.release()).split('.')[2]);
+  return Number.isFinite(build) && build >= 17763 && fs.existsSync(HEADLESS_HOST);
+}
 
 // The task used to run node.exe directly, and node.exe is a console program:
 // under the scheduler, in an interactive session, it gets a console window
 // of its own. That was the "blank terminal that says Claude" - the wake's own
 // console, shared by its headless child - and closing it killed both (task
-// result 0xC000013A), so the wake never wrote its outcome. PowerShell can
-// start hidden and node inherits that; the session the wake opens for the
-// user is a new window (cmd /c start) and stays visible.
-function hiddenAction(launcher, cwd) {
+// result 0xC000013A), so the wake never wrote its outcome.
+//
+// PowerShell's -WindowStyle Hidden was the first fix, and it only works where
+// the old console host draws the window. Windows 11 hands every new console to
+// Windows Terminal by default, and Terminal ignores the flag: measured
+// 2026-09-27, the task opened a "powershell.exe" Terminal window beside the
+// Claude window the wake started, so the user saw two terminals for one relay
+// and closing the wrong one killed the wake again (0xC000013A the same
+// evening). conhost --headless gives the console no window at all, so there
+// is nothing to hand to Terminal; measured the same evening, the same task
+// under it opened no window, and the session window the wake opens (cmd /c
+// start) still appeared, alone.
+function hiddenAction(launcher, cwd, headless) {
+  const useHeadless = headless === undefined ? headlessAvailable() : headless;
+  const run = '-Command "& ' + psQuote(launcher) + '"';
+  if (useHeadless) {
+    // No -WindowStyle here: there is no window to style, and the 20 characters
+    // matter to the schtasks fallback, which refuses a /TR over 261.
+    return {
+      execute: HEADLESS_HOST,
+      argument: '--headless "' + HIDDEN_HOST + '" -NoProfile -NonInteractive ' + run,
+      cwd: cwd || os.homedir(),
+    };
+  }
   return {
     execute: HIDDEN_HOST,
-    argument: '-NoProfile -NonInteractive -WindowStyle Hidden -Command "& ' + psQuote(launcher) + '"',
+    argument: '-NoProfile -NonInteractive -WindowStyle Hidden ' + run,
     cwd: cwd || os.homedir(),
   };
 }
@@ -1884,7 +1915,7 @@ if (require.main === module) {
     );
 }
 
-module.exports = { workWithContinuation, reapLost, hiddenAction, BUGCHECK_LINE,
+module.exports = { workWithContinuation, reapLost, hiddenAction, headlessAvailable, HEADLESS_HOST, HIDDEN_HOST, BUGCHECK_LINE,
   taskAction, wakeLauncherFile, wakeLauncherScript, writeWakeLauncher, sweepWakeLaunchers, batchArg, describeSpawn, PS_ROUTE_MS, SCHTASKS_MS,
   records, armedFor, putRecord, dropRecord, preflightPrompts, claudeJsonFile, projectKeys, isHome, launchDirFor, applySetting, settingIs,
   DEFAULTS,

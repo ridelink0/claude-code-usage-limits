@@ -1253,15 +1253,20 @@ function briefText(input) {
   // (autoContinueAtUsageLimit, code.claude.com/docs/en/settings-reference). In
   // place, with the context intact, that is strictly better than a wake: no
   // hand-off file to re-read and nothing lost. So the wake is the route for a
-  // session that will be CLOSED, and saying so is what stops both firing for the
-  // same reset - which would run the work twice and spend the weekly twice.
+  // session that will be CLOSED. Both firing for the same reset would run the
+  // work twice and spend the weekly twice, so since 1.41.0 the wake looks for
+  // this session's process first and stands down when it is open and working
+  // again (wake.js, liveSession). What the CLI does NOT do is continue a session
+  // that stopped short of the wall, at a cap, so that case is said too.
   if (carry && carry.armed && carry.armed.mode === 'resume' && parts.autoContinue && parts.autoContinue.value) {
     relaySentences.push(
       'Claude Code\'s own "Continue automatically at usage limit" is on (' + parts.autoContinue.source +
-        '), so if this terminal is still open at the reset the CLI carries THIS session across by ' +
-        'itself, in place, with its context intact - better than any wake. The wake is the route for a ' +
-        'session that is closed by then. Both firing for the same reset would start the work twice and ' +
-        'spend the weekly twice, so if the terminal is staying open, one of the two is worth standing down.'
+        '), so if this terminal is still open when the limit is hit, the CLI carries THIS session across ' +
+        'the reset by itself, in place, with its context intact - better than any wake. The wake is the ' +
+        'route for a session that is closed by then. Both firing for the same reset would start the work ' +
+        'twice and spend the weekly twice, so the wake checks for this session first and opens no second ' +
+        'window while it is open and working again. The CLI does not continue a session that stopped short ' +
+        'of the limit (at a cap); the wake gives such a session a few minutes, then opens it in one window.'
     );
   }
   if (carry && carry.last) {

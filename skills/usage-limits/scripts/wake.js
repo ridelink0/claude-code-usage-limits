@@ -308,6 +308,106 @@ function transcriptExists(id) {
   return false;
 }
 
+function transcriptFile(id) {
+  const root = path.join(relay.configDir(), 'projects');
+  try {
+    for (const dir of fs.readdirSync(root)) {
+      const file = path.join(root, dir, id + '.jsonl');
+      if (fs.existsSync(file)) return file;
+    }
+  } catch (err) {
+    // No projects folder at all.
+  }
+  return null;
+}
+
+// ONE TERMINAL.
+//
+// The session a relay was armed for is often still open. Claude Code's own
+// autoContinueAtUsageLimit (on by default) carries an open session across the
+// reset in place, and a wake that opened `claude --resume` beside it put two
+// terminals on the screen running the same conversation - the same work
+// started twice and the weekly spent twice. Gev, 2026-09-27: "fix it to where
+// it makes 1 terminal and not 2".
+//
+// Claude Code keeps one file per running process in <config>/sessions,
+// named for the pid: { pid, sessionId, procStart, kind, cwd, ... }. procStart
+// is the process creation time (a Windows FILETIME, read against
+// Get-Process on 2026-09-27: 134350239768728478 on both sides), which is what
+// tells a live session from a dead one whose pid Windows has handed to
+// something else. A file whose process is gone is left where it is: it is
+// Claude Code's, not the relay's.
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+function processStart(pid) {
+  if (process.platform !== 'win32') return null;
+  const shell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const run = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-Command', '(Get-Process -Id ' + Number(pid) + ' -ErrorAction Stop).StartTime.ToFileTimeUtc()'], {
+    encoding: 'utf8',
+    timeout: 30000,
+    windowsHide: true,
+  });
+  const said = String(run.stdout || '').trim();
+  return run.status === 0 && /^\d+$/.test(said) ? said : null;
+}
+
+function liveSession(id, io) {
+  const ops = Object.assign({ alive: pidAlive, started: processStart }, io || null);
+  const dir = path.join(relay.configDir(), 'sessions');
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch (err) {
+    return null;
+  }
+  for (const name of names) {
+    if (!/^\d+\.json$/.test(name)) continue;
+    let held;
+    try {
+      held = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+    } catch (err) {
+      continue;
+    }
+    if (!held || held.sessionId !== id) continue;
+    const pid = Number(held.pid);
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
+    if (!ops.alive(pid)) continue;
+    // A start time that can be read and does not match is a recycled pid.
+    // One that cannot be read (not Windows, or the query failed) leaves the
+    // pid's word as the answer.
+    if (held.procStart) {
+      const started = ops.started(pid);
+      if (started !== null && String(started) !== String(held.procStart)) continue;
+    }
+    return { pid, kind: held.kind || null, cwd: held.cwd || null };
+  }
+  return null;
+}
+
+// Written to since `since`: the open session is working again, which is what
+// the CLI's own continue looks like from outside.
+function transcriptActiveSince(id, since) {
+  const file = transcriptFile(id);
+  if (!file) return false;
+  try {
+    return fs.statSync(file).mtimeMs >= since;
+  } catch (err) {
+    return false;
+  }
+}
+
+// How long a wake that finds the session open but quiet waits for it to start
+// working by itself before opening the one window it would have opened anyway.
+const LIVE_WAIT_MS = 3 * MINUTE;
+const LIVE_POLL_MS = 15 * 1000;
+
 function readExit(file) {
   try {
     const code = parseInt(fs.readFileSync(file, 'utf8').trim(), 10);
@@ -569,6 +669,7 @@ async function run(now, argv, overrides) {
     {
       windowReopened, deliverClaude, deliverCodex, toast, userIsPresent,
       arm: relay.arm, capabilities: relay.capabilities, reachable: net.reachable,
+      liveSession, transcriptActiveSince, sleep: sleepMs, now: Date.now,
     },
     overrides || null
   );
@@ -613,6 +714,35 @@ async function run(now, argv, overrides) {
     }
     relay.note('wake ' + record.id + ': window still at ' + Math.round(reopened.percent) + '%, retry ' + attempt, now);
     return { outcome: 'rescheduled', attempt };
+  }
+
+  // ONE TERMINAL (see liveSession). An open session that is working again -
+  // written to since the window reset - has been carried across by the CLI,
+  // and a second window would run the same work twice, so the wake stands
+  // down. One that is open but quiet gets LIVE_WAIT_MS to start by itself
+  // (the CLI's continue, or the session's own timer); if it is closed in that
+  // time, or stays quiet, the wake opens its one window, because nothing
+  // outside a session can type into it and the plan still has to run.
+  if (record.host !== host.CODEX) {
+    const since = Number.isFinite(record.wakeAt) ? record.wakeAt - (config.graceMinutes || 0) * MINUTE : now - 5 * MINUTE;
+    const started = deps.now();
+    let open = deps.liveSession(record.id);
+    while (open) {
+      if (deps.transcriptActiveSince(record.id, since)) {
+        deps.toast(
+          'Usage limits: carried on in place',
+          (record.project || path.basename(record.cwd)) + ' is still open and working again in its own terminal, so no second window was opened.'
+        );
+        finish(state, record, 'live', 'the session is open in process ' + open.pid + ' and working again; no second window', now);
+        return { outcome: 'live', pid: open.pid };
+      }
+      if (deps.now() - started >= LIVE_WAIT_MS) break;
+      deps.sleep(LIVE_POLL_MS);
+      open = deps.liveSession(record.id);
+    }
+    if (open) {
+      relay.note('wake ' + record.id + ': the session is open in process ' + open.pid + ' but idle since the reset; opening it in a window', now);
+    }
   }
 
   // THE PREFLIGHT.
@@ -848,4 +978,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = { launcherScriptPosix, shQuote, visibleArgs, launcherScript, pointerPrompt, transcriptExists, wakePromptFile, LAUNCH_GRACE_MS, run, toast, userIsPresent, claudeArgs, deliverClaude, deliverCodex, windowReopened, argOf, appendRun, spawnOptionsFor };
+module.exports = { liveSession, transcriptActiveSince, pidAlive, LIVE_WAIT_MS, LIVE_POLL_MS, launcherScriptPosix, shQuote, visibleArgs, launcherScript, pointerPrompt, transcriptExists, wakePromptFile, LAUNCH_GRACE_MS, run, toast, userIsPresent, claudeArgs, deliverClaude, deliverCodex, windowReopened, argOf, appendRun, spawnOptionsFor };
