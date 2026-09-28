@@ -565,7 +565,12 @@ function compose(input) {
           'rather than waiting for the reset, not a new request. You have none of that conversation: what ' +
           'follows is what it left. Carry on from where it stopped, at full quality, without re-asking what to ' +
           'do. This is a fresh clone from GitHub, so only what was pushed is here; if something below is ' +
-          'missing, say so rather than rebuilding it from the description.'
+          'missing, say so rather than rebuilding it from the description.' +
+          // Which branch the clone starts on is not the plugin's to choose, so
+          // the one the work was pushed to is named.
+          (options.branch && options.branch !== 'HEAD'
+            ? ' The work is on branch ' + options.branch + ': check it out first if the clone is on another.'
+            : '')
       : 'The usage window has reset and this is the plugin picking the work back up, not a new request. ' +
           'Carry on from where the last turn stopped, at full quality, without re-asking what to do.'
   );
@@ -737,8 +742,11 @@ function taskName(id, at) {
   );
 }
 
+// PowerShell also ends a single-quoted string at a curly single quote
+// (U+2018-U+201B), so those are doubled too: a typographic apostrophe in a
+// hand-off must not close its own argument.
 function psQuote(value) {
-  return "'" + String(value).replace(/'/g, "''") + "'";
+  return "'" + String(value).replace(/['\u2018-\u201B]/g, '$&$&') + "'";
 }
 
 // One argument, quoted the way CommandLineToArgvW will unquote it. The rule
@@ -1743,16 +1751,17 @@ function cloudHandoff(input) {
     };
   }
   const platform = options.platform || process.platform;
+  const cwd = (record && record.cwd) || options.cwd || process.cwd();
+  const git = gitState(cwd, options.git);
   const prompt = compose({
     cloud: true,
+    branch: git.repo ? git.branch : null,
     continuation,
     work,
     thinking: config.thinking !== 'off',
     voice: config.voice === false ? null : voice.card(),
     bugcheck: config.bugcheck,
   });
-  const cwd = (record && record.cwd) || options.cwd || process.cwd();
-  const git = gitState(cwd, options.git);
   return {
     ok: true,
     id,
@@ -1802,7 +1811,8 @@ function launchCloud(handoff, deps) {
   if (handoff.platform === 'win32' && /\.(cmd|bat)$/i.test(cli)) {
     return {
       ok: false,
-      text: 'Not launched: claude here is ' + cli + ', a batch shim, and cmd.exe ends a command at the first line break, so the hand-off cannot pass through it. Paste the command above into PowerShell instead.',
+      text: 'Not launched: claude here is ' + cli + ', a batch shim, and cmd.exe ends a command at the first line break, so the hand-off cannot pass through it. ' +
+        'PowerShell runs a shim through cmd.exe too, so run the command above where claude is the native claude.exe (claude install puts one in ~/.local/bin).',
     };
   }
   const now = Date.now();

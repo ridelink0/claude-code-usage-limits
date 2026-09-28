@@ -182,7 +182,21 @@ test('on Windows the command is PowerShell, single-quoted with quotes doubled', 
   assert.strictEqual(r.cloudCommand("it's\nnext", 'win32'), "claude --cloud 'it''s\nnext'");
   const warnings = r.cloudWarnings(r.gitState('/x', cleanGit), 'say "hi"', 'win32').join('\n');
   assert.match(warnings, /PowerShell before 7\.3/);
+  // PowerShell ends a single-quoted string at a curly single quote as well, so
+  // each is doubled like a straight one.
+  const curly = 'it\u2019s \u2018done\u2019, \u201Aand\u201B';
+  assert.strictEqual(r.cloudCommand(curly, 'win32'), "claude --cloud 'it\u2019\u2019s \u2018\u2018done\u2019\u2019, \u201A\u201Aand\u201B\u201B'");
 });
+
+test('the hand-off names the branch the work was pushed to, since the clone may start on another', () =>
+  isolated(() => {
+    const r = relay();
+    const named = r.cloudHandoff({ sessionId: 'sess-b', text: 'x', git: cleanGit, platform: 'linux', cwd: '/w' });
+    assert.match(named.prompt, /The work is on branch feature: check it out first if the clone is on another\./);
+    const detached = r.cloudHandoff({ sessionId: 'sess-b', text: 'x', git: gitWith({ 'rev-parse --abbrev-ref HEAD': { status: 0, stdout: 'HEAD' } }), platform: 'linux', cwd: '/w' });
+    assert.doesNotMatch(detached.prompt, /The work is on branch/);
+    assert.doesNotMatch(r.compose({ continuation: 'x', branch: 'feature' }), /The work is on branch/, 'the wake resumes in place and names no branch');
+  }));
 
 test('the printed answer: session, source, the credit, the warnings, where to run it, and no launch without --go', () =>
   isolated(() => {
@@ -266,6 +280,9 @@ test('--go will not push a multi-line hand-off through a Windows batch shim, or 
     };
     const shim = r.cloud(['--go', '--session', 's6', 'x'], { mode: { dry: false }, git: cleanGit, platform: 'win32', cli: 'C:\\npm\\claude.cmd', spawn: never });
     assert.match(shim, /Not launched: claude here is C:\\npm\\claude\.cmd, a batch shim/);
+    // PowerShell hands a .cmd to cmd.exe as well, so it is no way round the shim.
+    assert.doesNotMatch(shim, /into PowerShell instead/);
+    assert.match(shim, /native claude\.exe/);
     const bare = r.cloud(['--go', '--session', 's7', 'x'], {
       mode: { dry: false },
       git: () => ({ status: 128, stdout: '' }),
