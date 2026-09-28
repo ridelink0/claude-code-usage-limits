@@ -361,6 +361,29 @@ The 5-hour limit is the binding one. At the current pace it runs out in about
 The clock time matters more than the countdown. "Resume after 03:00" is a
 plan; "4h 12m" is a number you still have to do arithmetic on.
 
+**The cloud-session credit is a third case.** Claude Code can offer a dollar
+credit for cloud sessions (claude.ai/code), on top of the plan, and names it at
+the wall itself: "While you wait, start a new cloud session with a $250
+credit". It is not usage credits - the account this was built on has those off
+at the org level and has this - and a cloud session on it was seen still
+working with its 5-hour window "rejected". When the account carries the offer
+the report says so on a `Cloud credit` line, with the amount read from the
+offer, and at the wall adds the way on:
+
+```
+  Work stops when it does. Nothing carries on into paid credits.
+  To carry on now instead of waiting, start a cloud session on the $250
+  cloud-session credit: relay cloud hands it this work as claude --cloud.
+  Land what exists, write the handoff, and resume after 03:00.
+```
+
+`relay cloud` builds the hand-off the wake would deliver and prints the
+`claude --cloud` command with it inline; the cloud session clones from GitHub,
+so it warns about anything not pushed. Inside a cloud session the report does
+not ask for `/usage` - the container keeps no snapshot - and says what the
+session has cost so far at list prices instead. What is left of the credit is
+not readable anywhere, so it is never claimed.
+
 The skill also requires Claude to say up front when a job will not fit in what
 is left, name what it is doing now, what it is leaving, and when the rest can
 happen, rather than starting and stopping halfway through an edit.

@@ -978,4 +978,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = { liveSession, transcriptActiveSince, pidAlive, LIVE_WAIT_MS, LIVE_POLL_MS, launcherScriptPosix, shQuote, visibleArgs, launcherScript, pointerPrompt, transcriptExists, wakePromptFile, LAUNCH_GRACE_MS, run, toast, userIsPresent, claudeArgs, deliverClaude, deliverCodex, windowReopened, argOf, appendRun, spawnOptionsFor };
+module.exports = { liveSession, transcriptActiveSince, pidAlive, LIVE_WAIT_MS, LIVE_POLL_MS, launcherScriptPosix, shQuote, visibleArgs, launcherScript, pointerPrompt, transcriptExists, transcriptFile, wakePromptFile, LAUNCH_GRACE_MS, run, toast, userIsPresent, claudeArgs, deliverClaude, deliverCodex, windowReopened, argOf, appendRun, spawnOptionsFor };

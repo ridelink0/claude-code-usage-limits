@@ -47,6 +47,13 @@ The rest:
 - `note "<text>"` (or `note --file <path>`) - store the continuation. This is
   the text that gets delivered, so write it to be acted on: what is done, what
   is next in order, which files are mid-change, what to verify first.
+- `cloud [--session <id>] [--go] ["<text>"]` - the same hand-off, into a
+  cloud session now instead of this one after the reset. It prints the exact
+  `claude --cloud '...'` command with the hand-off inline (a cloud session
+  cannot read a file here), and warns about uncommitted changes and unpushed
+  commits, because the cloud session clones from GitHub. `--go` starts it,
+  detached, and names the log file its output goes to. It runs on the account's
+  cloud-session credit when there is one, so starting it is the user's call.
 - `cancel` - drop the wake and remove the scheduled task.
 - `log` - the last twenty lines of what the relay actually did.
 

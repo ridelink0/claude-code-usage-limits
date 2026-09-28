@@ -26,6 +26,7 @@ const host = require('./host.js');
 const codex = require('./codex.js');
 const live = require('./live.js');
 const reading = require('./reading.js');
+const lowpri = require('./lowpri.js');
 
 // Which agent's meter to read. Resolved once from the command line or the
 // environment, because a process that changed its mind halfway through would
@@ -2975,6 +2976,9 @@ function collectClaude(now) {
       effortLevel: settings.effortLevel || 'default',
     },
     extraUsage: utilization && utilization.extra_usage ? utilization.extra_usage : null,
+    // The dollar credit Claude Code offers for cloud sessions, which is a
+    // different thing from usage credits and outlives them being switched off.
+    cloudCredit: lowpri.cloudCredit(account),
   };
 }
 
@@ -3375,6 +3379,14 @@ async function report(now, options) {
   // reasoning inside it.
   const scopedModels = byModel(scoped);
 
+  // Inside a claude.ai/code container there is no snapshot to read, and the
+  // figure that means something is what this session has cost so far. The
+  // session is the one Claude Code names in the environment of whatever it
+  // runs; its subagents' turns carry the same id and are counted with it.
+  const cloud = isCodex() || isGemini() ? null : lowpri.cloudSession(options && options.env);
+  const cloudId = cloud ? (options && options.sessionId) || cloud.sessionId : null;
+  const cloudSession = cloud ? Object.assign({}, cloud, { sessionId: cloudId, spent: sessionSpend(events, cloudId) }) : null;
+
   return Object.assign({}, base, {
     windows,
     binding,
@@ -3393,6 +3405,8 @@ async function report(now, options) {
     // nothing happened.
     lastRefusal: [...rejections.values()].sort((a, b) => b.at - a.at)[0] || null,
     credits: base.codexCredits || creditsFrom(base.utilization),
+    cloudCredit: base.cloudCredit || null,
+    cloudSession,
     sessions: activeSessions(events, now, CONCURRENT_WINDOW_MS),
     session: sessionSpend(events, options && options.sessionId),
     // A per-model weekly for a model that is not running could be a week past
@@ -3616,7 +3630,44 @@ function render(data) {
       );
     }
   }
+  // Not usage credits: a dollar credit for claude.ai/code sessions that the
+  // CLI itself offers at the wall, and which this account had with usage
+  // credits switched off. Inside a cloud session the block below says it.
+  const cloudAmount = lowpri.creditText(data.cloudCredit);
+  if (cloudAmount && !data.cloudSession) {
+    lines.push('  Cloud credit  ' + cloudAmount + ' for cloud sessions, on top of the plan: claude --cloud, or claude.ai/code');
+  }
   lines.push('');
+
+  // A claude.ai/code container keeps no usage snapshot, so "run /usage" is
+  // advice that cannot work there. What can be said is what kind of session
+  // this is, and what it has cost so far at list prices.
+  if (data.cloudSession) {
+    if (cloudAmount) {
+      lines.push('  ' + pad('Cloud session', 15) + 'a claude.ai/code session, billed to the cloud-session credit');
+      lines.push('                 rather than the plan\'s 5-hour window. Its container keeps no');
+      lines.push('                 usage snapshot, so there is no window to read and /usage has');
+      lines.push('                 nothing to add here.');
+    } else {
+      lines.push('  ' + pad('Cloud session', 15) + 'a claude.ai/code session. Its container keeps no usage');
+      lines.push('                 snapshot, so the plan\'s windows are not readable here; the');
+      lines.push('                 report on the machine you usually work from has them.');
+    }
+    const spent = data.cloudSession.spent;
+    if (!spent) {
+      lines.push('  ' + pad('So far', 15) + 'nothing this session has spent is on record yet.');
+    } else {
+      lines.push(
+        '  ' + pad('So far', 15) + 'about ' + formatUSD(spent.cost) + ' this session at API list prices, ' +
+          spent.turns + ' turn' + (spent.turns === 1 ? '' : 's') + (cloudAmount ? ';' : '.')
+      );
+    }
+    if (cloudAmount) {
+      lines.push('                 the credit is ' + cloudAmount + ' across all cloud sessions, and what is');
+      lines.push('                 left of it is not readable here.');
+    }
+    lines.push('');
+  }
 
   if (!data.windows.length) {
     // Two different situations, and telling them apart matters. Nothing to read
@@ -3636,6 +3687,7 @@ function render(data) {
       }
       return lines.join('\n');
     }
+    if (data.cloudSession) return lines.join('\n').replace(/\n+$/, '');
     lines.push('  No usage snapshot in ' + (data.accountFile || '~/.claude.json') + '.');
     lines.push(
       data.host === host.CODEX
@@ -3961,6 +4013,12 @@ function render(data) {
     const credits = data.credits;
     if (!credits || !credits.enabled || credits.limitReached) {
       lines.push('  Work stops when it does. Nothing carries on into paid credits.');
+      // The one way past the wall this account has today, and not a way to
+      // spend more of the plan: a cloud session runs on its own credit.
+      if (cloudAmount && !data.cloudSession) {
+        lines.push('  To carry on now instead of waiting, start a cloud session on the ' + cloudAmount);
+        lines.push('  cloud-session credit: relay cloud hands it this work as claude --cloud.');
+      }
     }
     if (Number.isFinite(data.resumeAt)) {
       lines.push(

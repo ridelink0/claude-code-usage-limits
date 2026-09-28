@@ -179,6 +179,15 @@ yourself: Claude Code announces it and asks before drawing on credits, and
 repeating that only adds noise. Just factor it into the plan, and take the
 user's answer to that prompt as the decision.
 
+**Cloud credit.** A separate line, when the account is offered a credit for
+cloud sessions. It is not usage credits and it can be there while they are
+off. At the wall it is the way on now rather than after the reset: `relay
+cloud` prints the `claude --cloud` command carrying the hand-off, and warns
+about anything not pushed, because the cloud session clones from GitHub. Offer
+it in one line; it spends the user's credit, so starting it is their call.
+Inside a cloud session there is no usage snapshot, so do not send the user to
+`/usage`; the report gives this session's spend at list prices instead.
+
 ## Opening with the budget
 
 Start every reply with one line saying where the budget stands and whether what
@@ -923,7 +932,7 @@ stop.
 | `scripts/net.js` | Can this machine reach the API, and was a failed run the network's fault. Three probes, TLS-interception detection, and the backoff the offline retries use. |
 | `scripts/wake.js` | What the scheduler runs after the reset: re-checks the meter, then notifies or resumes. Never called by hand. |
 | `scripts/voice.js` | The local writing profile: `show`, `card`, `set "<instruction>"`, `clear`, `off`/`on`, `forget`. |
-| `scripts/lowpri.js` | What Claude Code's own features at the wall are readable as: whether this account is provisioned for `/low-priority`, whether a manual session reset grant exists, whether the CLI injects its own wrap-up note here, whether usage credits are available, whether `autoContinueAtUsageLimit` is on, and the record of the user saying they switched low-priority on. Reads only; never writes anything but that one record. |
+| `scripts/lowpri.js` | What Claude Code's own features at the wall are readable as: whether this account is provisioned for `/low-priority`, whether a manual session reset grant exists, whether the CLI injects its own wrap-up note here, whether usage credits are available, the cloud-session credit on offer and whether this is a cloud session, whether `autoContinueAtUsageLimit` is on, and the record of the user saying they switched low-priority on. Reads only; never writes anything but that one record. |
 | `references/how-it-works.md` | Where the numbers come from and where they are soft. |
 
 ## Codex controls
