@@ -345,3 +345,20 @@ test('a Windows command meant for a batch shim warns that cmd.exe cuts the hand-
     assert.doesNotMatch(r.cloud(['--session', 'sess-9', 'x'], { git: cleanGit, platform: 'linux', cwd: '/repo', account: {}, cli: '/x/claude.cmd' }), /batch shim/);
     assert.deepStrictEqual(r.cloudWarnings(r.gitState('/x', cleanGit), 'short', 'win32', 'C:\\bin\\claude.exe'), []);
   }));
+
+// `where claude` on an npm install lists the extensionless sh script before
+// claude.cmd. Neither shell runs a file with no extension, and taking the
+// first line meant the shim warning above never fired for the install it is
+// about.
+test('the claude a Windows shell runs is the first match with an extension, not the sh script npm writes beside the shim', () => {
+  const r = relay();
+  const calls = [];
+  const where = (cmd, args) => {
+    calls.push([cmd].concat(args));
+    return { status: 0, stdout: 'C:\\Users\\me\\AppData\\Roaming\\npm\\claude\r\nC:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd\r\nC:\\Users\\me\\.local\\bin\\claude.exe\r\n' };
+  };
+  assert.strictEqual(r.shellClaude({}, where), 'C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd');
+  assert.deepStrictEqual(calls, [['where', 'claude']]);
+  const native = () => ({ status: 0, stdout: 'C:\\Users\\me\\.local\\bin\\claude.exe\r\nC:\\Users\\me\\AppData\\Roaming\\npm\\claude\r\n' });
+  assert.strictEqual(r.shellClaude({}, native), 'C:\\Users\\me\\.local\\bin\\claude.exe');
+});

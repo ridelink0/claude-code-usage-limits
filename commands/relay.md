@@ -39,7 +39,9 @@ The rest:
   and model - for a session that has grown long, so the next window starts
   clean instead of carrying all of it. The old conversation is left as it was.
   On Windows the inline hand-off needs the native `claude.exe`; with only the
-  npm `claude.cmd` shim the first prompt points at the file instead. Both
+  npm `claude.cmd` shim the first prompt points at the file instead, and so it
+  does anywhere for a hand-off too long for one argument (30,000 characters on
+  Windows, 120,000 bytes elsewhere). Both
   modes keep one terminal: if the old session is open and working again at the
   wake, the wake stands down; if it is open but quiet for three minutes, the
   wake opens its one window anyway. Under `mode notify` neither applies, and

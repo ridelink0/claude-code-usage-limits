@@ -364,3 +364,36 @@ test('defer marks its own record, not whichever relay was armed first', () =>
     assert.strictEqual(relay.armedFor(held, 'sess-defer-own').deferred, true);
     assert.strictEqual(relay.armedFor(held, 'someone-else').deferred, undefined, 'the other relay is left as it was');
   }));
+
+// --- found in review ----------------------------------------------------------
+
+// Linux's limit on one argument is 128 KiB of BYTES. Counting characters let
+// 70,000 two-byte characters (140,000 bytes) through as inline, and the exec
+// then failed E2BIG in the window, the same way on every retry.
+test('the POSIX inline limit counts bytes, so a hand-off heavy in non-ASCII text goes by file instead of failing E2BIG', () => {
+  const record = { id: ID, cwd: '/work/proj', project: 'proj' };
+  const wide = '\u00e9'.repeat(70000);
+  const plan = wake.freshLaunch(record, {}, '/bin/claude', wide, '/cfg/p.md', 'linux');
+  assert.strictEqual(plan.inline, false);
+  assert.match(plan.why, /140000 bytes, more than one argument holds here \(120000\)/);
+  assert.ok(plan.args[plan.args.length - 1].includes('/cfg/p.md'));
+  assert.strictEqual(wake.freshLaunch(record, {}, '/bin/claude', 'x'.repeat(70000), '/cfg/p.md', 'linux').inline, true);
+});
+
+// A project in the home folder is launched from the trusted folder the
+// preflight answered for, with --add-dir back to it, as on Windows - and as
+// the new session's own opening says. The POSIX launcher cd'd into the home
+// folder itself, where the trust question waits for nobody.
+test('the POSIX window starts a home-folder project from its trusted launch folder, with --add-dir back to it', () =>
+  isolated((dir) => {
+    const launch = path.join(dir, 'relay-cwd');
+    const record = { id: ID, cwd: '/home/me', launchCwd: launch, project: 'me' };
+    const opened = [];
+    const result = wake.deliverClaude(record, PROMPT, { show: true, fresh: true }, '/usr/local/bin/claude', [], clockIo({ platform: 'linux', open: (launcher) => opened.push(launcher) }));
+    assert.strictEqual(result.ok, true);
+    const script = fs.readFileSync(opened[0], 'utf8');
+    assert.ok(script.includes('cd ' + wake.shQuote(launch) + ' || exit 1'), script);
+    assert.ok(script.includes("'--add-dir' '/home/me'"), script);
+    const resume = wake.launcherScriptPosix(record, {}, '/usr/local/bin/claude', '/cfg/p.md', '/cfg/p.exit');
+    assert.ok(resume.includes('cd ' + wake.shQuote(launch) + ' || exit 1'), 'the resume launches from the same folder');
+  }));
