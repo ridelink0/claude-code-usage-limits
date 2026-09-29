@@ -1836,12 +1836,17 @@ function cloudCli(env, platform) {
 }
 
 // The claude that `claude` typed into a Windows shell runs: the first match on
-// PATH, which is what `where` lists first. Only asked on Windows.
-function shellClaude(env) {
+// PATH that has an extension. `where claude` also lists the extensionless sh
+// script npm writes beside claude.cmd, and lists it first, but neither shell
+// runs a file with no extension - so taking the first line named the sh
+// script, and the shim warning never fired for the npm install it is about.
+// Only asked on Windows. `run` stands in for spawnSync in the tests.
+function shellClaude(env, run) {
   const environment = env || process.env;
   if (environment.USAGE_LIMITS_CLAUDE_CLI) return firstExisting([environment.USAGE_LIMITS_CLAUDE_CLI]);
-  const where = spawnSync('where', ['claude'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
-  const first = where.status === 0 ? String(where.stdout || '').split(/\r?\n/)[0].trim() : '';
+  const where = (run || spawnSync)('where', ['claude'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+  const lines = where && where.status === 0 ? String(where.stdout || '').split(/\r?\n/).map((line) => line.trim()) : [];
+  const first = lines.find((line) => line && path.win32.extname(line)) || '';
   return first || findClaude(environment);
 }
 

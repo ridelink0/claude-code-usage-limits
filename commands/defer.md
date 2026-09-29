@@ -57,7 +57,9 @@ will be:
   the relay's `permission` mode and `model`. It needs no session id. On Windows
   the hand-off goes inline only through the native `claude.exe`; with only the
   npm `claude.cmd` shim, the first prompt points at the hand-off file instead,
-  because cmd.exe cuts an argument at its first line break.
+  because cmd.exe cuts an argument at its first line break. It does the same
+  anywhere when the hand-off is too long for one argument (30,000 characters on
+  Windows, 120,000 bytes elsewhere).
 - `relay show off` - either kind runs headless (`claude -p`, the prompt on
   stdin) with no window and no Remote Control; its output is kept in
   `relay log --run`.

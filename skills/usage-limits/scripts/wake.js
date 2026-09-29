@@ -245,12 +245,14 @@ function freshFor(config) {
 }
 
 // One argument has to hold the hand-off. Linux refuses a single argument past
-// 128 KiB; Windows caps a whole command line at 32,767 characters, and there
-// each double quote and backslash can cost one more when it is quoted.
+// 128 KiB - bytes, not characters, so an accented letter or a dash costs two
+// or three (70,000 two-byte characters measured E2BIG here); Windows caps a
+// whole command line at 32,767 UTF-16 characters, and there each double quote
+// and backslash can cost one more when it is quoted.
 const FRESH_ARG_MAX = { win32: 30000, posix: 120000 };
 
 function argCost(text, platform) {
-  return platform === 'win32' ? text.length + (text.match(/["\\]/g) || []).length : text.length;
+  return platform === 'win32' ? text.length + (text.match(/["\\]/g) || []).length : Buffer.byteLength(text, 'utf8');
 }
 
 function isShim(cli) {
@@ -291,7 +293,8 @@ function freshLaunch(record, config, cli, prompt, promptFile, platform) {
   if (platform === 'win32' && isShim(cli)) {
     why = cli + ' is a batch shim and cmd.exe ends a command at the first line break';
   } else if (argCost(text, platform) > limit) {
-    why = 'the hand-off is ' + text.length + ' characters, more than one argument holds here (' + limit + ')';
+    why = 'the hand-off is ' + argCost(text, platform) + (platform === 'win32' ? ' characters' : ' bytes') +
+      ', more than one argument holds here (' + limit + ')';
   }
   return { cli, args: freshArgs(record, config, why ? freshPointerPrompt(promptFile) : text), inline: !why, why };
 }
@@ -550,7 +553,11 @@ function shQuote(text) {
 function launcherScriptPosix(record, config, cli, promptFile, exitPath, args) {
   return [
     '#!/bin/sh',
-    'cd ' + shQuote(record.cwd) + ' || exit 1',
+    // The folder the start-up questions were answered for, as on Windows: for
+    // a project in the home folder that is the trusted launch folder, with
+    // --add-dir back to the project. Started in the home folder itself, the
+    // window sat at the trust question the preflight never answered.
+    'cd ' + shQuote(record.launchCwd || record.cwd) + ' || exit 1',
     'unset CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID',
     shQuote(cli) + ' ' + (args || visibleArgs(record, config, promptFile)).map(shQuote).join(' '),
     'code=$?',

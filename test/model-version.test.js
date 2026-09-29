@@ -57,6 +57,15 @@ test('model ids come apart into family and version; a bare alias has no version'
   assert.strictEqual(usage.parseModelId(null), null);
 });
 
+test('Sonnet 5.5 is priced from the table, not the family average', () => {
+  assert.strictEqual(usage.isKnownModel('claude-sonnet-5-5'), true);
+  assert.deepStrictEqual(usage.rateFor('claude-sonnet-5-5'), { input: 2, output: 10 });
+  assert.deepStrictEqual(usage.rateFor('claude-sonnet-5-5[1m]'), usage.rateFor('claude-sonnet-5-5'));
+  assert.strictEqual(usage.costOf({ input_tokens: 1e6, output_tokens: 1e6 }, 'claude-sonnet-5-5'), 12);
+  assert.ok(Math.abs(usage.costOf({ cache_read_input_tokens: 1e6 }, 'claude-sonnet-5-5') - 0.2) < 1e-12);
+  assert.deepStrictEqual(usage.parseModelId('claude-sonnet-5-5'), { family: 'sonnet', version: [5, 5] });
+});
+
 test('the newer sibling is same family, newer, no dearer on any rate, and cheaper on one', () => {
   const opus5 = usage.newerSibling('claude-opus-5');
   assert.ok(opus5);
@@ -77,6 +86,8 @@ test('the newer sibling is same family, newer, no dearer on any rate, and cheape
   // so Sonnet 4.6 is not told Sonnet 5 is cheaper and Opus 4.6 is not pointed
   // at 5.5.
   assert.strictEqual(usage.newerSibling('claude-sonnet-4-6'), null);
+  // Sonnet 5.5 prices every rate the same as Sonnet 5, so it is not cheaper.
+  assert.strictEqual(usage.newerSibling('claude-sonnet-5'), null);
   assert.strictEqual(usage.newerSibling('claude-opus-4-6'), null);
   // A bare alias names no release, and a model with no row of its own is not
   // compared against a guess.
