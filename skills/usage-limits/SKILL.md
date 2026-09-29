@@ -743,6 +743,11 @@ them, and do not promise behaviour it does not have:
   Control on (named `usage-limits relay <project>` on claude.ai/code and the
   phone), and its first prompt points it at the hand-off file. `relay show off`
   makes it a headless `claude -p` run instead; the output is kept either way.
+  `relay fresh on` makes the wake start a **new** conversation instead of
+  resuming the old one: `claude` in the project with the whole hand-off as its
+  first prompt, named `usage-limits relay <project> (new session)`. Off, the
+  default, it resumes the same conversation. `defer` fires through the same
+  wake, so the same settings decide what a deferral does.
   macOS and Linux open the same window in Terminal (unverified there). A saved
   continuation counts as work to carry, so a session with a note but no todo
   list still arms; and a wake that never reports back is reaped as "lost".
@@ -928,7 +933,7 @@ stop.
 | `scripts/live.js` | The usage reading itself, taken the way Claude Code takes it for `/usage`, kept in `usage-limits-live.json` where `collect()` prefers it when newer than the cache. |
 | `scripts/drift.js` | How wrong the reading was: each correction written down against the one it replaced. Run it with no arguments for the median and worst gap measured so far, `--json` for the fields. Answer "how far behind does this plugin actually run" from here rather than from memory. |
 | `scripts/view.js`, `scripts/bars.js`, `scripts/activity.js` | The display model, the drawing in Claude's colours, and the working/idle marks the hooks leave for the panel. Not meant to be called by hand. |
-| `scripts/relay.js` | The relay: `status`, `on`/`off`, `at N`, `grace N`, `mode notify\|resume`, `permission MODE`, `thinking off\|resume\|always`, `armon threshold\|completion`, `backstop N`, `show on\|off`, `onfailure rearm\|stop`, `rearms N`, `offline N`, `doctor`, `note "<text>"`, `cancel`, `log [--run]`. |
+| `scripts/relay.js` | The relay: `status`, `on`/`off`, `at N`, `grace N`, `mode notify\|resume`, `permission MODE`, `thinking off\|resume\|always`, `armon threshold\|completion`, `backstop N`, `show on\|off`, `fresh on\|off`, `onfailure rearm\|stop`, `rearms N`, `offline N`, `doctor`, `note "<text>"`, `cancel`, `log [--run]`. |
 | `scripts/net.js` | Can this machine reach the API, and was a failed run the network's fault. Three probes, TLS-interception detection, and the backoff the offline retries use. |
 | `scripts/wake.js` | What the scheduler runs after the reset: re-checks the meter, then notifies or resumes. Never called by hand. |
 | `scripts/voice.js` | The local writing profile: `show`, `card`, `set "<instruction>"`, `clear`, `off`/`on`, `forget`. |

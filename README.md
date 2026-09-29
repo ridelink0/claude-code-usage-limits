@@ -379,7 +379,9 @@ offer, and at the wall adds the way on:
 
 `relay cloud` builds the hand-off the wake would deliver and prints the
 `claude --cloud` command with it inline; the cloud session clones from GitHub,
-so it warns about anything not pushed. Inside a cloud session the report does
+so it warns about anything not pushed. On Windows it also warns when the
+`claude` on PATH is a `.cmd` shim, because cmd.exe cuts the hand-off at its
+first line break even when the command is pasted into PowerShell. Inside a cloud session the report does
 not ask for `/usage` - the container keeps no snapshot - and says what the
 session has cost so far at list prices instead. What is left of the credit is
 not readable anywhere, so it is never claimed.
@@ -520,6 +522,15 @@ re-checks the meter and hands your continuation back.
 /usage-limits:relay mode resume
 /usage-limits:relay permission acceptEdits
 ```
+
+With `mode resume` the wake resumes the same conversation (`claude --resume`).
+`relay fresh on` makes it start a new one instead: `claude` in the project
+with the whole hand-off as its first prompt, Remote Control on as
+`usage-limits relay <project> (new session)`, and the relay's permission mode -
+so a session that has grown long hands its work on rather than carrying all of
+it into the next window. It is off by default, `/usage-limits:defer` fires
+through the same wake, and in both modes the wake stands down if the old
+session is still open and working again.
 
 What changes while it is armed is what Claude is told at the wall. Instead of
 "write the handoff and stop", the budget line says the relay has it, that being

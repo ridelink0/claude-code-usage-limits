@@ -324,3 +324,24 @@ test('the plugin\'s own flags stay out of the hand-off text', () =>
     assert.match(text, /This is what the session left for itself:\n\nShip the docs\.\n/);
     assert.doesNotMatch(text, /--host|sess-8\n|claude Ship/);
   }));
+
+// The printed command on Windows meets whatever claude is on PATH, and a batch
+// shim runs through cmd.exe even from PowerShell: cmd.exe ends the command at
+// the first line break, so the cloud session would get one line of the
+// hand-off. Said before anyone pastes it, not only when --go refuses.
+test('a Windows command meant for a batch shim warns that cmd.exe cuts the hand-off at its first line break', () =>
+  isolated(() => {
+    const r = relay();
+    const shim = r.cloud(['--session', 'sess-9', 'First line.\nSecond line.'], { git: cleanGit, platform: 'win32', cwd: 'C:\\repo', account: {}, cli: 'C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd', nativeCli: null });
+    assert.match(shim, /Warning: claude here is C:\\Users\\me\\AppData\\Roaming\\npm\\claude\.cmd, a batch shim\. PowerShell runs it through cmd\.exe, and cmd\.exe cuts the hand-off at its first line break/);
+    assert.match(shim, /native claude\.exe \(claude install puts one in ~\/\.local\/bin\)/);
+    // A native claude.exe elsewhere on the machine is named, and --go uses it.
+    const both = r.cloud(['--session', 'sess-9', 'x'], { git: cleanGit, platform: 'win32', cwd: 'C:\\repo', account: {}, cli: 'C:\\npm\\claude.cmd', nativeCli: 'C:\\Users\\me\\.local\\bin\\claude.exe' });
+    assert.match(both, /run it with the native claude\.exe instead \(& 'C:\\Users\\me\\\.local\\bin\\claude\.exe' in place of claude\), or use --go, which does\./);
+    assert.match(r.cloud(['--session', 'sess-9', 'x'], { git: cleanGit, platform: 'win32', cwd: 'C:\\repo', account: {}, cli: 'C:\\tools\\CLAUDE.BAT', nativeCli: null }), /Warning: claude here is C:\\tools\\CLAUDE\.BAT, a batch shim/);
+    const native = r.cloud(['--session', 'sess-9', 'x'], { git: cleanGit, platform: 'win32', cwd: 'C:\\repo', account: {}, cli: 'C:\\Users\\me\\.local\\bin\\claude.exe' });
+    assert.doesNotMatch(native, /batch shim/);
+    // Only Windows has the problem; elsewhere the name is not asked about.
+    assert.doesNotMatch(r.cloud(['--session', 'sess-9', 'x'], { git: cleanGit, platform: 'linux', cwd: '/repo', account: {}, cli: '/x/claude.cmd' }), /batch shim/);
+    assert.deepStrictEqual(r.cloudWarnings(r.gitState('/x', cleanGit), 'short', 'win32', 'C:\\bin\\claude.exe'), []);
+  }));

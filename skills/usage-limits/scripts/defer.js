@@ -140,6 +140,7 @@ function confirmation(parts) {
   const tail = [];
   tail.push('Nothing has been started');
   if (parts.items) tail.push(parts.items + ' saved');
+  if (parts.fires) tail.push(parts.fires);
   // Every note, not only the first: two can apply at once.
   for (const note of parts.notes && parts.notes.length ? parts.notes : [parts.resetNote]) {
     if (note) tail.push(note);
@@ -185,6 +186,22 @@ function lowPriorityAcknowledged(now) {
   } catch (err) {
     return false;
   }
+}
+
+// What the wake will do at that time, in the words of the relay settings that
+// decide it. Said in the line because the three are very different things to
+// come back to: a notification, the same conversation, or a new one.
+function whatFires(config, hostName, hasSession) {
+  if (!config || config.mode !== 'resume') return 'then it only raises a notification with the plan (relay mode notify)';
+  if (hostName === host.CODEX) return 'then it resumes the Codex thread';
+  if (config.fresh) return 'then it starts a new claude session in this folder with the saved work as its first prompt (relay fresh on)';
+  return hasSession
+    ? 'then it resumes this same conversation (relay fresh off)'
+    : 'then it would resume a conversation, but no session id is known here, so it will fail: relay fresh on starts a new session instead';
+}
+
+function hasSessionId(argv, env) {
+  return Boolean(argOf(argv, '--session-id') || env.CLAUDE_CODE_SESSION_ID || env.CLAUDE_SESSION_ID || env.CODEX_SESSION_ID);
 }
 
 function sessionId(argv, env) {
@@ -291,6 +308,7 @@ function main(argv, now) {
   if (!decided.ok) return decided.error;
 
   const id = sessionId(args, process.env);
+  const hostName = host.detect(args, process.env);
   const work = argOf(args, '--work');
   const cwd = argOf(args, '--cwd') || process.cwd();
 
@@ -307,7 +325,7 @@ function main(argv, now) {
     now: at,
     sessionId: id,
     cwd,
-    hostName: host.detect(args, process.env),
+    hostName,
     at: decided.at,
     binding: { percentUsed: binding.percent, resetsAt: binding.resetsAt },
     work: { hasWork: true, pending: 1, source: 'defer', todos: [] },
@@ -318,7 +336,10 @@ function main(argv, now) {
   // session can tell the two apart - they read the same record.
   try {
     const held = relay.read();
-    const mine = (typeof sessionId !== 'undefined' && relay.armedFor(held, sessionId)) || held.armed;
+    // By this deferral's own id. It used to pass the sessionId FUNCTION here,
+    // which matched nothing, so with another relay armed first the label and
+    // the continuation flag went on that relay instead of this one.
+    const mine = relay.armedFor(held, id);
     if (mine) {
       mine.deferred = true;
       mine.continuation = Boolean(work);
@@ -334,6 +355,7 @@ function main(argv, now) {
     clock: decided.clock,
     in: decided.in,
     items,
+    fires: whatFires(relay.settings(), hostName, hasSessionId(args, process.env)),
     resetNote: decided.resetNote,
     notes: decided.notes,
   });
@@ -349,4 +371,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { lowPriorityAcknowledged, parseWhen, formatClock, formatSpan, confirmation, plan, status, cancel, main, MINUTE, HOUR };
+module.exports = { whatFires, lowPriorityAcknowledged, parseWhen, formatClock, formatSpan, confirmation, plan, status, cancel, main, MINUTE, HOUR };
