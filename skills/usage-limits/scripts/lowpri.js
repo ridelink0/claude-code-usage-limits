@@ -73,6 +73,18 @@
 //   waits out the reset and continues the same open session. That is better
 //   than a scheduled wake when the terminal stays open, and it is why the relay
 //   has to say so rather than presenting its wake as the only route.
+//
+//   The cloud-session credit - a dollar credit for claude.ai/code sessions, on
+//   top of the plan, which the CLI itself advertises AT the limit wall ("While
+//   you wait, start a new cloud session with a $250 credit"). Read on
+//   2026-09-28 (2.1.284) from cachedGrowthBookFeatures.tengu_swift_lynx,
+//   version 2, with endpoint /v1/code/promo/cloud_credit and the claim page at
+//   webPath /code/claim-credit. It is not usage credits: this account has those
+//   switched off at the org level and still has this. A cloud session on it was
+//   seen working with its own server record saying five_hour "rejected", so it
+//   is the one lever here that carries work past the 5-hour wall today. The
+//   amount is only ever parsed out of the server's own copy, and the balance is
+//   served nowhere a file can see, so neither is invented.
 
 const fs = require('fs');
 const os = require('os');
@@ -86,6 +98,8 @@ const SESSION_RESET_FLAG = 'tengu_nifty_lemur';
 const WRAPUP_MODE_FLAG = 'tengu_lantern_wick_mode';
 const WRAPUP_TEXT_FLAG = 'tengu_lantern_wick_text';
 const NEAR_WALL_FLAG = 'tengu_vellum_anchor';
+const CLOUD_CREDIT_FLAG = 'tengu_swift_lynx';
+const CLAUDE_AI = 'https://claude.ai';
 
 // The only two mode values the CLI's own normalizer keeps.
 const WRAPUP_MODES = new Set(['wrap-up', 'next-steps']);
@@ -303,6 +317,68 @@ function credits(account) {
   return { available: null, reason: reason };
 }
 
+// The first amount of money in a line of the server's copy: "$250" is 250 USD.
+const CURRENCY_SIGNS = { $: 'USD', '€': 'EUR', '£': 'GBP' };
+function moneyIn(text) {
+  const found = typeof text === 'string' ? /([$€£])\s?(\d[\d,]*(?:\.\d+)?)/.exec(text) : null;
+  if (!found) return null;
+  const amount = Number(found[2].replace(/,/g, ''));
+  return Number.isFinite(amount) && amount > 0 ? { amount, currency: CURRENCY_SIGNS[found[1]] } : null;
+}
+
+// "$250", from what cloudCredit() read. The sign goes back on the way out.
+function creditText(credit) {
+  if (!credit || !Number.isFinite(credit.amount)) return null;
+  const sign = Object.keys(CURRENCY_SIGNS).find((key) => CURRENCY_SIGNS[key] === credit.currency);
+  const amount = Number.isInteger(credit.amount) ? String(credit.amount) : credit.amount.toFixed(2);
+  return sign ? sign + amount : amount + ' ' + credit.currency;
+}
+
+// The cloud-session credit this account is offered, or null.
+//
+// Null when the flag is absent, is not a plain object, says enabled:false, or
+// carries no amount in any of its lines: an offer this cannot put a number on
+// is not one it can repeat. The startup line comes first because it states the
+// grant; the wall lines only say "a $250 credit". Whether it has been claimed,
+// and what is left of it, are not in any file, so nothing here says either.
+function cloudCredit(account) {
+  const gb = features(account);
+  const flag = gb && Object.prototype.hasOwnProperty.call(gb, CLOUD_CREDIT_FLAG) ? gb[CLOUD_CREDIT_FLAG] : null;
+  if (!flag || typeof flag !== 'object' || Array.isArray(flag) || flag.enabled === false) return null;
+  const part = (key) => (flag[key] && typeof flag[key] === 'object' && !Array.isArray(flag[key]) ? flag[key] : {});
+  const wall = part('limitWall');
+  const lines = [part('startup').text, wall.noticeLine, wall.label, wall.claimPageLine, part('startup').claimPageLine, part('ide').text];
+  const money = lines.map(moneyIn).find(Boolean);
+  if (!money) return null;
+  const webPath = typeof flag.webPath === 'string' && /^\/[\w\-/]*$/.test(flag.webPath) ? flag.webPath : null;
+  return {
+    amount: money.amount,
+    currency: money.currency,
+    claimUrl: webPath ? CLAUDE_AI + webPath : null,
+    // Whether the CLI names it at the wall itself, which is where the report
+    // and the brief name it too.
+    wallNotice: Boolean(copy(wall.noticeLine) || copy(wall.label)),
+    version: Number.isFinite(Number(flag.version)) ? Number(flag.version) : null,
+  };
+}
+
+// Whether this process runs inside a claude.ai/code cloud container.
+//
+// From the environment only, because that is all a cloud container has: its
+// ~/.claude.json carries no usage snapshot at all (checked 2026-09-28), so
+// every reading of the plan's windows there is absent, not zero. The container
+// id names the product (container_..--claude_code_remote--..); the pair below
+// is the same container seen without it. The session id is the one Claude Code
+// hands every command it runs, which is how a report finds its own transcript.
+function cloudSession(env) {
+  const e = env || process.env;
+  const container = String(e.CLAUDE_CODE_CONTAINER_ID || '');
+  const cloud =
+    container.indexOf('claude_code_remote') !== -1 ||
+    (e.CLAUDE_CODE_REMOTE === 'true' && e.CCR_AGENT_PROXY_ENABLED === '1');
+  return cloud ? { cloud: true, sessionId: e.CLAUDE_CODE_SESSION_ID || null } : null;
+}
+
 function settingsFiles() {
   return [path.join(configDir(), 'settings.local.json'), path.join(configDir(), 'settings.json')];
 }
@@ -472,6 +548,8 @@ function forBrief(input) {
     resetGrant: sessionReset(account).present,
     resetVariant: sessionReset(account).variant,
     credits: credits(account),
+    cloudCredit: cloudCredit(account),
+    inCloud: Boolean(cloudSession(options.env)),
     autoContinue: autoContinue(),
   };
 }
@@ -483,6 +561,7 @@ module.exports = {
   WRAPUP_MODE_FLAG,
   WRAPUP_TEXT_FLAG,
   NEAR_WALL_FLAG,
+  CLOUD_CREDIT_FLAG,
   WRAPUP_MODES,
   DEFAULT_COOLOFF_MINUTES,
   MAX_COOLOFF_MINUTES,
@@ -499,6 +578,9 @@ module.exports = {
   flagEnabled,
   wrapUp,
   credits,
+  cloudCredit,
+  creditText,
+  cloudSession,
   autoContinue,
   acknowledge,
   readAck,

@@ -157,7 +157,9 @@ function userIsPresent(cli) {
 // that way and answered before this change was made. The prompt parameter is
 // kept in the signature so callers and tests do not change shape.
 function claudeArgs(record, prompt, config, fallback) {
-  const args = fallback ? ['--continue', '-p'] : ['--resume', record.id, '-p'];
+  // relay fresh on: a new conversation, so no id to resume. The hand-off is
+  // still the stdin prompt, whole.
+  const args = fallback ? ['--continue', '-p'] : freshFor(config) ? ['-p'] : ['--resume', record.id, '-p'];
   if (config.permissionMode) args.push('--permission-mode', config.permissionMode);
   // Nobody is awake to answer a prompt. Deny it rather than stall on it: a
   // resumed run that sits waiting for a keystroke burns its whole timeout and
@@ -229,12 +231,112 @@ function spawnOptionsFor(record, config, cli) {
 // would never be written and a failure would close the window unread.
 const LAUNCH_GRACE_MS = 20000;
 
+// relay fresh: a new conversation instead of `claude --resume`.
+//
+// Resuming carries the whole conversation into the next window, and a long
+// session is exactly the one that runs out. With fresh on, the wake starts
+// `claude` in the project with the hand-off itself as the first prompt -
+// inline, so the new session has all of it without a tool call - Remote
+// Control on under a name that says it is a new session, and the relay's
+// permission mode and model. The ONE TERMINAL rule is the same: an old
+// session that is open and working again makes the wake stand down.
+function freshFor(config) {
+  return Boolean(config && config.fresh);
+}
+
+// One argument has to hold the hand-off. Linux refuses a single argument past
+// 128 KiB; Windows caps a whole command line at 32,767 characters, and there
+// each double quote and backslash can cost one more when it is quoted.
+const FRESH_ARG_MAX = { win32: 30000, posix: 120000 };
+
+function argCost(text, platform) {
+  return platform === 'win32' ? text.length + (text.match(/["\\]/g) || []).length : text.length;
+}
+
+function isShim(cli) {
+  return /\.(cmd|bat)$/i.test(String(cli || ''));
+}
+
+function freshName(record) {
+  return 'usage-limits relay ' + (record.project || path.basename(record.cwd)) + ' (new session)';
+}
+
+// When the hand-off cannot ride inline, the first prompt points at the file
+// holding it, the way the resume does. Short and free of quotes, for cmd.
+function freshPointerPrompt(file) {
+  return (
+    'This is a new session taking over work that the usage-limits plugin handed on from an earlier one, not a new request. ' +
+    'Everything it left is in the file ' + file + ' - read it with the Read tool now and carry on from it at full quality, ' +
+    'without re-asking what to do.'
+  );
+}
+
+function freshArgs(record, config, first) {
+  const args = [];
+  if (record.launchCwd) args.push('--add-dir', record.cwd);
+  if (config && config.permissionMode) args.push('--permission-mode', config.permissionMode);
+  if (config && config.model) args.push('--model', config.model);
+  args.push('--remote-control', freshName(record));
+  args.push(first);
+  return args;
+}
+
+// The new session's command line: the hand-off inline when one argument can
+// carry it, and the pointer when it cannot - a batch shim on Windows (cmd.exe
+// ends a command at the first line break) or a hand-off too long for argv.
+function freshLaunch(record, config, cli, prompt, promptFile, platform) {
+  const text = String(prompt == null ? '' : prompt);
+  const limit = platform === 'win32' ? FRESH_ARG_MAX.win32 : FRESH_ARG_MAX.posix;
+  let why = null;
+  if (platform === 'win32' && isShim(cli)) {
+    why = cli + ' is a batch shim and cmd.exe ends a command at the first line break';
+  } else if (argCost(text, platform) > limit) {
+    why = 'the hand-off is ' + text.length + ' characters, more than one argument holds here (' + limit + ')';
+  }
+  return { cli, args: freshArgs(record, config, why ? freshPointerPrompt(promptFile) : text), inline: !why, why };
+}
+
+// On Windows the launcher is a .cmd, and cmd cannot carry a line break in an
+// argument, so an inline hand-off goes through node instead: the launcher
+// calls this script with --exec-spec, and it starts claude with the arguments
+// from the spec as an array, which Node quotes for CreateProcess. Ctrl+C is
+// claude's to handle; this process only waits and passes the exit code on.
+// UNVERIFIED on a real Windows console: written from Node's documented spawn
+// behaviour, with the argument passing itself under test.
+function specFile(id) {
+  return path.join(relay.configDir(), 'relay-wake-' + String(id) + '.spec.json');
+}
+
+function execSpec(file, io) {
+  const ops = Object.assign({ spawn, exit: (code) => process.exit(code), onSigint: (fn) => process.on('SIGINT', fn) }, io || null);
+  let spec;
+  try {
+    spec = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    process.stderr.write('[usage-limits relay] could not read ' + file + ': ' + err.message + '\n');
+    ops.exit(1);
+    return null;
+  }
+  ops.onSigint(() => {});
+  const child = ops.spawn(spec.cli, spec.args, { stdio: 'inherit' });
+  child.on('error', (err) => {
+    process.stderr.write('[usage-limits relay] could not start ' + spec.cli + ': ' + err.message + '\n');
+    ops.exit(1);
+  });
+  child.on('exit', (code) => ops.exit(code === null ? 1 : code));
+  return child;
+}
+
+function bridgeCommand(file) {
+  return cmdArg(process.execPath) + ' ' + cmdArg(path.join(__dirname, 'wake.js')) + ' ' + cmdArg('--exec-spec') + ' ' + cmdArg(file);
+}
+
 function wakePromptFile(id) {
   return path.join(relay.configDir(), 'relay-wake-' + id + '.md');
 }
 
-function launcherFile(id) {
-  return path.join(relay.configDir(), 'relay-wake-' + id + (process.platform === 'win32' ? '.cmd' : '.sh'));
+function launcherFile(id, platform) {
+  return path.join(relay.configDir(), 'relay-wake-' + id + ((platform || process.platform) === 'win32' ? '.cmd' : '.sh'));
 }
 
 function exitFile(id) {
@@ -267,7 +369,8 @@ function visibleArgs(record, config, promptFile) {
   return args;
 }
 
-function launcherScript(record, config, cli, promptFile, exitPath) {
+// `command`, when given, is what follows `call`: the fresh launch's own line.
+function launcherScript(record, config, cli, promptFile, exitPath, command) {
   const name = String(record.project || path.basename(record.cwd)).replace(/[&|<>^%"]/g, '');
   return [
     '@echo off',
@@ -280,7 +383,7 @@ function launcherScript(record, config, cli, promptFile, exitPath) {
     // The resumed session is nobody's child, whoever opened the window.
     'set CLAUDE_CODE_CHILD_SESSION=',
     'set CLAUDE_CODE_SESSION_ID=',
-    'call ' + cmdArg(cli) + ' ' + visibleArgs(record, config, promptFile).map(cmdArg).join(' '),
+    'call ' + (command || cmdArg(cli) + ' ' + visibleArgs(record, config, promptFile).map(cmdArg).join(' ')),
     'set CODE=%ERRORLEVEL%',
     '> ' + cmdArg(exitPath) + ' echo %CODE%',
     'if not "%CODE%"=="0" (',
@@ -443,12 +546,13 @@ function shQuote(text) {
   return Q + String(text).split(Q).join(Q + String.fromCharCode(92) + Q + Q) + Q;
 }
 
-function launcherScriptPosix(record, config, cli, promptFile, exitPath) {
+// `args`, when given, replaces the resume's: the fresh launch's own.
+function launcherScriptPosix(record, config, cli, promptFile, exitPath, args) {
   return [
     '#!/bin/sh',
     'cd ' + shQuote(record.cwd) + ' || exit 1',
     'unset CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID',
-    shQuote(cli) + ' ' + visibleArgs(record, config, promptFile).map(shQuote).join(' '),
+    shQuote(cli) + ' ' + (args || visibleArgs(record, config, promptFile)).map(shQuote).join(' '),
     'code=$?',
     'echo "$code" > ' + shQuote(exitPath),
     'if [ "$code" -ne 0 ]; then',
@@ -489,10 +593,20 @@ function openWindowPosix(launcher) {
 }
 
 // `io` exists so the window path can be tested without a window: open, sleep
-// and now are the three things it does to the world.
+// and now are the three things it does to the world. `platform` picks the
+// launcher, and `nativeCli` is where a fresh launch on Windows looks for
+// claude.exe when the CLI it was given is a batch shim.
 function deliverVisible(record, prompt, config, cli, runs, io) {
-  const ops = Object.assign({ open: process.platform === 'win32' ? openWindow : openWindowPosix, sleep: sleepMs, now: Date.now }, io || null);
-  if (!transcriptExists(record.id)) {
+  const platform = (io && io.platform) || process.platform;
+  const ops = Object.assign({
+    open: platform === 'win32' ? openWindow : openWindowPosix,
+    sleep: sleepMs,
+    now: Date.now,
+    nativeCli: () => relay.cloudCli(process.env, 'win32'),
+  }, io || null);
+  const fresh = freshFor(config);
+  // A new session needs no transcript; only a resume does.
+  if (!fresh && !transcriptExists(record.id)) {
     return {
       ok: false,
       permanent: true,
@@ -501,15 +615,44 @@ function deliverVisible(record, prompt, config, cli, runs, io) {
         'The plan is still on disk: run "claude" in ' + record.cwd + ' and paste it in.',
     };
   }
+  const label = fresh ? 'claude, a new session (window)' : 'claude --resume (window)';
   const promptFile = wakePromptFile(record.id);
-  const launcher = launcherFile(record.id);
+  const launcher = launcherFile(record.id, platform);
   const exitPath = exitFile(record.id);
+  let launch = null;
+  if (fresh) {
+    let use = cli;
+    if (platform === 'win32' && isShim(cli)) {
+      let native = null;
+      try {
+        native = ops.nativeCli();
+      } catch (err) {
+        native = null;
+      }
+      if (native && !isShim(native)) use = native;
+    }
+    launch = freshLaunch(record, config, use, prompt, promptFile, platform);
+  }
   try {
     fs.mkdirSync(relay.configDir(), { recursive: true });
     fs.writeFileSync(promptFile, String(prompt == null ? '' : prompt) + '\n');
-    fs.writeFileSync(launcher, process.platform === 'win32'
-      ? launcherScript(record, config, cli, promptFile, exitPath)
-      : launcherScriptPosix(record, config, cli, promptFile, exitPath));
+    let script;
+    if (platform === 'win32') {
+      let command = null;
+      if (launch && launch.inline) {
+        const spec = specFile(record.id);
+        fs.writeFileSync(spec, JSON.stringify({ cli: launch.cli, args: launch.args }));
+        command = bridgeCommand(spec);
+      } else if (launch) {
+        command = cmdArg(launch.cli) + ' ' + launch.args.map(cmdArg).join(' ');
+      }
+      script = launcherScript(record, config, cli, promptFile, exitPath, command);
+    } else {
+      script = launch
+        ? launcherScriptPosix(record, config, launch.cli, promptFile, exitPath, launch.args)
+        : launcherScriptPosix(record, config, cli, promptFile, exitPath);
+    }
+    fs.writeFileSync(launcher, script);
     try {
       fs.unlinkSync(exitPath);
     } catch (err) {
@@ -518,10 +661,13 @@ function deliverVisible(record, prompt, config, cli, runs, io) {
   } catch (err) {
     return { ok: false, error: 'could not write the launcher: ' + err.message };
   }
+  if (launch && !launch.inline) {
+    relay.note('wake ' + record.id + ': the hand-off is not inline (' + launch.why + '); the first prompt points at ' + promptFile);
+  }
   try {
     ops.open(launcher, exitPath, record);
   } catch (err) {
-    appendRun(runs, 'claude --resume (window)', { status: 1, stdout: '', stderr: err.message });
+    appendRun(runs, label, { status: 1, stdout: '', stderr: err.message });
     return { ok: false, openFailed: true, error: 'could not open a window: ' + err.message };
   }
   const started = ops.now();
@@ -530,23 +676,24 @@ function deliverVisible(record, prompt, config, cli, runs, io) {
     const code = readExit(exitPath);
     if (code !== null) {
       const after = Math.round((ops.now() - started) / 1000);
-      appendRun(runs, 'claude --resume (window)', {
+      appendRun(runs, label, {
         status: code,
         stdout: '',
         stderr: 'exited within ' + after + 's; its output is in the window, which stays open when the exit is not 0',
       });
-      if (code === 0) return { ok: true, how: 'claude --resume in a window' };
+      if (code === 0) return { ok: true, how: fresh ? 'a new claude session in a window' : 'claude --resume in a window' };
       return { ok: false, error: 'claude exited ' + code + ' in the window it opened (left open so the message can be read)' };
     }
   }
-  appendRun(runs, 'claude --resume (window)', {
+  appendRun(runs, label, {
     status: 0,
     stdout:
-      'still running after ' + Math.round(LAUNCH_GRACE_MS / 1000) + 's: an interactive session in its own window, Remote Control on. ' +
-      'Its output is on screen and in the session transcript, not in this log.',
+      'still running after ' + Math.round(LAUNCH_GRACE_MS / 1000) + 's: an interactive session in its own window, Remote Control on' +
+      (fresh ? ' as "' + freshName(record) + '", the hand-off ' + (launch.inline ? 'inline as its first prompt' : 'in ' + promptFile + ' (' + launch.why + ')') : '') +
+      '. Its output is on screen and in the session transcript, not in this log.',
     stderr: '',
   });
-  return { ok: true, how: 'claude --resume in a window, Remote Control on' };
+  return { ok: true, how: fresh ? 'a new claude session in a window, Remote Control on' : 'claude --resume in a window, Remote Control on' };
 }
 function deliverClaude(record, prompt, config, cli, runs, io) {
   // Seen by default. relay show off keeps the headless run, and so does a
@@ -556,11 +703,14 @@ function deliverClaude(record, prompt, config, cli, runs, io) {
     if (!visible.openFailed) return visible;
   }
   const args = claudeArgs(record, prompt, config, false);
+  const fresh = freshFor(config);
+  const label = fresh ? 'claude -p, a new session' : 'claude --resume';
   // stdin, never argv. See claudeArgs for the 7.5 KB note that proved why.
   const options = Object.assign(spawnOptionsFor(record, config, cli), { input: String(prompt == null ? '' : prompt) });
-  const run = appendRun(runs, 'claude --resume', spawnSync(cli, args, options));
-  if (run.status === 0) return { ok: true, how: 'claude --resume' };
+  const run = appendRun(runs, label, ((io && io.spawnSync) || spawnSync)(cli, args, options));
+  if (run.status === 0) return { ok: true, how: label };
   const detail = ((run.stderr || run.stdout || '') + '').trim().split('\n')[0];
+  if (fresh) return { ok: false, error: detail || 'claude exited ' + run.status };
   // A session id that no longer resolves used to fall back to `--continue`,
   // on the reasoning that the work still needs doing and only the thread is
   // gone. That fallback is removed, because of what `--continue` actually
@@ -741,7 +891,8 @@ async function run(now, argv, overrides) {
       open = deps.liveSession(record.id);
     }
     if (open) {
-      relay.note('wake ' + record.id + ': the session is open in process ' + open.pid + ' but idle since the reset; opening it in a window', now);
+      relay.note('wake ' + record.id + ': the session is open in process ' + open.pid + ' but idle since the reset; ' +
+        (freshFor(config) ? 'starting a new session in a window' : 'opening it in a window'), now);
     }
   }
 
@@ -805,7 +956,13 @@ async function run(now, argv, overrides) {
   }
 
   const continuation = relay.readContinuation(record.id);
+  // relay fresh: the new session has none of the conversation, so its prompt
+  // opens by saying so. A Codex wake resumes its thread either way.
+  const fresh = record.host !== host.CODEX && freshFor(config);
   const prompt = relay.compose({
+    fresh,
+    deferred: record.deferred === true,
+    projectDir: record.launchCwd ? record.cwd : null,
     continuation,
     work: record.work && record.work.todos ? record.work : null,
     thinking: config.thinking !== 'off',
@@ -821,9 +978,25 @@ async function run(now, argv, overrides) {
   }
 
   if (mode === 'notify') {
+    // A new session has none of the conversation, so what it needs is the
+    // whole hand-off, not the continuation alone: written where the window
+    // path writes it, and named in the note.
+    let handoffFile = null;
+    if (fresh) {
+      try {
+        fs.mkdirSync(relay.configDir(), { recursive: true });
+        fs.writeFileSync(wakePromptFile(record.id), prompt + '\n');
+        handoffFile = wakePromptFile(record.id);
+      } catch (err) {
+        handoffFile = null;
+      }
+    }
     deps.toast(
       'Usage limits: the window has reset',
-      'The plan for ' + (record.project || path.basename(record.cwd)) + ' is ready to pick up. Run: claude --resume ' + record.id.slice(0, 8)
+      'The plan for ' + (record.project || path.basename(record.cwd)) + ' is ready to pick up. ' +
+        (fresh
+          ? 'Start claude in ' + record.cwd + ' and give it the hand-off in ' + (handoffFile || relay.planFile(record.id))
+          : 'Run: claude --resume ' + record.id.slice(0, 8))
     );
     finish(state, record, 'notified', presence.present ? 'user present' : null, now);
     return { outcome: 'notified' };
@@ -836,7 +1009,12 @@ async function run(now, argv, overrides) {
     return { outcome: 'no-cli' };
   }
 
-  deps.toast('Usage limits: resuming', 'Carrying on with ' + (record.project || path.basename(record.cwd)) + ' where the limit stopped it.');
+  deps.toast(
+    fresh ? 'Usage limits: handing over' : 'Usage limits: resuming',
+    fresh
+      ? 'Starting a new session for ' + (record.project || path.basename(record.cwd)) + ' with the saved plan.'
+      : 'Carrying on with ' + (record.project || path.basename(record.cwd)) + ' where the limit stopped it.'
+  );
   const runs = [];
   // The two start-up questions, answered again right before the launch in
 
@@ -868,7 +1046,9 @@ async function run(now, argv, overrides) {
     : deps.deliverClaude(record, prompt, config, cli, runs);
   const logPath = config.runLog === false ? null : relay.writeRunLog(relay.runLogFile(record.id, now), runs.join('\n' + '\n'));
   if (delivered.ok) {
-    deps.toast('Usage limits: done', 'The resumed run finished. Open the session to read it.');
+    deps.toast('Usage limits: done', fresh
+      ? 'A new session has the plan (' + delivered.how + '). Open it to read along.'
+      : 'The resumed run finished. Open the session to read it.');
     finish(state, record, 'resumed', delivered.how + (logPath ? ' - log at ' + logPath : ''), now);
     return { outcome: 'resumed', how: delivered.how, log: logPath };
   }
@@ -965,7 +1145,9 @@ async function run(now, argv, overrides) {
   return { outcome: 'failed', error: delivered.error, attempts: attempt, kind: verdict.kind, log: logPath };
 }
 
-if (require.main === module) {
+if (require.main === module && process.argv.includes('--exec-spec')) {
+  execSpec(argOf(process.argv.slice(2), '--exec-spec'));
+} else if (require.main === module) {
   run(Date.now(), process.argv.slice(2)).then(
     (result) => {
       process.stdout.write(JSON.stringify(result) + '\n');
@@ -978,4 +1160,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = { liveSession, transcriptActiveSince, pidAlive, LIVE_WAIT_MS, LIVE_POLL_MS, launcherScriptPosix, shQuote, visibleArgs, launcherScript, pointerPrompt, transcriptExists, wakePromptFile, LAUNCH_GRACE_MS, run, toast, userIsPresent, claudeArgs, deliverClaude, deliverCodex, windowReopened, argOf, appendRun, spawnOptionsFor };
+module.exports = { freshFor, freshLaunch, freshArgs, freshName, freshPointerPrompt, FRESH_ARG_MAX, execSpec, specFile, bridgeCommand, deliverVisible, launcherFile, liveSession, transcriptActiveSince, pidAlive, LIVE_WAIT_MS, LIVE_POLL_MS, launcherScriptPosix, shQuote, visibleArgs, launcherScript, pointerPrompt, transcriptExists, transcriptFile, wakePromptFile, LAUNCH_GRACE_MS, run, toast, userIsPresent, claudeArgs, deliverClaude, deliverCodex, windowReopened, argOf, appendRun, spawnOptionsFor };

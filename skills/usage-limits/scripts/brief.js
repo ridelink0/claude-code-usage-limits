@@ -160,7 +160,7 @@ function readSaid() {
   }
 }
 function keepSaidFor(key) {
-  return /#(standing|cachemiss|stale|relaylast|newer)$/.test(key) ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  return /#(standing|cachemiss|stale|relaylast|newer|cloud)$/.test(key) ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
 }
 
 // A plugin update takes effect when Claude Code restarts, so a session that
@@ -217,6 +217,21 @@ function newerModelFor(sessionId, advice, now) {
   all[key] = { at, seen: advice.id };
   writeSaid(all, at);
   return advice.text;
+}
+// The cloud-session credit, said once a session near the wall, by the same
+// rule: the offer does not change from prompt to prompt. Keyed on the amount,
+// so a different offer is news.
+function cloudCreditFor(sessionId, credit, now) {
+  const amount = lowpri.creditText(credit);
+  if (!amount) return null;
+  const at = Number.isFinite(now) ? now : Date.now();
+  const key = String(sessionId || '_') + '#cloud';
+  const all = readSaid();
+  const entry = all[key];
+  if (entry && entry.seen === amount && Number.isFinite(entry.at) && at - entry.at < keepSaidFor(key)) return null;
+  all[key] = { at, seen: amount };
+  writeSaid(all, at);
+  return amount;
 }
 // The model the relay resumes with, when one is set: wake.js passes it as --model.
 function relayModelNow() {
@@ -1148,6 +1163,18 @@ function briefText(input) {
         ' Like /low-priority, only the user can type it; you cannot run a slash command.'
     );
   }
+  // The cloud-session credit: the one lever that carries work past the wall
+  // on an account with usage credits off. Only near the wall, only once a
+  // session (run() decides), and it is the user's credit, so it is offered,
+  // never taken.
+  const cloudSentence =
+    parts.cloudCredit && (parts.pressure === 'tight' || parts.pressure === 'gone')
+      ? 'A cloud session is the way past this wall now rather than after the reset: the account has a ' +
+        parts.cloudCredit + ' cloud-session credit on top of the plan, and relay cloud prints the claude --cloud ' +
+        'command that hands it this work (it clones from GitHub, so push first). Offer it in one line; it spends ' +
+        "the user's credit, so starting it is their call."
+      : null;
+  if (cloudSentence) sentences.push(cloudSentence);
   if (parts.session) {
     sentences.push(
       'This session: ' + parts.session.turns + ' turns, ' +
@@ -1438,6 +1465,7 @@ function briefText(input) {
       sentences[0] + caveat + (parts.tier ? ' ' + parts.tier : '') + (bounded ? ' ' + bounded : '') + adviceText +
       (escapeSentence ? ' ' + escapeSentence : '') +
       (lowPrioritySentence ? ' ' + lowPrioritySentence : '') +
+      (cloudSentence ? ' ' + cloudSentence : '') +
       (parts.pressure !== 'roomy' && relaySentences.length ? ' ' + relaySentences.join(' ') : '') +
       '\n' + instruction + directive
     );
@@ -1595,6 +1623,9 @@ function wallFeatures(now, binding, windows, hostName) {
     out.lowPriority = info;
     out.hostWrapsUp = lowpri.wrapUp(account).hostWrapsUp;
     out.autoContinue = info.autoContinue;
+    // Only where it is the way past the wall: usage credits not on, and not
+    // already inside a cloud session, which is running on it.
+    out.cloudCredit = info.cloudCredit && !info.inCloud && info.credits.available !== true ? info.cloudCredit : null;
     if (info.state === 'acknowledged' && binding && binding.key === 'five_hour') {
       const weekly = lowpri.weeklyOf(windows);
       if (weekly && Number.isFinite(weekly.percentUsed) && !weekly.stale && Number.isFinite(weekly.resetsAt)) {
@@ -1950,6 +1981,7 @@ async function run(now, hookInput, opts) {
   if (offering) mode.adviceOffer(advice.id, sessionId, now);
 
   const pressureNow = pressure(binding, now, config, Number.isFinite(yourTurnsLeft) ? yourTurnsLeft : turnsLeftNow);
+  const cloudCredit = pressureNow === 'tight' || pressureNow === 'gone' ? cloudCreditFor(sessionId, wall.cloudCredit, now) : null;
   // Fast mode changes what the window's figures mean, so a toggle is a change
   // worth saying even when nothing else has moved.
   const fastMode = fastModeFor(sessionId);
@@ -2045,6 +2077,7 @@ async function run(now, hookInput, opts) {
     lowPriority: wall.lowPriority,
     hostWrapsUp: wall.hostWrapsUp,
     autoContinue: wall.autoContinue || null,
+    cloudCredit,
     // The turn count that matters for this session is its share of a shared
     // budget, not the whole window's. Escalating on the whole window meant a
     // count that looked comfortable while the part actually available here was
@@ -2099,7 +2132,7 @@ function withBugcheck(text) {
   return text;
 }
 
-module.exports = { wallFeatures, sweepDebris, withBugcheck, sayOnce, shapeOf, saidFile, REPEAT_MS, staleVersionFor, newerModelFor, relayNewsFor, installedVersion, runningVersion,
+module.exports = { wallFeatures, sweepDebris, withBugcheck, sayOnce, shapeOf, saidFile, REPEAT_MS, staleVersionFor, newerModelFor, cloudCreditFor, relayNewsFor, installedVersion, runningVersion,
   readSaid, standingSaid, markStanding, standingShortFor, STANDING_SHORT, cacheMissWhyFor, missReason, MISS_RECENT_MS,
   DEFAULTS,
   HOOK_BUDGET_MS,

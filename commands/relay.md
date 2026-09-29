@@ -23,12 +23,27 @@ The rest:
   when the window opens; a request one second later has been refused before.
 - `mode notify` - raise a notification with the continuation ready to open.
   This is the default and it starts nothing by itself.
-- `mode resume` - at the wake, resume the same conversation in a window you can
-  see, with Remote Control on, so it is also on claude.ai/code and the phone;
-  the first prompt points it at the hand-off file. Say `permission acceptEdits`
-  (or whichever mode you want) as well: a resume does **not** inherit the
-  session's permission mode, so without one it will sit waiting for an
-  approval nobody is there to give. `show off` makes it a headless run instead.
+- `mode resume` - at the wake, run the CLI itself in a window you can see,
+  with Remote Control on, so it is also on claude.ai/code and the phone. What
+  it runs is `fresh`'s choice (below). Say `permission acceptEdits` (or
+  whichever mode you want) as well: neither a resume nor a new session inherits
+  the session's permission mode, so without one it will sit waiting for an
+  approval nobody is there to give. `show off` makes it a headless `claude -p`
+  run instead, the prompt on stdin, with no window and no Remote Control.
+- `fresh off` / `fresh on` - which conversation `mode resume` continues in.
+  Off, the default: the **same** conversation, `claude --resume <id>`, named
+  `usage-limits relay <project>` on Remote Control, and its first prompt points
+  at the hand-off file. On: a **new** conversation, `claude` in the project
+  directory with the whole hand-off as its first prompt, inline, named
+  `usage-limits relay <project> (new session)`, with the same permission mode
+  and model - for a session that has grown long, so the next window starts
+  clean instead of carrying all of it. The old conversation is left as it was.
+  On Windows the inline hand-off needs the native `claude.exe`; with only the
+  npm `claude.cmd` shim the first prompt points at the file instead. Both
+  modes keep one terminal: if the old session is open and working again at the
+  wake, the wake stands down; if it is open but quiet for three minutes, the
+  wake opens its one window anyway. Under `mode notify` neither applies, and
+  under Codex the thread is resumed either way.
 - `model <id>` - the `--model` a resumed run starts with; `model` alone goes
   back to the default. It is separate from `/model` in the session, so a wake
   pinned to an older model stays on it until this is changed.
@@ -47,6 +62,16 @@ The rest:
 - `note "<text>"` (or `note --file <path>`) - store the continuation. This is
   the text that gets delivered, so write it to be acted on: what is done, what
   is next in order, which files are mid-change, what to verify first.
+- `cloud [--session <id>] [--go] ["<text>"]` - the same hand-off, into a
+  cloud session now instead of this one after the reset. It prints the exact
+  `claude --cloud '...'` command with the hand-off inline (a cloud session
+  cannot read a file here), and warns about uncommitted changes and unpushed
+  commits, because the cloud session clones from GitHub. On Windows, if the
+  `claude` there is a `.cmd`/`.bat` shim, it also warns that cmd.exe cuts the
+  hand-off at its first line break, even from PowerShell, and to run it with
+  the native `claude.exe`. `--go` starts it,
+  detached, and names the log file its output goes to. It runs on the account's
+  cloud-session credit when there is one, so starting it is the user's call.
 - `cancel` - drop the wake and remove the scheduled task.
 - `log` - the last twenty lines of what the relay actually did.
 

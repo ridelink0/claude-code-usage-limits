@@ -361,6 +361,31 @@ The 5-hour limit is the binding one. At the current pace it runs out in about
 The clock time matters more than the countdown. "Resume after 03:00" is a
 plan; "4h 12m" is a number you still have to do arithmetic on.
 
+**The cloud-session credit is a third case.** Claude Code can offer a dollar
+credit for cloud sessions (claude.ai/code), on top of the plan, and names it at
+the wall itself: "While you wait, start a new cloud session with a $250
+credit". It is not usage credits - the account this was built on has those off
+at the org level and has this - and a cloud session on it was seen still
+working with its 5-hour window "rejected". When the account carries the offer
+the report says so on a `Cloud credit` line, with the amount read from the
+offer, and at the wall adds the way on:
+
+```
+  Work stops when it does. Nothing carries on into paid credits.
+  To carry on now instead of waiting, start a cloud session on the $250
+  cloud-session credit: relay cloud hands it this work as claude --cloud.
+  Land what exists, write the handoff, and resume after 03:00.
+```
+
+`relay cloud` builds the hand-off the wake would deliver and prints the
+`claude --cloud` command with it inline; the cloud session clones from GitHub,
+so it warns about anything not pushed. On Windows it also warns when the
+`claude` on PATH is a `.cmd` shim, because cmd.exe cuts the hand-off at its
+first line break even when the command is pasted into PowerShell. Inside a cloud session the report does
+not ask for `/usage` - the container keeps no snapshot - and says what the
+session has cost so far at list prices instead. What is left of the credit is
+not readable anywhere, so it is never claimed.
+
 The skill also requires Claude to say up front when a job will not fit in what
 is left, name what it is doing now, what it is leaving, and when the rest can
 happen, rather than starting and stopping halfway through an edit.
@@ -497,6 +522,15 @@ re-checks the meter and hands your continuation back.
 /usage-limits:relay mode resume
 /usage-limits:relay permission acceptEdits
 ```
+
+With `mode resume` the wake resumes the same conversation (`claude --resume`).
+`relay fresh on` makes it start a new one instead: `claude` in the project
+with the whole hand-off as its first prompt, Remote Control on as
+`usage-limits relay <project> (new session)`, and the relay's permission mode -
+so a session that has grown long hands its work on rather than carrying all of
+it into the next window. It is off by default, `/usage-limits:defer` fires
+through the same wake, and in both modes the wake stands down if the old
+session is still open and working again.
 
 What changes while it is armed is what Claude is told at the wall. Instead of
 "write the handoff and stop", the budget line says the relay has it, that being

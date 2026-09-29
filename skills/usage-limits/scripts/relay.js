@@ -96,6 +96,15 @@ const DEFAULTS = {
   // it is also how you find out in the morning that nothing happened and have
   // no idea why.
   show: true,
+  // Hand the work to a NEW conversation instead of resuming the old one.
+  //
+  // Off, the wake runs `claude --resume <id>`: the same conversation, with
+  // everything it already holds. That is today's behaviour and stays the
+  // default. On, it starts `claude` in the project with the whole hand-off as
+  // its first prompt, so a session that has grown long hands its work on
+  // instead of dragging its whole context into the next window (Gev,
+  // 2026-09-29). Claude Code only; a Codex wake resumes its thread either way.
+  fresh: false,
   // The hand-off carries how the user writes, so the resumed session answers
   // in their voice without being reminded; and it asks for the two bug passes
   // the user asks for on nearly every request. Both can be turned off.
@@ -405,6 +414,7 @@ function settings(state) {
     offlineAttempts: Math.min(48, Math.max(1, number(stored.offlineAttempts, DEFAULTS.offlineAttempts))),
     offlineRetryMinutes: Math.min(120, Math.max(2, number(stored.offlineRetryMinutes, DEFAULTS.offlineRetryMinutes))),
     show: bool(stored.show, DEFAULTS.show),
+    fresh: bool(stored.fresh, DEFAULTS.fresh),
     voice: bool(stored.voice, DEFAULTS.voice),
     bugcheck: pick(stored.bugcheck, ['on', 'always', 'off'], DEFAULTS.bugcheck),
     onFailure: pick(stored.onFailure, ['rearm', 'stop'], DEFAULTS.onFailure),
@@ -553,13 +563,44 @@ const BUGCHECK_LINE =
   'the first missed something. The user asks for this on nearly every request, so do it without being asked, ' +
   'unless the last turn already did both.';
 
+// The opening for a new local session (relay fresh on). Unlike the resume it
+// has none of the conversation, and unlike the cloud it is on this machine,
+// in the same folder, with every uncommitted change still there.
+function freshOpening(options) {
+  return (
+    (options.deferred
+      ? 'The time this work was deferred to has come, and this is the plugin handing it to a new session, not a new request. '
+      : 'The usage window has reset, and this is the plugin handing an earlier session\'s work to this new one, not a new request. ') +
+    'You have none of that conversation: what follows is what it left. Carry on from where it stopped, at full quality, ' +
+    'without re-asking what to do. ' +
+    (options.projectDir
+      ? 'The project is ' + options.projectDir + ', added to this session, which was started from a trusted folder on purpose: use absolute paths.'
+      : 'You are in its project folder, with the files as it left them, uncommitted changes included.')
+  );
+}
+
 function compose(input) {
   const parts = [];
   const options = input || {};
   if (options.thinking) parts.push('ultrathink');
+  // A cloud session is not the same conversation and the window has not reset,
+  // so it is told what it is: a fresh clone, with only what reached GitHub.
   parts.push(
-    'The usage window has reset and this is the plugin picking the work back up, not a new request. ' +
-      'Carry on from where the last turn stopped, at full quality, without re-asking what to do.'
+    options.fresh
+      ? freshOpening(options)
+      : options.cloud
+      ? 'A local session reached its usage limit and this is the plugin handing its work to a cloud session ' +
+          'rather than waiting for the reset, not a new request. You have none of that conversation: what ' +
+          'follows is what it left. Carry on from where it stopped, at full quality, without re-asking what to ' +
+          'do. This is a fresh clone from GitHub, so only what was pushed is here; if something below is ' +
+          'missing, say so rather than rebuilding it from the description.' +
+          // Which branch the clone starts on is not the plugin's to choose, so
+          // the one the work was pushed to is named.
+          (options.branch && options.branch !== 'HEAD'
+            ? ' The work is on branch ' + options.branch + ': check it out first if the clone is on another.'
+            : '')
+      : 'The usage window has reset and this is the plugin picking the work back up, not a new request. ' +
+          'Carry on from where the last turn stopped, at full quality, without re-asking what to do.'
   );
   const continuation = String(options.continuation || '').trim();
   if (continuation) {
@@ -729,8 +770,11 @@ function taskName(id, at) {
   );
 }
 
+// PowerShell also ends a single-quoted string at a curly single quote
+// (U+2018-U+201B), so those are doubled too: a typographic apostrophe in a
+// hand-off must not close its own argument.
 function psQuote(value) {
-  return "'" + String(value).replace(/'/g, "''") + "'";
+  return "'" + String(value).replace(/['\u2018-\u201B]/g, '$&$&') + "'";
 }
 
 // One argument, quoted the way CommandLineToArgvW will unquote it. The rule
@@ -1482,7 +1526,8 @@ function status(now) {
   const lines = [];
   lines.push(
     'Relay is ' + (config.enabled ? 'ON' : 'OFF') + ', arming at ' + config.at + ' per cent, waking ' +
-      config.graceMinutes + ' min after the reset, delivery ' + config.mode + '.'
+      config.graceMinutes + ' min after the reset, delivery ' + config.mode +
+      (config.mode === 'resume' ? (config.fresh ? ' into a new session (fresh on)' : ' of the same conversation (fresh off)') : '') + '.'
   );
   const all = records(state);
   for (const armed of all) {
@@ -1603,6 +1648,325 @@ async function armByHand(rest) {
   );
 }
 
+/* ------------------------------------------------------------ the cloud --- */
+
+// Carrying the work into a cloud session now, instead of waiting for the reset.
+//
+// With usage credits off (org_level_disabled on this account) the 5-hour wall
+// stops a local session dead, and the wake can only pick the work up after the
+// reset. The CLI offers a second way at that same wall: a cloud-session credit
+// (lowpri.cloudCredit), and `claude --cloud <description>` starts a
+// claude.ai/code session. One was seen on 2026-09-28 still working with its own
+// server record saying five_hour "rejected".
+//
+// Two things make it unlike the wake, and both are said rather than assumed.
+// The cloud session clones the repository from GitHub, so it has none of this
+// machine's uncommitted changes or unpushed commits; and it cannot read a file
+// here, so the hand-off rides inline as the description instead of as a
+// pointer to relay-plan-<id>.md.
+//
+// `relay cloud` prints the command and starts nothing. `--go` starts it, and is
+// guarded the way the scheduler is: under node --test, with
+// USAGE_LIMITS_CLOUD=dry-run, or with the home folder redirected it launches
+// nothing and says so; USAGE_LIMITS_CLOUD=real overrides all three. A cloud
+// session spends a real credit, so no test may ever start one.
+function cloudLaunchMode() {
+  const said = String(process.env.USAGE_LIMITS_CLOUD || '').trim().toLowerCase();
+  if (said === 'real') return { dry: false, why: null };
+  if (said === 'dry-run' || said === 'dry') return { dry: true, why: 'USAGE_LIMITS_CLOUD=' + said };
+  if (process.env.NODE_TEST_CONTEXT) return { dry: true, why: 'running under node --test' };
+  if (sandboxedHome()) return { dry: true, why: 'the home folder is redirected to ' + os.homedir() };
+  return { dry: false, why: null };
+}
+
+// The longest description worth passing as one argument. Linux refuses a
+// single argument past 128 KiB (MAX_ARG_STRLEN); Windows caps a whole command
+// line at 32,767 characters, and at 8,191 once cmd.exe is in the way.
+const CLOUD_ARG_MAX = { win32: 32000, posix: 120000 };
+
+function runGit(args, cwd) {
+  const run = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 10000, windowsHide: true });
+  return { status: run.status, stdout: String(run.stdout || '').trim() };
+}
+
+// What the cloud clone will and will not have. `git` is injectable so the
+// states can be tested without a repository in each of them.
+function gitState(cwd, git) {
+  const run = git || runGit;
+  const inside = run(['rev-parse', '--is-inside-work-tree'], cwd);
+  if (inside.status !== 0 || inside.stdout !== 'true') return { repo: false };
+  const status = run(['status', '--porcelain'], cwd);
+  const dirty = status.status === 0 && status.stdout ? status.stdout.split('\n').filter(Boolean).length : 0;
+  const branch = run(['rev-parse', '--abbrev-ref', 'HEAD'], cwd).stdout || null;
+  const tracking = run(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], cwd);
+  const upstream = tracking.status === 0 && tracking.stdout ? tracking.stdout : null;
+  let unpushed = null;
+  if (upstream) {
+    const count = run(['rev-list', '--count', '@{u}..HEAD'], cwd);
+    unpushed = count.status === 0 ? Number(count.stdout) || 0 : null;
+  }
+  const remotes = run(['remote'], cwd);
+  return { repo: true, dirty, branch, upstream, unpushed, remote: remotes.status === 0 && Boolean(remotes.stdout) };
+}
+
+function plural(n, word) {
+  return n + ' ' + word + (n === 1 ? '' : 's');
+}
+
+// `cli` is the claude a person on Windows would be running the printed command
+// with. A batch shim (claude.cmd from npm) runs through cmd.exe even from
+// PowerShell, and cmd.exe ends a command at the first line break, so the cloud
+// session would get only the hand-off's first line. `native` is a claude.exe
+// found elsewhere on the machine, if there is one: --go already uses it.
+function cloudWarnings(git, prompt, platform, cli, native) {
+  const out = [];
+  if (!git.repo) {
+    out.push('This folder is not a git repository. A cloud session starts from a clone of a GitHub repository, so there is nothing here for it to start from.');
+  } else {
+    if (!git.remote) out.push('The repository has no remote, so there is nothing on GitHub for the cloud session to clone.');
+    if (git.dirty) {
+      out.push(plural(git.dirty, 'uncommitted change') + ' in the working tree. The cloud session clones from GitHub and will not see ' +
+        (git.dirty === 1 ? 'it' : 'them') + ': commit and push first.');
+    }
+    if (git.remote && !git.upstream) {
+      out.push('Branch ' + git.branch + ' has no upstream, so the cloud session cannot clone it: git push -u origin ' + git.branch + ' first.');
+    }
+    if (git.unpushed) {
+      out.push(plural(git.unpushed, 'commit') + ' on ' + git.branch + ' not pushed to ' + git.upstream + ': push first, or the cloud session starts without ' +
+        (git.unpushed === 1 ? 'it' : 'them') + '.');
+    }
+  }
+  const limit = platform === 'win32' ? CLOUD_ARG_MAX.win32 : CLOUD_ARG_MAX.posix;
+  if (prompt.length > limit) {
+    out.push('The hand-off is ' + prompt.length + ' characters, more than one command-line argument holds here (' + limit + '): shorten the continuation (relay note) and run this again.');
+  }
+  if (platform === 'win32' && cli && /\.(cmd|bat)$/i.test(cli)) {
+    out.push('claude here is ' + cli + ', a batch shim. PowerShell runs it through cmd.exe, and cmd.exe cuts the hand-off at its first line break, ' +
+      'so the cloud session would get one line of it: ' +
+      (native && !/\.(cmd|bat)$/i.test(native)
+        ? 'run it with the native claude.exe instead (& ' + psQuote(native) + ' in place of claude), or use --go, which does.'
+        : 'run it where claude is the native claude.exe (claude install puts one in ~/.local/bin).'));
+  }
+  if (platform === 'win32' && prompt.indexOf('"') !== -1) {
+    out.push('The hand-off holds double quotes, which Windows PowerShell before 7.3 drops from an argument: paste it into PowerShell 7.3 or later (pwsh), or use --go.');
+  }
+  return out;
+}
+
+// The command a person pastes. PowerShell on Windows, where the relay already
+// lives, and sh everywhere else; both keep line breaks inside single quotes.
+function cloudCommand(prompt, platform) {
+  const quoted = platform === 'win32' ? psQuote(prompt) : require('./wake.js').shQuote(prompt);
+  return 'claude --cloud ' + quoted;
+}
+
+// The same prompt the wake would deliver - continuation, outstanding todos or
+// the approved plan, thinking, voice, bug check - opened for a cloud session.
+// The session is this one (CLAUDE_CODE_SESSION_ID) unless --session names
+// another; with neither, the one armed relay. Text given on the command line
+// stands in for the stored continuation.
+function cloudHandoff(input) {
+  const options = input || {};
+  const env = options.env || process.env;
+  const state = read();
+  const config = settings(state);
+  const me = options.sessionId || env.CLAUDE_CODE_SESSION_ID || env.CLAUDE_SESSION_ID || null;
+  const all = records(state);
+  const record = armedFor(state, me) || (!me && all.length === 1 ? all[0] : null);
+  const id = me || (record && record.id) || null;
+  const given = String(options.text || '').trim().slice(0, CONTINUATION_MAX);
+  const continuation = given || (id ? readContinuation(id) : '');
+  let work = record && record.work && Array.isArray(record.work.todos) ? record.work : null;
+  if (!work && id) {
+    const transcript = require('./wake.js').transcriptFile(id);
+    const found = transcript ? detectWork(transcript) : null;
+    if (found && found.hasWork) work = found;
+  }
+  const outstanding = work ? work.todos.filter((todo) => todo.status !== 'completed').length : 0;
+  if (!continuation && !outstanding && !(work && work.plan)) {
+    return {
+      ok: false,
+      error:
+        'Nothing to hand over' + (id ? ' for session ' + id.slice(0, 8) : '') + ': no continuation, no outstanding todos, no approved plan. ' +
+        'A cloud session has none of this conversation, so write what it needs first: relay cloud "<text>", or relay note "<text>" and run this again.',
+    };
+  }
+  const platform = options.platform || process.platform;
+  const cwd = (record && record.cwd) || options.cwd || process.cwd();
+  const git = gitState(cwd, options.git);
+  const prompt = compose({
+    cloud: true,
+    branch: git.repo ? git.branch : null,
+    continuation,
+    work,
+    thinking: config.thinking !== 'off',
+    voice: config.voice === false ? null : voice.card(),
+    bugcheck: config.bugcheck,
+  });
+  return {
+    ok: true,
+    id,
+    cwd,
+    platform,
+    prompt,
+    source: given ? 'the text given' : continuation ? 'the saved continuation' : outstanding ? plural(outstanding, 'outstanding todo') : 'the approved plan',
+    command: cloudCommand(prompt, platform),
+    git,
+    warnings: cloudWarnings(git, prompt, platform, options.cli || null, options.nativeCli || null),
+  };
+}
+
+// The CLI to launch. A batch shim cannot carry the hand-off - cmd.exe ends a
+// command at the first line break - so on Windows the native claude.exe is
+// looked for first.
+function cloudCli(env, platform) {
+  const environment = env || process.env;
+  if (environment.USAGE_LIMITS_CLAUDE_CLI) return firstExisting([environment.USAGE_LIMITS_CLAUDE_CLI]);
+  if (platform === 'win32') {
+    const native = firstExisting([path.join(os.homedir(), '.local', 'bin', 'claude.exe')]);
+    if (native) return native;
+    const where = spawnSync('where', ['claude.exe'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+    const first = where.status === 0 ? String(where.stdout || '').split(/\r?\n/)[0].trim() : '';
+    return first || findClaude(environment);
+  }
+  const found = findClaude(environment);
+  if (found) return found;
+  const which = spawnSync('sh', ['-c', 'command -v claude'], { encoding: 'utf8', timeout: 10000 });
+  return which.status === 0 ? String(which.stdout || '').trim() || null : null;
+}
+
+// The claude that `claude` typed into a Windows shell runs: the first match on
+// PATH, which is what `where` lists first. Only asked on Windows.
+function shellClaude(env) {
+  const environment = env || process.env;
+  if (environment.USAGE_LIMITS_CLAUDE_CLI) return firstExisting([environment.USAGE_LIMITS_CLAUDE_CLI]);
+  const where = spawnSync('where', ['claude'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+  const first = where.status === 0 ? String(where.stdout || '').split(/\r?\n/)[0].trim() : '';
+  return first || findClaude(environment);
+}
+
+// `deps` holds what the launch does to the world - mode, cli, spawn - so it can
+// be tested without starting anything. Detached, with its output in a run log,
+// because the command outlives this process and somebody will ask what it did.
+function launchCloud(handoff, deps) {
+  const d = deps || {};
+  const mode = d.mode || cloudLaunchMode();
+  const who = handoff.id ? 'session ' + handoff.id.slice(0, 8) : 'the text given';
+  if (mode.dry) {
+    note('cloud: dry run for ' + who + ', nothing launched (' + mode.why + ')');
+    return { ok: true, dry: true, text: 'Dry run: nothing was launched (' + mode.why + ').' };
+  }
+  if (!handoff.git.repo) return { ok: false, text: 'Not launched: there is no repository here for a cloud session to clone.' };
+  const cli = d.cli || cloudCli(d.env, handoff.platform);
+  if (!cli) return { ok: false, text: 'Not launched: the claude CLI was not found. Run the command above yourself.' };
+  if (handoff.platform === 'win32' && /\.(cmd|bat)$/i.test(cli)) {
+    return {
+      ok: false,
+      text: 'Not launched: claude here is ' + cli + ', a batch shim, and cmd.exe ends a command at the first line break, so the hand-off cannot pass through it. ' +
+        'PowerShell runs a shim through cmd.exe too, so run the command above where claude is the native claude.exe (claude install puts one in ~/.local/bin).',
+    };
+  }
+  const now = Date.now();
+  const log = writeRunLog(runLogFile('cloud', now), '--- claude --cloud from ' + handoff.cwd + ' for ' + who + ', ' + new Date(now).toISOString() + ' ---\n');
+  let fd = null;
+  try {
+    if (log) fd = fs.openSync(log, 'a');
+  } catch (err) {
+    fd = null;
+  }
+  // Nobody's child: launched from inside a session, it would otherwise inherit
+  // that session's markers (see the wake's launcher).
+  const env = Object.assign({}, d.env || process.env);
+  delete env.CLAUDE_CODE_CHILD_SESSION;
+  delete env.CLAUDE_CODE_SESSION_ID;
+  try {
+    const child = (d.spawn || spawn)(cli, ['--cloud', handoff.prompt], {
+      cwd: handoff.cwd,
+      detached: true,
+      stdio: fd === null ? 'ignore' : ['ignore', fd, fd],
+      windowsHide: true,
+      env,
+    });
+    if (child && typeof child.on === 'function') {
+      child.on('error', (err) => {
+        note('cloud: claude --cloud for ' + who + ' failed to start: ' + err.message);
+      });
+    }
+    if (child && typeof child.unref === 'function') child.unref();
+    const pid = child && child.pid ? child.pid : null;
+    note('cloud: launched claude --cloud for ' + who + ' from ' + handoff.cwd + (pid ? ' (pid ' + pid + ')' : '') + (log ? ', output in ' + log : ''));
+    return {
+      ok: true,
+      pid,
+      log,
+      text: 'Started claude --cloud' + (pid ? ' (pid ' + pid + ')' : '') + '.' + (log ? ' What it prints goes to ' + log + '.' : '') +
+        ' The session appears on claude.ai/code.',
+    };
+  } catch (err) {
+    note('cloud: could not launch claude --cloud for ' + who + ': ' + err.message);
+    return { ok: false, text: 'Could not start claude --cloud: ' + err.message };
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch (err) {
+        // The child has its own copy.
+      }
+    }
+  }
+}
+
+function cloud(rest, deps) {
+  const args = rest || [];
+  const d = deps || {};
+  const at = args.indexOf('--session');
+  const named = at !== -1 ? args[at + 1] || null : null;
+  const go = args.includes('--go');
+  // --host is the plugin's own flag (relay.md: add --host codex under Codex),
+  // and a hand-off that ended in "--host codex" would be telling the cloud
+  // session something nobody meant.
+  const skip = new Set();
+  for (const flag of ['--session', '--host']) {
+    const i = args.indexOf(flag);
+    if (i !== -1) skip.add(i).add(i + 1);
+  }
+  const text = args.filter((item, i) => item !== '--go' && !skip.has(i)).join(' ');
+  // Which claude the printed command would meet, asked only for Windows, where
+  // a batch shim cannot carry it: the first on PATH, as the shell finds it.
+  const platform = d.platform || process.platform;
+  let cli = null;
+  let nativeCli = null;
+  if (platform === 'win32') {
+    try {
+      cli = d.cli !== undefined ? d.cli : shellClaude(d.env);
+      if (/\.(cmd|bat)$/i.test(String(cli || ''))) nativeCli = d.nativeCli !== undefined ? d.nativeCli : cloudCli(d.env, platform);
+    } catch (err) {
+      cli = null;
+    }
+  }
+  const handoff = cloudHandoff({ sessionId: named, text, env: d.env, git: d.git, platform, cwd: d.cwd, cli, nativeCli });
+  if (!handoff.ok) return handoff.error;
+  let amount = null;
+  try {
+    amount = lowpri.creditText(lowpri.cloudCredit(d.account !== undefined ? d.account : lowpri.snapshot()));
+  } catch (err) {
+    amount = null;
+  }
+  const lines = [
+    'Cloud hand-off' + (handoff.id ? ' for session ' + handoff.id.slice(0, 8) : '') + ', from ' + handoff.source + ': ' +
+      handoff.prompt.length + ' characters, inline, because a cloud session cannot read a file on this machine.' +
+      (amount ? ' It runs on the ' + amount + ' cloud-session credit, not the plan\'s 5-hour window.' : ''),
+  ];
+  for (const warning of handoff.warnings) lines.push('Warning: ' + warning);
+  lines.push('', 'Run this from ' + handoff.cwd + (handoff.platform === 'win32' ? ', in PowerShell' : '') + ':', '', handoff.command, '');
+  if (!go) {
+    lines.push('relay cloud --go starts it from here.');
+    return lines.join('\n');
+  }
+  lines.push(launchCloud(handoff, d).text);
+  return lines.join('\n');
+}
+
 /* ------------------------------------------------------------- doctor ----- */
 
 // Everything that has to be true hours from now, checked while somebody is
@@ -1622,7 +1986,9 @@ async function doctor(now) {
   const add = (name, ok, detail, severity) => checks.push({ name, ok, detail, severity: severity || (ok ? 'ok' : 'error') });
 
   add('relay enabled', config.enabled, config.enabled ? 'on, arming at ' + config.at + ' per cent' : 'off - nothing will ever be scheduled');
-  add('delivery mode', true, config.mode === 'resume' ? 'resume: it starts the CLI itself' : 'notify: it raises a toast and leaves the plan on disk', 'ok');
+  add('delivery mode', true, config.mode === 'resume'
+    ? 'resume: it starts the CLI itself, ' + (config.fresh ? 'as a new session with the hand-off as its first prompt (fresh on)' : 'resuming the same conversation (fresh off)')
+    : 'notify: it raises a toast and leaves the plan on disk', 'ok');
   add('arming point', true, config.armOn === 'completion'
     ? 'completion - it waits for the reply to finish, and stops waiting past ' + config.backstopAt + ' per cent'
     : 'threshold - it arms the moment the window crosses ' + config.at + ' per cent, even mid-reply', 'ok');
@@ -1794,7 +2160,9 @@ function main(argv) {
     return (
       'Delivery is now "' + config.mode + '".' +
       (config.mode === 'resume'
-        ? '\nAt the wake it will run the CLI itself in the project directory. Set a permission mode ' +
+        ? '\nAt the wake it will run the CLI itself in the project directory, ' +
+          (config.fresh ? 'as a new session (relay fresh on)' : 'resuming the same conversation (relay fresh on starts a new one instead)') +
+          '. Set a permission mode ' +
           '(relay permission acceptEdits) or the resumed run will sit waiting for an approval nobody is there to give.'
         : '')
     );
@@ -1857,6 +2225,9 @@ function main(argv) {
   // tool into its rollouts, so nothing there ever reads as work to carry; and
   // a person can have a project in their head that is in no todo list.
   if (command === 'arm') return armByHand(rest);
+  // Past the wall now rather than after it: the same hand-off, into a cloud
+  // session on the cloud-session credit.
+  if (command === 'cloud') return cloud(rest);
   if (command === 'armon' || command === 'arm-on') {
     if (!['threshold', 'completion'].includes(String(value))) {
       return 'Arming is "threshold" (the moment the window crosses the mark, mid-reply) or "completion" (the end of the reply).';
@@ -1894,6 +2265,19 @@ function main(argv) {
     return on
       ? 'The resumed run will be a session in a window you can see, with Remote Control on; a headless run keeps its output in relay log --run.'
       : 'The resumed run will be invisible. Its output is still kept: relay log --run.';
+  }
+  if (command === 'fresh') {
+    const wanted = String(value || '').toLowerCase();
+    if (!['on', 'off', 'true', 'false', 'yes', 'no', '1', '0'].includes(wanted)) {
+      return 'Fresh is ' + (settings(read()).fresh ? 'ON' : 'OFF') + ' now. Say relay fresh on (the wake starts a new session with the hand-off) or relay fresh off (it resumes the same conversation).';
+    }
+    const config = configure({ fresh: ['on', 'true', 'yes', '1'].includes(wanted) });
+    const when = config.mode === 'resume' ? '' : ' It applies once relay mode resume is set; with mode notify nothing is started either way.';
+    return config.fresh
+      ? 'Fresh ON: the wake starts a new claude session in the project, with the whole hand-off as its first prompt, Remote Control on and ' +
+          (config.permissionMode ? '--permission-mode ' + config.permissionMode : 'no permission mode set (relay permission acceptEdits)') +
+          '. The old conversation is left as it was; if it is still open and working again, the wake stands down.' + when
+      : 'Fresh OFF: the wake resumes the same conversation (claude --resume).' + when;
   }
   if (command === 'onfailure' || command === 'on-failure') {
     if (!['rearm', 'stop'].includes(String(value))) return 'On failure: "rearm" (try again next window) or "stop" (leave it to a person).';
@@ -1942,8 +2326,9 @@ function main(argv) {
   return [
     'usage: relay.js [status|on|off|at N|grace N|mode notify|resume|permission MODE|model NAME|',
     '                 thinking off|resume|always|armon threshold|completion|backstop N|',
-    '                 show on|off|onfailure rearm|stop|offline N|doctor|preflight [cwd]|',
-    '                 arm [--session ID] [TEXT]|note TEXT|cancel|log [--run]]',
+    '                 show on|off|fresh on|off|onfailure rearm|stop|offline N|doctor|preflight [cwd]|',
+    '                 arm [--session ID] [TEXT]|note TEXT|cloud [--session ID] [--go] [TEXT]|',
+    '                 cancel|log [--run]]',
     '',
     status(Date.now()),
   ].join('\n');
@@ -1964,7 +2349,8 @@ if (require.main === module) {
     );
 }
 
-module.exports = { workWithContinuation, reapLost, schedulerMode, sandboxedHome, hiddenAction, headlessAvailable, HEADLESS_HOST, HIDDEN_HOST, BUGCHECK_LINE,
+module.exports = { shellClaude, cloud, cloudHandoff, cloudCommand, cloudWarnings, cloudLaunchMode, cloudCli, launchCloud, gitState, CLOUD_ARG_MAX,
+  workWithContinuation, reapLost, schedulerMode, sandboxedHome, hiddenAction, headlessAvailable, HEADLESS_HOST, HIDDEN_HOST, BUGCHECK_LINE,
   taskAction, wakeLauncherFile, wakeLauncherScript, writeWakeLauncher, sweepWakeLaunchers, batchArg, describeSpawn, PS_ROUTE_MS, SCHTASKS_MS,
   records, armedFor, putRecord, dropRecord, preflightPrompts, claudeJsonFile, projectKeys, isHome, launchDirFor, applySetting, settingIs,
   DEFAULTS,
