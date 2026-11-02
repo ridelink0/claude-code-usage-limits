@@ -1766,7 +1766,8 @@ function modelHeadroom(windows, events, families, remembered) {
 
 // What a job of this many turns would take out of one window.
 function forecastWindow(window, turns, rates) {
-  if (!window || !rates || !window.usdPerPercent || window.stale) return null;
+  if (!window || !rates || !Number.isFinite(window.usdPerPercent) || window.usdPerPercent <= 0 || window.stale || window.correctionUnreliable) return null;
+  if (!Number.isFinite(window.percentLeft) || !Number.isFinite(rates.median) || !Number.isFinite(rates.high) || rates.median <= 0 || rates.high < rates.median) return null;
   if (!Number.isFinite(turns) || turns <= 0) return null;
 
   const usdLow = turns * rates.median;
@@ -1943,12 +1944,15 @@ function modelSamples(headroom, previous) {
 // `subscriptionCreatedAt` is the original signup, not the upgrade. So the plan
 // is stamped onto the calibration instead, and a stamp that no longer matches
 // is itself the proof that it moved.
-function calibrationForPlan(all, planId) {
+function calibrationForPlan(all, planId, login) {
   const kept = {};
   let dropped = false;
   for (const key of Object.keys(all || {})) {
     const entry = all[key];
     if (!entry || typeof entry !== 'object') continue;
+    // Two accounts can have the same tier but different recorded spend.
+    // Missing identity is unknown, not evidence it belongs to this login.
+    if (login && entry.accountUuid !== login) continue;
     // A stamp that no longer matches is proof the plan moved, and worth saying
     // so: the reading on disk was measured against the other allowance too.
     if (entry.plan && planId && entry.plan !== planId) {
@@ -1968,11 +1972,11 @@ function calibrationForPlan(all, planId) {
   return { learned: kept, planChanged: dropped };
 }
 
-function stampPlan(all, planId) {
-  if (!planId) return all;
+function stampPlan(all, planId, login) {
+  if (!planId && !login) return all;
   const stamped = {};
   for (const key of Object.keys(all || {})) {
-    stamped[key] = Object.assign({}, all[key], { plan: planId });
+    stamped[key] = Object.assign({}, all[key], planId ? { plan: planId } : {}, login ? { accountUuid: login } : {});
   }
   return stamped;
 }
@@ -2910,7 +2914,7 @@ function preferLive(cache, fresh, accountUuid, now) {
   if (!fresh || !fresh.utilization || typeof fresh.utilization !== 'object') return false;
   if (!Number.isFinite(fresh.fetchedAtMs)) return false;
   if (fresh.fetchedAtMs > now + MINUTE) return false;
-  if (fresh.accountUuid && accountUuid && fresh.accountUuid !== accountUuid) return false;
+  if (accountUuid && fresh.accountUuid !== accountUuid) return false;
   if (!cache || !Number.isFinite(cache.fetchedAtMs)) return true;
   return fresh.fetchedAtMs > cache.fetchedAtMs;
 }
@@ -2921,6 +2925,20 @@ function accountUuid() {
   return account && account.oauthAccount && account.oauthAccount.accountUuid
     ? account.oauthAccount.accountUuid
     : null;
+}
+
+// Record only the last observed account and its boundary. Transcripts do not
+// reliably identify their login, so spend before an observed switch cannot
+// price or correct the new account's allowance.
+function accountScope(login, now) {
+  const at = Number.isFinite(now) ? now : Date.now();
+  if (!login) return { accountUuid: null, since: 0 };
+  const file = path.join(configDir(), 'usage-limits-account.json');
+  const held = readJson(file);
+  if (held && held.accountUuid === login && Number.isFinite(held.since)) return held;
+  const next = { accountUuid: login, since: held && held.accountUuid ? at : 0 };
+  try { writeJsonAtomic(file, next); } catch (err) { /* A failed write never grants access to old spend. */ }
+  return next;
 }
 
 // Per window key, the percentage each account source reports and which one
@@ -2943,12 +2961,14 @@ function sourcePercents(cache, fresh, used) {
 function collectClaude(now) {
   const account = readJson(accountFile()) || {};
   const settings = readJson(path.join(configDir(), 'settings.json')) || {};
-  const cache = account.cachedUsageUtilization || null;
   const oauth = account.oauthAccount || {};
+  const scope = accountScope(oauth.accountUuid, now);
+  const heldCache = account.cachedUsageUtilization || null;
+  const cache = oauth.accountUuid && heldCache && heldCache.accountUuid && heldCache.accountUuid !== oauth.accountUuid ? null : heldCache;
   // The panel and the status line take the same reading Claude Code takes for
   // /usage and keep it in a file of their own. When that is newer than what
   // Claude Code cached, it is the better description of the same account.
-  const fresh = live.readLive();
+  const fresh = live.readLive({ accountUuid: oauth.accountUuid });
   const useLive = preferLive(cache, fresh, oauth.accountUuid, now);
   const snapshot = useLive ? fresh : cache;
   const utilization = snapshot && snapshot.utilization ? snapshot.utilization : null;
@@ -2963,6 +2983,8 @@ function collectClaude(now) {
   return {
     now,
     host: host.CLAUDE,
+    accountUuid: scope.accountUuid,
+    accountingSince: scope.since,
     money: true,
     accountFile: accountFile(),
     plan: plan.label,
@@ -3270,8 +3292,10 @@ async function report(now, options) {
   const scanPartial = Boolean(all && all.partial);
   // A refused request is a record of the limit, not a turn against it, so it is
   // kept apart from everything that measures spend or pace.
-  const rejections = lastRejections(all);
-  const events = all.filter((event) => !event.rejected);
+  const visible = Number.isFinite(base.accountingSince) && base.accountingSince > 0
+    ? all.filter((event) => event.at >= base.accountingSince) : all;
+  const rejections = lastRejections(visible);
+  const events = visible.filter((event) => !event.rejected);
 
   // Codex carries the meter inside the same records as the turns, so the full
   // scan can find a newer reading than the quick one collect() does. Reuse it
@@ -3288,7 +3312,7 @@ async function report(now, options) {
   // Anything learned on a different plan is void, and its absence is what makes
   // the report say so rather than quietly pricing this plan with the last one's
   // numbers.
-  const calibrated = calibrationForPlan(onDisk, base.planId);
+  const calibrated = calibrationForPlan(onDisk, base.planId, base.accountUuid);
   const learned = Object.assign({}, calibrated.learned);
 
   // Codex logs the meter next to every request, so the price of a point can be
@@ -3332,7 +3356,7 @@ async function report(now, options) {
   // What the room left buys in turns of each model, and the record that lets a
   // later session answer that for a model it has not run yet. Scoped to a week
   // because every window a family draws on here is a weekly one.
-  const remembered = calibrationForPlan(readModelRecord(), base.planId).learned;
+  const remembered = calibrationForPlan(readModelRecord(), base.planId, base.accountUuid).learned;
   const headroom = modelHeadroom(
     windows,
     events.filter((event) => event.at >= now - 7 * DAY),
@@ -3340,7 +3364,7 @@ async function report(now, options) {
     remembered
   );
   const sampled = modelSamples(headroom, remembered);
-  if (sampled.changed) writeModelRecord(stampPlan(sampled.models, base.planId));
+  if (sampled.changed) writeModelRecord(stampPlan(sampled.models, base.planId, base.accountUuid));
 
   // Keep the best sample seen so far, so a thin baseline never has to guess.
   const updated = Object.assign({}, learned);
@@ -3355,7 +3379,7 @@ async function report(now, options) {
   for (const key of Object.keys(updated)) {
     if (updated[key] !== onDisk[key]) changed = true;
   }
-  if (changed) writeCalibration(stampPlan(updated, base.planId));
+  if (changed) writeCalibration(stampPlan(updated, base.planId, base.accountUuid));
 
   const recentEvents = events.filter((event) => event.at >= now - HOUR);
   const recent = totals(recentEvents);
@@ -4076,6 +4100,7 @@ function renderForecast(data, turns) {
   lines.push('Forecast for ' + turns + ' turns');
   lines.push('');
   if (!data.rates) {
+    lines.push('  it may not fit');
     lines.push('  Nothing recent to price this against yet. Do some work in this');
     lines.push('  session first, then ask again.');
     return lines.join('\n');
@@ -4089,6 +4114,7 @@ function renderForecast(data, turns) {
     .filter(Boolean);
 
   if (!rows.length) {
+    lines.push('  it may not fit');
     lines.push('  No window has enough measured spend to price a forecast against.');
     return lines.join('\n');
   }
@@ -4097,7 +4123,7 @@ function renderForecast(data, turns) {
     '  ' + pad('Window', 15) + padLeft('Would cost', 18) + padLeft('Leaves', 10) + '   Verdict'
   );
   for (const row of rows) {
-    const verdict = row.fits ? (row.tight ? 'fits, barely' : 'fits') : 'does not fit';
+    const verdict = row.fits ? (row.tight ? 'fits, barely' : 'fits') : 'it may not fit';
     lines.push(
       '  ' + pad(row.label, 15) +
         padLeft(formatPercent(row.percentLow) + ' to ' + formatPercent(row.percentHigh), 18) +
@@ -4126,10 +4152,15 @@ function renderForecast(data, turns) {
   const blocked = rows.filter((row) => !row.fits);
   const tight = rows.filter((row) => row.fits && row.tight);
   lines.push('');
-  if (blocked.length) {
+  const applicable = data.windows.filter((window) => window.applies !== false);
+  const known = rows.length === applicable.length && !applicable.some((window) => window.stale || window.correctionUnreliable) && (!data.sessions || data.sessions.length <= 1);
+  lines.push('  Work fit: ' + (known && !blocked.length ? 'fits' : 'it may not fit') + '.');
+  if (!known && !blocked.length) {
+    lines.push('  The available measurements do not cover every applicable window or competing session. Keep the fit unknown.');
+  } else if (blocked.length) {
     lines.push(
-      '  The ' + blocked[0].label + ' window does not cover this. Cut it down or ' +
-        'split it at a clean boundary rather than starting and getting cut off.'
+      '  The ' + blocked[0].label + ' window does not cover this. Save at a clean ' +
+        'boundary and record the remaining work without reducing scope.'
     );
   } else if (tight.length) {
     lines.push(
@@ -4401,6 +4432,7 @@ module.exports = {
   collectClaude,
   preferLive,
   accountUuid,
+  accountScope,
   subagentTranscripts,
   liveAgents,
   AGENT_LIVE_MS,

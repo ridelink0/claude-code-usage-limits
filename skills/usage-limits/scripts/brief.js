@@ -285,7 +285,7 @@ function sayOnce(sessionId, text, now) {
 // full once per session and as twelve words after that. A session that has
 // heard it has heard it; USAGE_LIMITS_BRIEF_FULL=1 says the full form every
 // time for anyone who wants that.
-const STANDING_SHORT = 'Open with the fit line; close finished work with the session total.';
+const STANDING_SHORT = 'Assess fit; say "fits" with evidence, otherwise "it may not fit"; get on with the work.';
 function standingSaid(sessionId, now) {
   const entry = readSaid()[String(sessionId || '_') + '#standing'];
   return Boolean(entry && Number.isFinite(entry.at) && (Number.isFinite(now) ? now : Date.now()) - entry.at < keepSaidFor('#standing'));
@@ -1389,15 +1389,21 @@ function briefText(input) {
           'scripts/usage.js --recommend (skill directory) names the effort and model.'
         : shortStanding
           ? STANDING_SHORT
-          : 'Open with one short line stating this and that the request fits, then ' +
-            'get on with the work. There is room: full quality, the whole request, nothing held ' +
-            'back, since unspent budget is lost at the reset.';
+          : 'Before work, estimate the turns for the whole request, including verification, against ' +
+            'the binding window and your share of it. Say "fits" only if that estimate is covered; ' +
+            'when the estimate is unknown or too large, say exactly "it may not fit". Never infer ' +
+            'that a request fits from a percentage alone. Then get on with the work at full quality, ' +
+            'saving at clean boundaries. At an exhausted limit, stop normal narration and ' +
+            'continuation claims; emit only the saved handoff if one is required.';
 
   // The mistake this guards against: quoting the roomiest window and pinning
   // the binding window figures to it.
   const care = shortStanding
     ? ''
     : ' Quote the binding window; its turns and reset time belong to it alone.';
+  const fitAtWall = parts.pressure === 'tight'
+    ? ' Assess the complete request including verification; say "fits" only with evidence, otherwise say exactly "it may not fit", then stop repeating budget commentary.'
+    : '';
 
   // Finished work closes with what it cost. Not every reply: a progress note
   // mid-task is not the moment, and once the budget is gone nothing further
@@ -1467,11 +1473,11 @@ function briefText(input) {
       (lowPrioritySentence ? ' ' + lowPrioritySentence : '') +
       (cloudSentence ? ' ' + cloudSentence : '') +
       (parts.pressure !== 'roomy' && relaySentences.length ? ' ' + relaySentences.join(' ') : '') +
-      '\n' + instruction + directive
+      '\n' + instruction + fitAtWall + directive
     );
   }
 
-  return sentences.join(' ') + '\n' + instruction + closing + care + directive;
+  return sentences.join(' ') + '\n' + instruction + fitAtWall + closing + care + directive;
 }
 
 // Past this the context is the cost of the session, not a detail of it.
@@ -1851,6 +1857,8 @@ async function run(now, hookInput, opts) {
   // against itself, so the question could never be asked at all.
   const askedFitFor = all && all[sessionId || '_'] ? all[sessionId || '_'].fitFor || null : null;
   let view = pickCached(all, sessionId, now, config.cacheSeconds * SECOND);
+  const login = usage.isCodex() ? null : usage.accountUuid();
+  if (view && login && view.accountUuid !== login) view = null;
 
   // Everything shown has to come from one pass. Deriving the turns from a
   // full scan and the binding window from somewhere cheaper is how the two
@@ -1862,6 +1870,7 @@ async function run(now, hookInput, opts) {
     const binding = data.binding;
     view = {
       at: now,
+      accountUuid: login,
       turnsLeft: binding && Number.isFinite(binding.turnsLeft) ? binding.turnsLeft : null,
       session: data.session,
       othersSummary: summariseOthers(data.windows, binding && binding.key),
