@@ -1,5 +1,10 @@
 # usage-limits
 
+Development now lives in the [canonical Ultimate Frontend Skills repository](https://github.com/ridelink0/ultimate-frontend-skills/tree/master/plugins/usage-limits).
+This repository remains a compatibility mirror for existing directory entries
+and installations. The installation commands below remain supported; changes
+are developed in the canonical repository.
+
 Work-fit reports say `fits` only when the complete estimate is covered by all
 applicable measured windows. Missing or conflicting measurements, competing
 sessions, or an estimate that exceeds the window produce `it may not fit`.

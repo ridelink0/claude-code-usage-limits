@@ -1,6 +1,6 @@
 {
   "name": "claude-usage-limits",
-  "version": "1.43.2",
+  "version": "1.44.0",
   "description": "Puts your remaining Claude Code usage limit into Claude's context before every prompt, so it opens with what fits in the budget instead of starting work that gets cut off. Reports headroom as turns rather than percentages, prices a job before you start it, and detects your plan tier.",
   "keywords": [
     "claude",
@@ -14,16 +14,16 @@
     "statusline",
     "cli"
   ],
-  "homepage": "https://github.com/ridelink0/claude-code-usage-limits",
+  "homepage": "https://github.com/ridelink0/ultimate-frontend-skills/tree/master/plugins/usage-limits",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ridelink0/claude-code-usage-limits.git"
   },
   "bugs": {
-    "url": "https://github.com/ridelink0/claude-code-usage-limits/issues"
+    "url": "https://github.com/ridelink0/ultimate-frontend-skills/issues"
   },
   "license": "MIT",
-  "author": "Ridelink (https://github.com/ridelink0)",
+  "author": "Gev (https://github.com/ridelink0)",
   "bin": {
     "claude-usage-limits": "bin/cli.js"
   },
@@ -34,7 +34,8 @@
     "hooks/",
     "agents/",
     ".claude-plugin/",
-    ".codex-plugin/"
+    ".codex-plugin/",
+    "PRIVACY.md"
   ],
   "engines": {
     "node": ">=18"
