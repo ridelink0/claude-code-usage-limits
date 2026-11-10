@@ -1,6 +1,6 @@
 {
   "name": "claude-usage-limits",
-  "version": "1.44.1",
+  "version": "1.45.0",
   "description": "Puts your remaining Claude Code usage limit into Claude's context before every prompt, so it opens with what fits in the budget instead of starting work that gets cut off. Reports headroom as turns rather than percentages, prices a job before you start it, and detects your plan tier.",
   "keywords": [
     "claude",
@@ -41,9 +41,9 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --require ./tools/test-host-env.js --test",
     "usage": "node bin/cli.js",
-    "version": "node tools/sync-version.js && git add .claude-plugin/plugin.json .codex-plugin/plugin.json vscode/package.json"
+    "version": "node tools/sync-version.js && git add .claude-plugin/plugin.json .claude-plugin/marketplace.json .codex-plugin/plugin.json vscode/package.json"
   },
   "type": "commonjs"
 }
