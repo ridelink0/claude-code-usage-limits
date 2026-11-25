@@ -287,6 +287,17 @@ extension through the Marketplace, and the npm package on the next `npx
 claude-usage-limits` (a global install pins, so `npm i -g claude-usage-limits@latest`
 to move it).
 
+### The plugin directory edition
+
+Anthropic's plugin directory takes plugins that are Markdown, JSON and images
+only, with no hooks and no scripts. `directory/usage-limits/` is that edition:
+one skill and two commands that plan the work from the numbers `/usage` shows,
+which Claude asks you for. It reads nothing outside the project and no
+credentials, and it has no live reading, no cost line after each reply, no low
+power and no relay. Submit that subfolder, not the repository root. It is
+generated in the Ultimate Frontend Skills repository (`npm run
+build:directory`) and copied here.
+
 ## When another Claude is working too
 
 Two Claude Code windows share one limit, so headroom measured in turns is
